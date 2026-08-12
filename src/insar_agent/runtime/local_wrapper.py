@@ -24,13 +24,43 @@ POLL = 0.2
 GRACE = 10.0
 
 
+def _write_rc(job: Path, rc: int) -> None:
+    """rc 原子落盘。
+
+    write_text 会先创建/截断出一个空文件再写内容;宿主侧 state() 每 poll 轮询
+    job.rc,恰好撞进这个窗口时会把空文件按 -1 解析 —— 真实退出码被吞,
+    上层据此误判失败原因。tmp + os.replace 保证读方看到的 rc 要么不存在、
+    要么内容完整(触发场景见 tests/test_chaos_runtime.py 的竞态说明)。
+    """
+    tmp = job / "job.rc.tmp"
+    tmp.write_text(str(rc), encoding="utf-8")
+    os.replace(tmp, job / "job.rc")
+
+
+def _fail_fast(job: Path, message: str) -> int:
+    """启动即失败:诊断写进 job.log(随日志流可见)+ rc=127 快速终局。
+
+    修复前 cmd.json 缺失/损坏会让 wrapper 带着未捕获异常静默死亡:无 pid、
+    无 rc,宿主只能等 startup_grace 耗尽后误判 orphaned(慢),诊断埋在
+    wrapper.err 里对日志流不可见(触发场景:渲染中断/外部篡改作业目录)。
+    """
+    with open(job / "job.log", "ab") as log:
+        log.write(f"[wrapper] {message}\n".encode())
+    _write_rc(job, 127)
+    return 127
+
+
 def main(job_dir_arg: str) -> int:
     job = Path(job_dir_arg)
-    spec = json.loads((job / "cmd.json").read_text(encoding="utf-8"))
-    argv: list[str] = spec["argv"]
-    cwd: str = spec.get("cwd") or str(job)
+    try:
+        spec = json.loads((job / "cmd.json").read_text(encoding="utf-8"))
+        argv: list[str] = list(spec["argv"])
+        cwd: str = spec.get("cwd") or str(job)
+        extra_env: dict = spec.get("env") or {}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return _fail_fast(job, f"bad cmd.json: {exc!r}")
     env = dict(os.environ)
-    env.update(spec.get("env") or {})
+    env.update(extra_env)
 
     (job / "job.pid").write_text(str(os.getpid()), encoding="utf-8")
     (job / "job.token").write_text(uuid.uuid4().hex, encoding="utf-8")
@@ -72,14 +102,14 @@ def main(job_dir_arg: str) -> int:
             proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=log, stderr=log, **kwargs)
         except OSError as exc:
             log.write(f"[wrapper] spawn failed: {exc}\n".encode())
-            (job / "job.rc").write_text("127", encoding="utf-8")
+            _write_rc(job, 127)
             return 127
 
         cancel_marker = job / "job.cancel"
         while True:
             rc = proc.poll()
             if rc is not None:
-                (job / "job.rc").write_text(str(rc), encoding="utf-8")
+                _write_rc(job, rc)
                 return rc
             if cancel_marker.exists():
                 proc.terminate()
@@ -89,7 +119,7 @@ def main(job_dir_arg: str) -> int:
                 if proc.poll() is None:
                     proc.kill()
                     proc.wait(timeout=GRACE)
-                (job / "job.rc").write_text("143", encoding="utf-8")  # 128+15
+                _write_rc(job, 143)  # 128+15
                 return 143
             time.sleep(POLL)
 
