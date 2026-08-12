@@ -93,6 +93,21 @@ PIPELINE: tuple[Capability, ...] = (
         params={
             "esd_coherence_threshold": Param(0.85, kind="science", min=0, max=1,
                                              hint="ESD 相干阈值 0-1"),
+            # 以下为 isce2_stripmap_xcorr(ALOS raw 条带链)专用:路径是 science
+            # 输入(决定处理的是哪份数据,进指纹);形态见 docs/VALIDATION-isce2-wsl.md
+            "reference_image": Param("data/raw/reference/IMG-HH", kind="science", type="str",
+                                     hint="stripmap:参考 raw 影像 IMG 相对路径"),
+            "reference_leader": Param("data/raw/reference/LED", kind="science", type="str",
+                                      hint="stripmap:参考影像 LED 头文件相对路径"),
+            "secondary_image": Param("data/raw/secondary/IMG-HH", kind="science", type="str",
+                                     hint="stripmap:从 raw 影像 IMG 相对路径"),
+            "secondary_leader": Param("data/raw/secondary/LED", kind="science", type="str",
+                                      hint="stripmap:从影像 LED 头文件相对路径"),
+            "resample_flag": Param("", kind="science", type="str",
+                                   enum=("", "dual2single"),
+                                   hint="stripmap:FBD 从影像配 FBS 主影像时用 dual2single,空=不重采样"),
+            "dem_path": Param("data/dem/dem.wgs84", kind="science", type="str",
+                              hint="stripmap:ISCE 格式 DEM 相对路径"),
             "threads": Param(8, kind="resource", type="int", min=1, max=32,
                              hint="线程数 1-32(本机 24 核,留 4 核给系统)"),
         },
