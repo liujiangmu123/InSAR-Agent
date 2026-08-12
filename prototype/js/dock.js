@@ -9,6 +9,7 @@ import {
   THRESHOLDS, evidenceCeiling,
 } from './state.js';
 import { figureNode, figureSvg, mapSvg, timeSeriesSvg, IMAGES, POINTS, DATES } from './figures.js';
+import { galleryView } from './gallery.js';
 import { ENV_NOTE, WSL, WORKSPACE, ENGINES, DISKS, TERM_LOGS, cmdSh, TRACE } from './envdata.js';
 import * as API from './backend.sse.js';   // 面板 7/8 实时数据；离线时各视图回落演示数据
 
@@ -266,20 +267,9 @@ export function buildCmd(stepId) {
    影像视图：画廊 + 小地图 + 点位时序
    ============================================================ */
 function imagesView() {
-  const gal = h('div', { class: 'gal' }, ...IMAGES.map((g) => {
-    const st = st_(g.step);
-    const stale = st?.stale;
-    return h('button', { class: 'gcard', type: 'button', onclick: () => hooks.lightbox?.(g.id) },
-      h('div', { class: 'bar' }, g.title,
-        h('span', { class: 'ex' }, icon('expand')),
-        h('span', { class: 'mono' }, g.meta)),
-      h('div', { class: 'pic' }, figureNode(g.id)),
-      h('div', { class: 'ft' },
-        h('span', { class: `tag is-${stale ? 'stale' : 'ok'}` },
-          icon(stale ? 'warn' : 'check'), stale ? 'STALE · 待重跑' : '有效'),
-        h('span', { class: 'mono', style: { fontSize: '10px' } }, g.name),
-        h('span', { class: 'mono', style: { fontSize: '10px', color: 'var(--text-3)' } }, st?.fingerprint || '')));
-  }));
+  // 产物图件网格:真实产物(GET /api/figures → /api/artifact-file)优先,
+  // 后端不可达/无产物时回落演示图件 —— 数据源与灯箱逻辑全在 gallery.js。
+  const gal = galleryView();
 
   const pt = POINTS.find((p) => p.id === S.selectedPoint) || POINTS[0];
   const canvas = h('div', { class: 'canvas', html: mapSvg(S.selectedPoint) });
@@ -292,7 +282,6 @@ function imagesView() {
   });
 
   return h('div', null,
-    h('h3', { class: 'sect' }, '产物图件 · 点击查看大图'),
     gal,
     h('h3', { class: 'sect' }, '空间浏览 · 点击点位取时序'),
     h('div', { class: 'mapcard' },
