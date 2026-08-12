@@ -1,0 +1,6 @@
+# 机器读:步骤覆写(PS 链 + 线性速率模型)
+step_overrides:
+  7:
+    method: pystamps_ps
+  9:
+    method: linear

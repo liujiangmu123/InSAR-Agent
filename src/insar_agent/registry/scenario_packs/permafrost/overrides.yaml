@@ -1,0 +1,7 @@
+# 机器读:步骤覆写(冻土 → 年/半年周期 + 线性趋势模型)
+step_overrides:
+  9:
+    method: poly_periodic
+    params:
+      periods: [1, 0.5]
+      poly_order: 1

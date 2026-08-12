@@ -1,0 +1,11 @@
+# 机器读:步骤覆写与云端已完成步骤(与 SKILL.md 正文的领域知识对应)
+step_overrides:
+  9:
+    method: step
+    params:
+      step_date: '20190706T0320'
+  # PS 链未建成前,交叉验证不可行 —— 诚实降级为真实统计质检
+  11:
+    method: coherence_mask
+# HyP3 产品已含解缠相位:辅助数据/配准/干涉/滤波/解缠(2-6)已由 ASF 云端完成
+cloud_completed: [2, 3, 4, 5, 6]

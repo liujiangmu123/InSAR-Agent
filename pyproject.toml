@@ -22,7 +22,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-insar_agent = ["core/schema.sql", "audit/contract.yaml", "runtime/wsl_wrapper.sh", "registry/scenarios/**/*"]
+insar_agent = ["core/schema.sql", "audit/contract.yaml", "runtime/wsl_wrapper.sh", "registry/scenario_packs/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
