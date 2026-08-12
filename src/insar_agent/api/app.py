@@ -380,13 +380,15 @@ def create_app(home: Path | None = None) -> FastAPI:
                 errors = cap.validate_params(params)
                 if errors:
                     raise HTTPException(400, f"参数校验失败:{errors}")
-        if body.action == "KILL":
-            run = resolve_run(body.session, body.run_id, required=False)
-            if run:
-                driver_of(body.session).request_cancel(run["run_id"])
+        # 动作归属:入队即绑定 run(缺省取该会话最近 run)。没有归属的动作会被
+        # 任何 run 的 driver 消费(跨 run/会话互吞,REVIEW P1),溯源也无法入账
+        run = resolve_run(body.session, body.run_id, required=False)
+        if body.action == "KILL" and run:
+            driver_of(body.session).request_cancel(run["run_id"])
         action_id = store.push_action(scope=body.scope, target=body.target,
                                       action=body.action, payload=body.payload,
-                                      deliver_as=body.deliver_as)
+                                      deliver_as=body.deliver_as,
+                                      run_id=run["run_id"] if run else None)
         return JSONResponse({"accepted": True, "id": action_id}, status_code=202)
 
     @app.get("/api/impact")

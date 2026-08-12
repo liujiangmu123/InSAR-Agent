@@ -63,6 +63,21 @@ def select_backend(engine: str, *, env: Mapping[str, str] | None = None,
     return LocalJobBackend()
 
 
+def backend_for_job_dir(job_dir: str, *, env: Mapping[str, str] | None = None
+                        ) -> JobBackend:
+    """按作业目录归属选后端(admin 外部终结/运维视图用)。
+
+    WSL 作业目录是 POSIX 绝对路径(/home/...,由 WslJobBackend 宣告)或
+    \\\\wsl.localhost UNC;其余(盘符/相对路径)为本地作业。用 LocalJobBackend
+    对 WSL 作业判活必然误判 orphaned(没有宿主可见的 job.hb)—— 2026-08-12
+    接线报告 P1。
+    """
+    s = str(job_dir or "").strip()
+    if s.startswith("/") or s.replace("/", "\\").casefold().startswith("\\\\wsl"):
+        return make_wsl_backend(wsl_distro(env))
+    return LocalJobBackend()
+
+
 def backend_for_step(*, engine: str, simulated: bool = False,
                      override: JobBackend | None = None,
                      env: Mapping[str, str] | None = None,

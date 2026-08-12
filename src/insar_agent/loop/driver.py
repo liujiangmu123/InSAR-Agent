@@ -161,8 +161,13 @@ class Driver:
             "probe", 0, f"{available}/{len(probe.engines)} 个引擎可用"))
 
         # ---- next_run 干预消费(absorb-E4) ----
+        # next_run 面向"下次规划",无未来 run 可绑定;入队时记录的是当时会话
+        # 最近 run 的 id,消费时据此排除其他会话的预约(无归属的旧行照旧消费)
         overrides: dict[int, dict] = {}
         for action in store.due_actions("next_run"):
+            owner = store.get_run(action["run_id"]) if action.get("run_id") else None
+            if owner and owner["session_id"] != session_id:
+                continue
             if action["action"] in ("SET_METHOD", "SET_PARAMS"):
                 sid = int(action["target"])
                 overrides.setdefault(sid, {})
@@ -298,6 +303,17 @@ class Driver:
             step_ids = [sid for sid, s in steps.items()
                         if s.state in ("pending", "stale", "interrupted",
                                        "orphaned", "running")]
+        else:
+            # 显式列表防御:skipped(云端已完成)步骤没有本地作业可执行,
+            # 硬跑必然 contract_broken(2026-08-12 浏览器实测:前端用本地种子
+            # 状态发来 [6..11],skipped 的第 6 步被强行执行后把 run 打成 failed)
+            dropped = [sid for sid in step_ids
+                       if sid in steps and steps[sid].state == "skipped"]
+            if dropped:
+                step_ids = [sid for sid in step_ids if sid not in dropped]
+                yield self._emit(ev.note(
+                    "warn", f"忽略云端已完成步骤 {dropped}:产物由云端交付,"
+                            f"无本地作业可执行(显式重跑需先 RESET)"))
         step_ids = topo_order(step_ids)
         for sid in step_ids:  # 失效/中断步骤先复位(新 attempt);running 不复位,交执行器接回
             if steps[sid].state in ("stale", "interrupted", "orphaned"):

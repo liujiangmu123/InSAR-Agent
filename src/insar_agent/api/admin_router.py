@@ -28,7 +28,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from insar_agent.core.store import StageConflict, StepRow, Store
-from insar_agent.runtime.jobs import JobBackend, LocalJobBackend
+from insar_agent.runtime.backend_select import backend_for_job_dir
+from insar_agent.runtime.jobs import JobBackend
 
 #: touch job.cancel 后等 wrapper 写 rc 的宽限(秒);超时不结算,留给下次认领
 CANCEL_SETTLE_GRACE = 10.0
@@ -47,8 +48,11 @@ def terminate_step(store: Store, backend: JobBackend, snap: StepRow, *,
     now = time.time()
     duration = max(0.0, now - snap.started_at) if snap.started_at else 0.0
     job_dir = Path(snap.job_dir) if snap.job_dir else None
+    # POSIX 路径 = WSL 作业目录:宿主侧 exists() 无意义(会把 /home/... 解析成
+    # 盘根相对路径),存在性交由 WSL 后端的 state() 探测
+    is_wsl_dir = bool(snap.job_dir) and str(snap.job_dir).startswith("/")
 
-    if job_dir is None or not job_dir.exists():
+    if job_dir is None or (not is_wsl_dir and not job_dir.exists()):
         # 从未真正启动(或作业目录已被清):没有在途效果,直接标 interrupted;
         # 未结算的命令意图合成结算,账本闭合
         store.mark_step(snap.run_id, snap.step_id, state="interrupted",
@@ -100,10 +104,15 @@ def terminate_step(store: Store, backend: JobBackend, snap: StepRow, *,
     return {"step_id": snap.step_id, "state": "orphaned", "job": st.kind}
 
 
-def terminate_run(store: Store, run_id: str, *, backend: JobBackend,
+def terminate_run(store: Store, run_id: str, *, backend: JobBackend | None = None,
                   reason: str = "", grace: float = CANCEL_SETTLE_GRACE,
                   poll: float = 0.2) -> dict:
-    """外部终结一个挂起/僵死的 run(幂等:重复调用只会跳过已终态的步骤)。"""
+    """外部终结一个挂起/僵死的 run(幂等:重复调用只会跳过已终态的步骤)。
+
+    backend=None(生产默认)时按每步作业目录归属解析后端:WSL 作业(POSIX
+    目录)用 WslJobBackend 判活/取消,本地作业用 LocalJobBackend —— 用错后端
+    会把活着的 WSL 作业误判 orphaned 合成结算,Linux 侧进程却继续跑(接线 P1)。
+    显式注入(测试)则整个 run 固定用它。"""
     run = store.get_run(run_id)
     if run is None:
         raise KeyError(run_id)
@@ -116,8 +125,9 @@ def terminate_run(store: Store, run_id: str, *, backend: JobBackend,
         if snap.state != "running":
             continue  # pending 无效果不必动;done/failed/interrupted/orphaned 已终态
         try:
+            step_backend = backend or backend_for_job_dir(snap.job_dir or "")
             steps_report.append(
-                terminate_step(store, backend, snap, grace=grace, poll=poll))
+                terminate_step(store, step_backend, snap, grace=grace, poll=poll))
         except StageConflict as exc:
             # 竞争输了:行在快照后被活跃执行器推进 —— 自停,绝不覆写(E6 核心)
             steps_report.append({"step_id": snap.step_id,
@@ -138,7 +148,7 @@ class TerminateBody(BaseModel):
 
 def create_admin_router(store: Store, *, backend: JobBackend | None = None) -> APIRouter:
     router = APIRouter(prefix="/api/admin", tags=["admin"])
-    job_backend = backend or LocalJobBackend()
+    job_backend = backend  # None = 按作业目录归属逐步解析(terminate_run 内)
 
     @router.post("/terminate")
     def terminate(body: TerminateBody):
@@ -161,7 +171,12 @@ def create_admin_router(store: Store, *, backend: JobBackend | None = None) -> A
                 if s.state != "running":
                     continue
                 jd = Path(s.job_dir) if s.job_dir else None
-                job = job_backend.state(jd).kind if jd and jd.exists() else "missing"
+                is_wsl_dir = bool(s.job_dir) and str(s.job_dir).startswith("/")
+                b = job_backend or backend_for_job_dir(s.job_dir or "")
+                if jd is None or (not is_wsl_dir and not jd.exists()):
+                    job = "missing"
+                else:
+                    job = b.state(jd).kind
                 running.append({"step_id": s.step_id, "stage": s.stage, "job": job})
             out.append({
                 "run_id": run["run_id"], "session_id": run["session_id"],

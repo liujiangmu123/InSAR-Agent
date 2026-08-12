@@ -104,6 +104,21 @@ async function hydrateFromServer() {
     St.syncServerSteps(state.steps);   // 方法/状态/stale 镜像 → 指纹重算 → 广播
     paintStatus();
   }
+  return state;
+}
+
+/** 只同步步骤状态镜像(规划/执行回合结束后调用)。
+ *  没有它,S.steps 停留在本地种子状态:2026-08-12 实测里前端据此把
+ *  skipped(云端已完成)的第 6 步塞进显式执行列表,后端被迫 contract_broken。*/
+async function syncStepsFromServer() {
+  try {
+    const state = await API.fetchState();
+    if (state?.steps?.length) {
+      St.syncServerSteps(state.steps);
+      paintStatus();
+      Dock.refresh();
+    }
+  } catch { /* 后端不可达时保持本地状态(mock 演示不受影响) */ }
   // 历史对话只在轨迹流仍是空态时重放，不打断已开始的会话
   if (chat?.length && !S.busy && !el.stream.querySelector('.turn')) {
     Stream.clear();
@@ -669,6 +684,7 @@ async function submit() {
     await sleep(320);
     stopTyping();
     await consume(API.runTurn(text, token));
+    await syncStepsFromServer();   // 规划回合产生了新 run:镜像服务端步骤状态
   } catch (err) {
     stopTyping();
     if (err?.name !== 'CancelledError') {
@@ -940,6 +956,7 @@ async function run(ids) {
   } catch (err) {
     if (err?.name !== 'CancelledError') Stream.note('bad', `执行失败：${err.message}`);
   } finally {
+    await syncStepsFromServer();   // 执行结束:以服务端终态为准刷新步骤镜像
     setBusy(false);
     paintStatus();
     Dock.refresh();
