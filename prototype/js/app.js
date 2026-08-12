@@ -15,6 +15,8 @@ const el = {};
 let token = null;                 // 当前取消令牌
 const tools = new Map();          // tool id → toolCall api
 let currentPlan = null;
+let lastChange = null;            // 最近一次方法/参数变更 {stepId, method?, params?}（审批卡向服务端要影响预估用）
+let dropEvents = null;            // 全局 SSE 通道的断开函数
 const attachments = [];           // 附件演示：只留 {name,size}，不读内容、不上传
 
 /* ============================================================
@@ -85,6 +87,52 @@ function boot() {
   window.addEventListener('resize', applyResponsive);
   paintStatus();
   paintBudget();
+
+  // 后端就绪时：恢复服务端状态与历史对话，并接上全局事件通道（SSE）；
+  // file:// 或后端不可达时两者都静默跳过，mock 演示不受影响
+  hydrateFromServer();
+  connectGlobalEvents();
+}
+
+/* ============================================================
+   后端会话恢复（§7.4）：/api/state 状态镜像 + /api/chat 历史重放
+   + /api/events 全局事件通道（断线自动重连，见 backend.sse.js）
+   ============================================================ */
+async function hydrateFromServer() {
+  const [state, chat] = await Promise.all([API.fetchState(), API.fetchChat()]);
+  if (state?.steps?.length) {
+    St.syncServerSteps(state.steps);   // 方法/状态/stale 镜像 → 指纹重算 → 广播
+    paintStatus();
+  }
+  // 历史对话只在轨迹流仍是空态时重放，不打断已开始的会话
+  if (chat?.length && !S.busy && !el.stream.querySelector('.turn')) {
+    Stream.clear();
+    for (const m of chat) {
+      if (m.role === 'user') Stream.userMsg(m.content);
+      else Stream.agentMsg(m.content);
+    }
+  }
+}
+
+function connectGlobalEvents() {
+  dropEvents?.();
+  dropEvents = API.connectEvents(onGlobalEvent);
+}
+
+/**
+ * 全局 SSE 只渲染五类带外条目（reattach / intervention / degrade / gate_stop / note）。
+ * 回合进行中（S.busy）一律跳过：driver 把每个事件同时 yield 给回合的 NDJSON 流
+ * 并发布到总线，双通道都画会重复 —— busy 时由 consume() 负责渲染。
+ */
+function onGlobalEvent(ev) {
+  if (S.busy) return;
+  switch (ev.t) {
+    case 'reattach': Stream.reattachEntry(ev); break;
+    case 'intervention': Stream.interventionEntry(ev); break;
+    case 'degrade': Stream.degradeEntry(ev); break;
+    case 'gate_stop': Stream.gateStopEntry(ev); break;
+    case 'note': Stream.note(ev.tone === 'warn' ? 'stale' : ev.tone || 'info', ev.text); break;
+  }
 }
 
 function renderHero() {
@@ -257,6 +305,8 @@ function renderSessions() {
       renderSessions();
       el.subtitle.textContent = s.name;
       reset();
+      hydrateFromServer();      // 新会话的服务端状态与历史
+      connectGlobalEvents();    // SSE 重新挂到新会话
       toast(`已切换会话：${s.name}`);
     },
   },
@@ -399,10 +449,15 @@ async function consume(iter) {
 
       /* ---- §7.4 新条目 ---- */
       case 'degrade':
+        // 服务端事件是文本形态（{text, evidenceBefore, evidenceAfter}）直接渲染；
+        // mock 剧情才带 stepId/from/to，走降级处置流程
+        if (ev.text && !ev.from) { Stream.degradeEntry(ev); break; }
         onDegrade(ev);
         break;
 
       case 'gate_stop':
+        // 服务端事件是文本形态（{text, suggestions:[string]}），建议是文字说明
+        if (ev.text && !ev.metric) { Stream.gateStopEntry(ev); break; }
         Stream.gateStopEntry({
           ...ev,
           suggestions: (ev.suggestions || []).map((sg) => ({
@@ -662,6 +717,7 @@ function applyMethod(stepId, methodId) {
   const before = st_(stepId).method;
   const affected = St.setMethod(stepId, methodId);
   if (!affected.length) return;
+  lastChange = { stepId, method: methodId };
   if (interventionDuringRun(`将第 ${stepId} 步方法改为 ${methodId}`)) return;
   explainInvalidation(stepId, before, methodId, affected, 'method', snap);
 }
@@ -671,6 +727,7 @@ function applyParams(stepId, patch) {
   const before = { ...st_(stepId).params };
   const affected = St.setParams(stepId, patch);
   if (!affected.length) return;
+  lastChange = { stepId, params: { ...patch } };
   const k = Object.keys(patch)[0];
   if (interventionDuringRun(`将第 ${stepId} 步参数改为 ${k}=${patch[k]}`)) return;
   explainInvalidation(stepId, `${k}=${before[k]}`, `${k}=${patch[k]}`, affected, 'param', snap);
@@ -774,6 +831,43 @@ function explainInvalidation(stepId, from, to, affected, kind, snap = null) {
 /* ============================================================
    审批 → 执行
    ============================================================ */
+
+/* 服务端失效原因 → 中文（core/stale.py 的五类闭集） */
+const IMPACT_REASON_ZH = {
+  method_changed: '换了方法',
+  param_changed: '改了参数',
+  upstream_changed: '上游重跑了',
+  tool_upgraded: '工具版本变了',
+  artifact_missing: '产物被删除',
+};
+
+/**
+ * 审批卡权威化（§7.6）：本地即时估算先渲染，服务端影响预估（指纹系统推导）
+ * 到达后原位更新卡片内容。离线 / 无 run / 服务端视角无变化 → 保持本地估算。
+ * 时长诚实化（§7.5）：rerunMinutes 为 null 时如实显示「时长未知」，绝不编数。
+ */
+async function refineApprovalCard(card, sum) {
+  if (!card?.updateRows) return;   // 同族自动通过时没有卡片
+  // 预估探针：优先用最近一次变更；没有变更记录时用首个待跑步骤的当前配置
+  const probe = lastChange
+    || (sum.ids.length
+      ? { stepId: sum.ids[0], method: st_(sum.ids[0]).method, params: st_(sum.ids[0]).params }
+      : null);
+  if (!probe) return;
+  const imp = await API.fetchImpact(probe.stepId, { method: probe.method, params: probe.params });
+  if (!imp || !card.isConnected) return;
+  const ids = (imp.affected || []).map((a) => a.step_id).filter((x) => x != null);
+  const reason = IMPACT_REASON_ZH[imp.reason];
+  if (!ids.length && !reason) return;   // 服务端视角无失效（no_change），本地估算保持原样
+  const rows = [];
+  if (ids.length) rows.push(['受影响', `第 ${ids.join('、')} 步（共 ${ids.length} 步 · 服务端指纹推导）`]);
+  if (reason) rows.push(['失效原因', reason]);
+  rows.push(['耗时', imp.rerunMinutes === null || imp.rerunMinutes === undefined
+    ? '时长未知（历史样本不足）'
+    : `约 ${Math.max(1, Math.round(imp.rerunMinutes))} 分钟（${imp.rerunBasis || '服务端历史中位数'}）`]);
+  card.updateRows(rows);
+}
+
 function askRerun() {
   if (S.busy) return;
   const sum = API.rerunSummary();
@@ -784,7 +878,7 @@ function askRerun() {
   const eta = St.estimateRerunHonest(sum.ids);
   const longTask = eta.known && eta.hiSec > 30 * 60;
   const hasOverwrite = sum.overwrite.length > 0;
-  Stream.askApproval({
+  const card = Stream.askApproval({
     title: longTask
       ? '需确认 · 长时任务'
       : hasOverwrite ? '需确认 · 将覆写已有产物' : '需确认 · 执行流水线',
@@ -815,6 +909,7 @@ function askRerun() {
       } },
     ],
   });
+  refineApprovalCard(card, sum);   // 本地估算先行，服务端权威影响预估到达后原位更新
 }
 
 async function run(ids) {
@@ -982,6 +1077,7 @@ function reset() {
   S.selectedFile = null;
   S.degraded.length = 0;
   S.autoApprove.clear();
+  lastChange = null;
   S.evidenceLevel = St.evidenceCeiling().level;
   St.setDiskFree(16);            // 预算演示回到初值（8–20G 灰字区）
   currentPlan = null;

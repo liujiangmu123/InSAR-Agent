@@ -468,6 +468,30 @@ export function restoreSteps(snap) {
   });
 }
 
+/* ---------------- 服务端状态镜像（GET /api/state） ---------------- */
+
+/**
+ * 把服务端 run 的步骤状态同步进本地镜像（存在才同步：本地没有的步骤 id 跳过，
+ * 服务端没给的字段不动）。'skipped'（云端 HyP3 完成）本地视作 done 展示。
+ * 同步后按拓扑序重算全部指纹并广播。
+ */
+export function syncServerSteps(serverSteps) {
+  if (!Array.isArray(serverSteps) || !serverSteps.length) return;
+  const MAP = { skipped: 'done' };
+  batch(() => {
+    for (const s of serverSteps) {
+      const st = st_(s.id);
+      if (!st) continue;
+      if (s.method) st.method = s.method;
+      if (s.state) st.state = MAP[s.state] || s.state;
+      st.stale = !!s.stale;
+      if (st.stale && st.state === 'done') st.state = 'stale';
+    }
+    for (const d of STEP_DEFS) S.steps.get(d.id).fingerprint = fingerprint(d.id);
+    emit('steps', 'files');
+  });
+}
+
 /* ---------------- 产物视图（从步骤输出派生） ---------------- */
 
 /** 文件列表不再是独立常量，而是从 STEP_DEFS.outputs 派生 —— 状态自动一致。 */

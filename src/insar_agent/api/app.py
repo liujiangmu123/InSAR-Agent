@@ -303,6 +303,33 @@ def create_app(home: Path | None = None) -> FastAPI:
             return []
         return store.trace_of(run["run_id"])
 
+    @app.get("/api/logs")
+    def logs(session: str, step: int, run_id: str | None = None,
+             tail_kb: int = Query(64, ge=1, le=1024)):
+        """步骤日志尾部(面板 8「终端」):读 log_path 末尾 N KB;无 run/步骤/日志文件 → 404。"""
+        run = store.get_run(run_id) if run_id else store.latest_run(session)
+        if run is None:
+            raise HTTPException(404, "no run")
+        step_row = store.load_step(run["run_id"], step)
+        if step_row is None:
+            raise HTTPException(404, "no step")
+        path = Path(step_row.log_path) if step_row.log_path else None
+        if path is None or not path.exists():
+            raise HTTPException(404, "no log file")
+        size = path.stat().st_size
+        limit = tail_kb * 1024
+        with path.open("rb") as f:
+            if size > limit:
+                f.seek(size - limit)
+            data = f.read()
+        text = data.decode("utf-8", errors="replace")
+        if size > limit and "\n" in text:
+            text = text.split("\n", 1)[1]  # 掐掉截断处的半行
+        return PlainTextResponse(text, headers={
+            "X-Log-Size": str(size),
+            "X-Log-Truncated": "1" if size > limit else "0",
+        })
+
     # ---------------- 全局 SSE ----------------
 
     @app.get("/api/events")
