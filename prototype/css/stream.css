@@ -688,6 +688,69 @@ table.grid td.mono { font-family: var(--mono); font-size: 11.5px }
 /* 超时渐隐（prefers-reduced-motion 时由 tokens.css 全局降级为瞬时） */
 .undo-link.expired { opacity: 0; pointer-events: none; }
 
+/* ===================== 只读工具聚合组（Cursor 工作组折叠） ===================== */
+/* 连续探查类工具卡折叠为一张组卡；组内任一失败 → 整组展开并标红 */
+.toolgroup {
+  border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--surface); overflow: hidden; box-shadow: var(--sh-1);
+}
+.toolgroup.is-bad { border-color: var(--bad-border); }
+.toolgroup > summary {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 8px 11px; cursor: pointer; list-style: none;
+  user-select: none; font-size: 13px; font-weight: 600;
+  transition: background .12s;
+}
+.toolgroup > summary::-webkit-details-marker { display: none }
+.toolgroup > summary:hover { background: var(--bg-sub) }
+.toolgroup .cv { color: var(--text-3); transition: transform .18s; flex-shrink: 0; display: flex }
+.toolgroup .cv svg { width: 13px; height: 13px }
+.toolgroup[open] > summary .cv { transform: rotate(90deg) }
+.toolgroup .dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--text-3);
+}
+.toolgroup.is-run  .dot { background: var(--accent); animation: pulseRing 1.4s infinite }
+.toolgroup.is-ok   .dot { background: var(--ok) }
+.toolgroup.is-bad  .dot { background: var(--bad) }
+.toolgroup.is-warn .dot { background: var(--stale) }
+.toolgroup.is-bad > summary { color: var(--bad-text) }
+.toolgroup .ttl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.toolgroup .stat { font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); flex-shrink: 0 }
+.toolgroup .stat.is-bad { color: var(--bad-text); font-weight: 700 }
+/* 组内成员保持完整工具卡形态，浅色槽内堆叠（与 .arts 产物条同语） */
+.toolgroup .grp-body {
+  border-top: 1px solid var(--border); background: var(--bg-sub);
+  padding: 7px 9px; display: flex; flex-direction: column; gap: 6px;
+}
+
+/* ===================== 排队消息 chips（busy 期间输入不丢弃） ===================== */
+.queue-row {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 0 3px; margin-bottom: 7px;
+}
+.queue-row[hidden] { display: none }
+.queue-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 320px; padding: 3px 5px 3px 10px;
+  border: 1px solid var(--stale-border); border-radius: var(--r-pill);
+  background: var(--stale-weak); color: var(--stale-text);
+  font-size: var(--fs-xs); animation: riseIn .18s ease-out;
+}
+.queue-chip .ic { display: flex; flex-shrink: 0 }
+.queue-chip .ic svg { width: 11px; height: 11px }
+.queue-chip .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.queue-chip .rm {
+  width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: inherit; opacity: .65; transition: background .12s, opacity .12s;
+}
+.queue-chip .rm:hover { opacity: 1; background: color-mix(in srgb, var(--stale) 20%, transparent) }
+.queue-chip .rm svg { width: 9px; height: 9px }
+
+/* 「不再询问」撤销链接的已撤销态（复用 .undo-link 基础样式） */
+.undo-link[disabled] { color: var(--text-3); text-decoration: none; pointer-events: none; }
+
 /* ===================== 结果卡内的降级说明 ===================== */
 .downgrade {
   display: flex; align-items: flex-start; gap: var(--sp-2); margin-top: 10px;

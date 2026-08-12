@@ -6,6 +6,7 @@ import { h, txt, icon, $, $$, toast, sleep } from './dom.js';
 import * as St from './state.js';
 import { S, STEP_DEFS, def_, st_, LADDER, SESSIONS, THRESHOLDS, DISK_TIERS } from './state.js';
 import * as Stream from './stream.js';
+import * as Queue from './queue.js';   // 排队消息（busy 期间输入 → chip，回合结束逐条发出）
 import * as Dock from './dock.js';
 import * as API from './backend.sse.js';   // 真实后端;file:// 或后端不可达时自动回退 mock
 import { demoLongTaskEvents } from './backend.mock.js';   // §7.4 新条目静态演示（仅 mock）
@@ -777,7 +778,8 @@ function renderAttachments() {
    ============================================================ */
 async function submit() {
   let text = el.input.value.trim();
-  if (!text || S.busy) return;
+  if (!text) return;
+  if (S.busy) { Queue.enqueue(text); return; }   // 排队而非丢弃：chip 可撤销，回合结束自动发出
   if (attachments.length) {
     text += `\n〔附件 · 演示未上传〕${attachments.map((a) => a.name).join('、')}`;
     attachments.length = 0;
@@ -816,6 +818,7 @@ function setBusy(on) {
   el.stop.hidden = !on;
   el.send.disabled = on || !el.input.value.trim();
   paintStatus();
+  if (!on) Queue.flush((t) => { el.input.value = t; submit(); });   // 停止时（phase=paused）队列保留
 }
 
 function abort() {
@@ -1227,6 +1230,7 @@ function reset() {
   currentPlan = null;
   tools.clear();
   attachments.length = 0;
+  Queue.clear();   // 换会话/新对话：旧队列不得跨会话发出
   renderAttachments();
   renderHero();
   Dock.setTab('pipeline');
