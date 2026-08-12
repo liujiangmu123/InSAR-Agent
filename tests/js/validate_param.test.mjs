@@ -39,13 +39,33 @@ test('数字字符串走 Number 强转后通过(UI 输入框场景)', () => {
   assert.equal(validateParam('threads', '8'), null);
 });
 
-test('锁现状:schema 之外的参数键不校验,直接放行', () => {
+test('设计决策:schema 之外的参数键不校验,直接放行', () => {
+  // PARAM_SCHEMA 只是数值参数的 UI 侧镜像,完整校验在服务端 cap.validate_params
+  // (未声明参数会被 400 拒绝);UI 不重复维护全量清单,避免误拦合法参数。
   assert.equal(validateParam('no_such_key', 'anything'), null);
 });
 
-test('锁现状:空字符串被 Number 强转为 0 —— 对 min=0 的参数会静默通过(潜在缺陷)', () => {
-  assert.equal(validateParam('min_coherence', ''), null); // '' → 0,落在 0-1 内
-  assert.equal(validateParam('threads', ''), PARAM_SCHEMA.threads.hint); // '' → 0 < 1,被范围拦住
+/* ---------- 2026-08-12 缺陷修复回归:空值显式拒绝 ---------- */
+
+test('空字符串判无效:不再被 Number 强转为 0 静默通过(对 min=0 的参数尤其危险)', () => {
+  assert.equal(validateParam('min_coherence', ''), 'min_coherence 不能为空'); // 修复前 '' → 0 静默通过
+  assert.equal(validateParam('threads', ''), 'threads 不能为空');            // 修复前靠范围误拦,文案错位
+});
+
+test('纯空白字符串同样判无效(trim 后为空)', () => {
+  assert.equal(validateParam('min_coherence', '   '), 'min_coherence 不能为空');
+  assert.equal(validateParam('alpha', '\t'), 'alpha 不能为空');
+});
+
+test('null / undefined 判无效:Number(null) 会静默变 0,与空串同类', () => {
+  assert.equal(validateParam('min_coherence', null), 'min_coherence 不能为空');
+  assert.equal(validateParam('min_coherence', undefined), 'min_coherence 不能为空');
+});
+
+test('真实 0 值不受空值拒绝误伤:数字 0 与字符串 "0" 照常走范围校验', () => {
+  assert.equal(validateParam('min_coherence', 0), null);
+  assert.equal(validateParam('min_coherence', '0'), null);
+  assert.equal(validateParam('threads', 0), PARAM_SCHEMA.threads.hint); // 0 < min=1:范围拦截而非空值拦截
 });
 
 test('max_temporal_baseline 时间基线边界 6-730', () => {

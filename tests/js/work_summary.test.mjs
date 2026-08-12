@@ -1,9 +1,11 @@
 /* ============================================================
    workSummary / staleSteps / estimateRerun 分类边界锁定
    —— 三类待办语义不同不能混:
+     resume  failed/interrupted/orphaned(断点处置续跑)
      stale   曾产出过、指纹变更失效(覆写旧产物)
      pending 从未运行过(首次产出)
-     resume  failed/interrupted/orphaned(断点处置续跑)
+   归桶优先级:resume(终态)> stale > pending——失败/中断步骤即使
+   叠加脏标记也归 resume,§7.8 的第一动作是断点处置而非覆写重跑。
    all 是三者的升序合并,即审批卡执行列表 rerunSummary().ids 的来源。
    ============================================================ */
 import './_env.mjs';
@@ -85,4 +87,42 @@ test('estimateRerun 按步骤示意工期求和;空列表为 0;未知 id 计 0',
   assert.equal(estimateRerun([6, 7]), 1440 + 2280);
   assert.equal(estimateRerun([]), 0);
   assert.equal(estimateRerun([99]), 0);
+});
+
+/* ---------- 2026-08-12 缺陷修复回归:终态优先于 stale 的归桶 ---------- */
+
+test('failed 叠加本地脏标记 → 仍归 resume(终态优先,不被 stale 桶抢走)', () => {
+  initSteps(5);
+  setParams(3, { esd_coherence_threshold: 0.9 }); // 3/4/5 标脏
+  setStepState(3, 'failed');                      // 3 又失败:failed + stale 叠加
+  assert.equal(st_(3).stale, true);               // 脏标记确实还在
+  const sum = workSummary();
+  assert.deepEqual(sum.resume, [3]);   // §7.8:第一动作是断点处置
+  assert.deepEqual(sum.stale, [4, 5]); // 纯 stale(done+脏)才提示覆写
+  assert.deepEqual(sum.all, [3, 4, 5, 6, 7, 8, 9, 10, 11]);
+});
+
+test('interrupted / orphaned 叠加脏标记 → 同样归 resume 不归 stale', () => {
+  for (const bad of ['interrupted', 'orphaned']) {
+    initSteps(5);
+    setParams(3, { esd_coherence_threshold: 0.9 });
+    setStepState(3, bad);
+    const sum = workSummary();
+    assert.deepEqual(sum.resume, [3], `${bad}+stale 应归 resume`);
+    assert.ok(!sum.stale.includes(3), `${bad}+stale 不应归 stale 桶`);
+  }
+});
+
+test('三桶两两不相交,all 无重复且为三桶的升序并集', () => {
+  initSteps(5);
+  setParams(3, { esd_coherence_threshold: 0.9 }); // 3/4/5 标脏
+  setStepState(4, 'failed');                      // 4 → failed+stale 叠加态
+  const sum = workSummary();
+  const inter = (a, b) => a.filter((x) => b.includes(x));
+  assert.deepEqual(inter(sum.stale, sum.resume), []);
+  assert.deepEqual(inter(sum.stale, sum.pending), []);
+  assert.deepEqual(inter(sum.pending, sum.resume), []);
+  assert.equal(new Set(sum.all).size, sum.all.length);
+  assert.deepEqual(sum.all,
+    [...sum.stale, ...sum.pending, ...sum.resume].sort((a, b) => a - b));
 });

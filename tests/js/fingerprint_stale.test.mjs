@@ -102,7 +102,9 @@ test('snapshot/restore 全量回滚:状态/方法/参数/stale/指纹', () => {
   assert.deepEqual(workSummary().all, [6, 7, 8, 9, 10, 11]);
 });
 
-test('锁现状:running 步骤不被级联标 stale(上游变更时保持 running,交给服务端裁决)', () => {
+test('设计决策:running 步骤不被级联标 stale(上游变更时保持 running,失效裁决交给服务端)', () => {
+  // 正在运行的步骤是否作废由服务端裁决(执行器接回或复位),前端镜像不抢跑,
+  // 避免与服务端状态机打架——见 state.js invalidate 的设计决策注释。
   initSteps(5);
   setStepState(6, 'running');
   setParams(5, { alpha: 0.9 }); // 6 在受影响范围内

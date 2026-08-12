@@ -336,7 +336,11 @@ export function setParams(stepId, patch) {
   return invalidate(stepId);
 }
 
-/** 参数指纹变更引发的失效传播。这是主 novelty 的 UI 侧体现。 */
+/**
+ * 参数指纹变更引发的失效传播。这是主 novelty 的 UI 侧体现。
+ * 设计决策：running 步骤不在此标 stale——正在运行的步骤是否作废由服务端
+ * 裁决（执行器接回或复位），前端镜像不抢跑，避免与服务端状态机打架。
+ */
 export function invalidate(stepId) {
   const affected = [stepId, ...downstreamOf(stepId)];
   batch(() => {
@@ -374,19 +378,22 @@ export function setStepState(stepId, state, extra = {}) {
 
 /**
  * 待办工作分三类，语义不同不能混：
+ *   resume  —— failed / interrupted / orphaned，需从断点处置后续跑（§7.8）
  *   stale   —— 曾经产出过、因指纹变更而失效（需覆写旧产物）
  *   pending —— 从未运行过（首次产出）
- *   resume  —— failed / interrupted / orphaned，需从断点处置后续跑（§7.8）
  * 三者都需要执行，但 UI 文案与风险提示不同。
+ * 归桶优先级：终态类（resume）> stale > pending。失败/中断步骤即使叠加了
+ * 脏标记也归 resume——对用户的第一动作是断点处置而非覆写重跑；
+ * 纯 stale（done+脏）才提示覆写旧产物的风险（§7.8 文案按桶区分）。
  */
 export function workSummary() {
   const stale = [], pending = [], resume = [];
   for (const d of STEP_DEFS) {
     const st = st_(d.id);
     if (!st) continue;
-    if (st.stale || st.state === 'stale') stale.push(d.id);
+    if (st.state === 'failed' || st.state === 'interrupted' || st.state === 'orphaned') resume.push(d.id);
+    else if (st.stale || st.state === 'stale') stale.push(d.id);
     else if (st.state === 'pending') pending.push(d.id);
-    else if (st.state === 'failed' || st.state === 'interrupted' || st.state === 'orphaned') resume.push(d.id);
   }
   return { stale, pending, resume, all: [...stale, ...pending, ...resume].sort((a, b) => a - b) };
 }
@@ -471,8 +478,18 @@ export function restoreSteps(snap) {
 /* ---------------- 服务端状态镜像（GET /api/state） ---------------- */
 
 /**
- * 把服务端 run 的步骤状态同步进本地镜像（存在才同步：本地没有的步骤 id 跳过，
- * 服务端没给的字段不动）。'skipped'（云端 HyP3 完成）本地视作 done 展示。
+ * 把服务端 run 的步骤状态同步进本地镜像。镜像纪律：
+ *   - 本地没有的步骤 id 跳过；
+ *   - 服务端没给的字段不动——method / state / params / stale 一律按字段存在与否
+ *     判断，防部分载荷（如只回 id/state/method 的端点）把本地脏标记静默抹掉；
+ *   - params 若下发则整体替换（/api/state 每步都带权威 params，
+ *     镜像后指纹与服务端配置对齐，防前后端指纹静默分叉）；
+ *   - 'skipped'（云端 HyP3 完成）本地视作 done 展示。
+ * 镜像后收敛 state 与 stale 布尔，不留分裂态（与服务端 store.set_stale 的
+ * 联动方向一致：'stale' 态是「done+脏」的派生展示）：
+ *   - stale=true 且 state='done'      → state='stale'（曾产出但已失效）；
+ *   - state='stale' 而 stale=false    → 服务端明确给了 stale:false 则布尔权威，
+ *     回 'done'；只给了 state:'stale' 则布尔联动为 true。
  * 同步后按拓扑序重算全部指纹并广播。
  */
 export function syncServerSteps(serverSteps) {
@@ -483,9 +500,17 @@ export function syncServerSteps(serverSteps) {
       const st = st_(s.id);
       if (!st) continue;
       if (s.method) st.method = s.method;
+      if (s.params && typeof s.params === 'object' && !Array.isArray(s.params)) {
+        st.params = { ...s.params };
+      }
       if (s.state) st.state = MAP[s.state] || s.state;
-      st.stale = !!s.stale;
+      const hasStale = Object.prototype.hasOwnProperty.call(s, 'stale');
+      if (hasStale) st.stale = !!s.stale;
       if (st.stale && st.state === 'done') st.state = 'stale';
+      else if (!st.stale && st.state === 'stale') {
+        if (hasStale) st.state = 'done';
+        else st.stale = true;
+      }
     }
     for (const d of STEP_DEFS) S.steps.get(d.id).fingerprint = fingerprint(d.id);
     emit('steps', 'files');
@@ -541,10 +566,18 @@ export const PARAM_SCHEMA = {
   esd_coherence_threshold: { type: 'number', min: 0, max: 1, hint: 'ESD 相干阈值 0–1' },
 };
 
-/** 返回 null 表示通过，否则返回错误提示。 */
+/**
+ * 返回 null 表示通过，否则返回错误提示。
+ * 空值（''/纯空白/null/undefined）显式拒绝：Number('') 与 Number(null) 都
+ * 静默变 0，会让空输入冒充合法值 0 通过（对 min=0 的参数尤其危险）。
+ * 设计决策：schema 之外的键放行——PARAM_SCHEMA 只是数值参数的 UI 侧镜像，
+ * 完整校验在服务端 cap.validate_params（未声明参数会被 400 拒绝），
+ * UI 不重复维护全量清单，避免误拦服务端合法的非数值参数。
+ */
 export function validateParam(key, raw) {
   const sc = PARAM_SCHEMA[key];
   if (!sc) return null;
+  if (raw == null || String(raw).trim() === '') return `${key} 不能为空`;
   const n = Number(raw);
   if (!Number.isFinite(n)) return `${key} 必须是数字`;
   if (sc.type === 'int' && !Number.isInteger(n)) return `${key} 必须是整数`;
