@@ -10,7 +10,7 @@
 | `desktop/src/window_state.rs` | 窗口位置/尺寸/最大化状态持久化(%APPDATA%\insar-agent\window.json,原子写;分辨率变化越界自动校正) |
 | `desktop/src/shortcuts.rs` | 全局快捷键骨架:Ctrl+Shift+I 显示/隐藏主窗 |
 | `prototype/js/titlebar.js` | 运行状态 → document.title 同步(10s 轮询 /api/state,浏览器/桌面通用) |
-| `desktop/src/bin/window_check.rs` | 编译自检 bin(`cargo build` 即完成两个模块的类型检查) |
+| ~~`desktop/src/bin/window_check.rs`~~ | 编译自检 bin,**已随集成移除**:main.rs 已声明 `mod shortcuts; mod window_state;`,该 bin 冗余且会干扰打包的主二进制判定(NSIS 曾误把它当主程序) |
 
 Cargo.toml 追加的依赖:`serde`(derive)、`serde_json`、`tauri-plugin-global-shortcut = "2"`。
 
@@ -93,8 +93,8 @@ export function initTitleSync(opts = {});
 
 ## 4. 验证方式
 
-- 编译自检:`cd desktop && cargo build`(`src/bin/window_check.rs` 通过
-  `#[path]` 引入两个模块,build 即类型检查,无需 cargo run);
+- 编译自检:`cd desktop && cargo build`(两个模块已由 main.rs `mod` 声明
+  直接编入,build 即类型检查,无需 cargo run);
 - 标题同步(浏览器即可):起后端后打开
   `http://127.0.0.1:8873/?session=<会话id>`,发起一次运行,约 10s 内标签页
   标题出现「运行中 · 第 N 步」,结束后变「已完成」/「失败」。

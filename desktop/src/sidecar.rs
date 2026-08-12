@@ -1,5 +1,7 @@
-// Python sidecar 进程管理:解释器探测(项目 venv 约定)、仓库根定位、
-// spawn(CREATE_NO_WINDOW + stdout/stderr 滚动日志)、退出监测与关闭。
+// 后端 sidecar 进程管理:后端探测(冻结 exe 优先,Python 解释器兜底)、
+// 仓库根定位、spawn(CREATE_NO_WINDOW + stdout/stderr 滚动日志)、退出监测与关闭。
+// 探测顺序:① exe 同目录 backend\insar-backend.exe(打包分发形态,免 Python)
+//           ② 环境变量 INSAR_PYTHON ③ {仓库根}/.venv ④ PATH python。
 // 窗口 / 诊断页 / 重启编排在 main.rs,本模块只握进程与日志。
 
 use std::fs::{File, OpenOptions};
@@ -79,7 +81,71 @@ pub fn venv_setup_hint(repo_root: &Path) -> String {
     )
 }
 
-/// 探测 Python,优先级(项目约定):
+// ---------------- 后端探测(冻结 exe 优先,Python 兜底) ----------------
+
+/// 探测到的后端形态。
+#[derive(Clone)]
+pub enum Backend {
+    /// 打包分发形态:exe 同目录 `backend\insar-backend.exe`(PyInstaller onedir
+    /// 冻结产物,自带 UI 与依赖),直接 spawn,无需任何 Python。
+    Frozen(PathBuf),
+    /// 源码开发形态:Python 解释器 + 来源说明,spawn `python -m insar_agent.api.app`。
+    Python { exe: PathBuf, source: String },
+}
+
+impl Backend {
+    /// 探测结果一行描述(进日志与诊断页「后端」行):
+    /// 「冻结后端:路径」或「Python:路径(来源:…)」。
+    pub fn describe(&self) -> String {
+        match self {
+            Backend::Frozen(exe) => format!("冻结后端:{}", exe.display()),
+            Backend::Python { exe, source } => {
+                format!("Python:{}(来源:{source})", exe.display())
+            }
+        }
+    }
+
+    /// 诊断页「启动命令」单元格。
+    pub fn launch_desc(&self) -> String {
+        match self {
+            Backend::Frozen(_) => "insar-backend.exe(冻结后端,直接运行,无需 Python)".into(),
+            Backend::Python { .. } => "python -m insar_agent.api.app".into(),
+        }
+    }
+}
+
+/// 打包分发布局下冻结后端的候选路径:主 exe 同目录 `backend\insar-backend.exe`
+/// (安装/分发时把 PyInstaller onedir 产物整目录摆到壳 exe 旁并命名 `backend\`)。
+fn frozen_backend_candidate(exe_dir: &Path) -> PathBuf {
+    let name = if cfg!(windows) {
+        "insar-backend.exe"
+    } else {
+        "insar-backend"
+    };
+    exe_dir.join("backend").join(name)
+}
+
+/// 探测后端,优先级:
+/// ① exe 同目录 `backend\insar-backend.exe`(打包分发形态,免 Python)
+/// ② 环境变量 INSAR_PYTHON ③ {仓库根}/.venv ④ PATH python。
+pub fn find_backend(repo_root: &Path) -> Result<Backend, String> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let cand = frozen_backend_candidate(dir);
+            if cand.is_file() {
+                return Ok(Backend::Frozen(cand));
+            }
+        }
+    }
+    match find_python(repo_root) {
+        Ok((exe, source)) => Ok(Backend::Python { exe, source }),
+        Err(e) => Err(format!(
+            "未找到可用后端:exe 同目录无冻结后端(backend\\insar-backend.exe),Python 探测也失败 —— {e}"
+        )),
+    }
+}
+
+/// 探测 Python(探测链 ②③④,冻结后端缺席时的源码开发形态兜底):
 /// 环境变量 INSAR_PYTHON > {仓库根}/.venv > PATH。
 /// 返回(解释器路径,来源说明——用于日志与诊断页)。
 pub fn find_python(repo_root: &Path) -> Result<(PathBuf, String), String> {
@@ -213,7 +279,7 @@ fn pump_into_log<R: Read + Send + 'static>(mut src: R, log: Arc<Mutex<RollingLog
 
 // ---------------- spawn / 退出监测 / 关闭 ----------------
 
-pub fn spawn(python: &Path, port: u16, workdir: &Path) -> Result<(), String> {
+pub fn spawn(backend: &Backend, port: u16, workdir: &Path) -> Result<(), String> {
     let log = {
         let mut st = STATE.lock().unwrap();
         if st.log.is_none() {
@@ -230,16 +296,27 @@ pub fn spawn(python: &Path, port: u16, workdir: &Path) -> Result<(), String> {
         .unwrap_or(0);
     log.lock().unwrap().append(
         format!(
-            "\n===== [desktop] spawn sidecar:python={} port={port} epoch={epoch} =====\n",
-            python.display()
+            "\n===== [desktop] spawn sidecar:{} port={port} epoch={epoch} =====\n",
+            backend.describe()
         )
         .as_bytes(),
     );
 
-    let mut cmd = Command::new(python);
-    cmd.args(["-m", "insar_agent.api.app"])
-        .current_dir(workdir)
-        .env("INSAR_PORT", port.to_string())
+    let mut cmd = match backend {
+        // 冻结产物自带 UI 与数据文件(INSAR_HOME 缺省落 %LOCALAPPDATA%),
+        // 工作目录设为产物目录即可,不依赖仓库根。
+        Backend::Frozen(exe) => {
+            let mut c = Command::new(exe);
+            c.current_dir(exe.parent().unwrap_or(workdir));
+            c
+        }
+        Backend::Python { exe, .. } => {
+            let mut c = Command::new(exe);
+            c.args(["-m", "insar_agent.api.app"]).current_dir(workdir);
+            c
+        }
+    };
+    cmd.env("INSAR_PORT", port.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -252,7 +329,7 @@ pub fn spawn(python: &Path, port: u16, workdir: &Path) -> Result<(), String> {
     }
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("启动 sidecar 失败({}):{e}", python.display()))?;
+        .map_err(|e| format!("启动 sidecar 失败({}):{e}", backend.describe()))?;
     if let Some(out) = child.stdout.take() {
         pump_into_log(out, log.clone());
     }
@@ -404,5 +481,33 @@ mod tests {
         let hint = venv_setup_hint(Path::new("repo"));
         assert!(hint.contains("py -m venv .venv"));
         assert!(hint.contains("pip install -r requirements.txt"));
+    }
+
+    #[test]
+    fn frozen_candidate_is_backend_subdir_next_to_exe() {
+        let p = frozen_backend_candidate(Path::new("app"));
+        if cfg!(windows) {
+            assert!(p.ends_with(Path::new("backend").join("insar-backend.exe")));
+        } else {
+            assert!(p.ends_with(Path::new("backend").join("insar-backend")));
+        }
+        assert!(p.starts_with("app"));
+    }
+
+    /// 冻结产物存在时,find_backend 应最优先命中它(优先于 INSAR_PYTHON/.venv/PATH)。
+    /// 直接对候选路径逻辑断言(current_exe 无法在测试内伪造,spawn 层不重复验)。
+    #[test]
+    fn backend_describe_distinguishes_frozen_and_python() {
+        let frozen = Backend::Frozen(PathBuf::from("C:/app/backend/insar-backend.exe"));
+        assert!(frozen.describe().starts_with("冻结后端:"));
+        assert!(frozen.launch_desc().contains("无需 Python"));
+
+        let py = Backend::Python {
+            exe: PathBuf::from("C:/repo/.venv/Scripts/python.exe"),
+            source: "项目虚拟环境 .venv".into(),
+        };
+        assert!(py.describe().starts_with("Python:"));
+        assert!(py.describe().contains("来源:项目虚拟环境 .venv"));
+        assert_eq!(py.launch_desc(), "python -m insar_agent.api.app");
     }
 }

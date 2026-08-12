@@ -64,23 +64,24 @@ powershell -ExecutionPolicy Bypass -File desktop\backend-bundle\smoke_test.ps1  
 退出码 0 即通过;数据目录用一次性 `.smoke-home`,不污染真实 workspace;
 后端输出重定向到 `smoke-backend.log` / `smoke-backend.err.log` 供排查。
 
-## 与 Tauri 壳(desktop/)的对接
+## 与 Tauri 壳(desktop/)的对接(已接入)
 
-现状(`desktop/src/main.rs`):壳按 `INSAR_PYTHON` > `C:\Python314\python.exe`
-> `PATH` 探测 Python,然后 spawn `python -m insar_agent.api.app`。
+壳(`desktop/src/sidecar.rs` 的 `find_backend`)当前探测顺序:
 
-接入冻结产物后,壳的探测顺序应改为(main.rs 后续改动点):
-
-1. **exe 旁 `backend\insar-backend.exe` 最优先** —— 打包分发形态:把
+1. **exe 同目录 `backend\insar-backend.exe` 最优先** —— 打包分发形态:把
    `dist\insar-backend\` 整目录拷到壳 exe 旁并命名为 `backend\`,直接 spawn,
-   不再需要任何 Python;
-2. `INSAR_PORT` 上已有健康后端 → 直接连接(开发时手动起 uvicorn 的场景,不变);
-3. 现有 Python 探测链(源码开发形态兜底,不变)。
+   不再需要任何 Python(端口裁决在探测之前:`INSAR_PORT` 上已有健康后端时
+   直接连接、不 spawn,开发时手动起 uvicorn 的场景不变);
+2. 环境变量 `INSAR_PYTHON`;
+3. 仓库根 `.venv`;
+4. PATH python(2-4 为源码开发形态兜底,spawn `python -m insar_agent.api.app`)。
 
-spawn 语义与现在完全相同:显式传 `INSAR_PORT`、stdout/stderr 重定向到日志、
-轮询 `/api/health`(30s 超时)、退出直接 kill(后端自带 orphan/reattach 语义,
-杀进程等价断点续跑)。唯一区别:不需要把工作目录设为仓库根 —— 产物自带 UI
-与数据文件,`INSAR_HOME` 缺省自动落 `%LOCALAPPDATA%`。
+spawn 语义两种形态完全相同:显式传 `INSAR_PORT`、stdout/stderr 重定向到 5MB
+滚动日志、轮询 `/api/health`(30s 超时)、退出直接 kill(后端自带 orphan/
+reattach 语义,杀进程等价断点续跑)。唯一区别:冻结形态不把工作目录设为仓库根
+(设为产物目录)—— 产物自带 UI 与数据文件,`INSAR_HOME` 缺省自动落
+`%LOCALAPPDATA%`。诊断页会显示探测结果是「冻结后端:路径」还是
+「Python:路径(来源:…)」。
 
 ## 边界与已知限制
 

@@ -203,10 +203,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_desktop.ps1 -C
 
 - [x] cargo release 编译链路已验证:`insar-agent-desktop.exe`(约 8 MB)一键产出;
 - [x] tauri-cli 获取脚本、bundle 配置草案、本文档;
-- [ ] `bundle` 段尚未合入 `tauri.conf.json`(conf 归另一分支,按 §7 合入后 `tauri build` 才会出安装包);
+- [x] `bundle` 段已合入 `tauri.conf.json`(active:true / nsis / SimpChinese),`tauri build` 直接出安装包;
+- [x] 壳的后端探测链已接入冻结产物:exe 同目录 `backend\insar-backend.exe` 最优先
+    (`INSAR_PYTHON` → 仓库根 `.venv` → PATH 兜底,见 `desktop\src\sidecar.rs`);
+- [x] 自动更新已接入壳侧:`INSAR_UPDATE_ENDPOINT` 环境变量开关(未配置不启用),
+    密钥生成与发布流程见 `desktop\updater\UPDATER.md`;
 - [ ] 正式图标:当前为脚本占位图,发布前用 `cargo-tauri icon` 从 1024px 设计稿生成;
 - [ ] 首次 NSIS 工具链下载依赖网络(§3-4 的镜像变量或离线预置);
-- [ ] "默认 E 盘"的自定义模板未落地(方案与关键改动行见 §5,需在合入 conf 的同一分支做);
-- [ ] 安装器只装桌面壳:Python 后端仍需宿主环境(`pip install -e .`),v1 环境向导 / v2 PyInstaller
-    冻结见 `desktop\README.md` §打包路线与 `docs\OPTIMIZATION.md` §4;
-- [ ] 代码签名(signtool/证书)与自动更新(updater)未纳入本期。
+- [ ] "默认 E 盘"的自定义模板未落地(方案与关键改动行见 §5,需要时再做);
+- [ ] **安装器暂只装桌面壳**:冻结后端(约 68 MB onedir)尚未作为 resources 进包 ——
+    分发时把 `desktop\backend-bundle\dist\insar-backend\` 整目录拷到安装目录下并
+    命名 `backend\` 即免 Python 运行(探测链已就绪);后续可在 `bundle.resources`
+    里映射该目录让安装器自带后端;
+- [ ] 代码签名(signtool/证书)未纳入本期。

@@ -3,6 +3,7 @@
   "productName": "InSAR-Agent",
   "version": "0.1.0",
   "identifier": "dev.insar.agent",
+  "mainBinaryName": "insar-agent-desktop",
   "app": {
     "windows": [],
     "withGlobalTauri": true,
