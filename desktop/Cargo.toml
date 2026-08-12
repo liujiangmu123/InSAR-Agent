@@ -11,4 +11,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # 唯一运行时依赖:壳的全部业务(健康检查 HTTP、诊断页托管)手写在 std 上,
 # 不引 reqwest/tokio 等重依赖
-tauri = { version = "2", features = [] }
+# tray-icon feature:系统托盘(src/tray.rs)
+tauri = { version = "2", features = ["tray-icon"] }
+# 单实例锁(src/singleton.rs):第二实例启动时前置已有窗口
+tauri-plugin-single-instance = "2"
