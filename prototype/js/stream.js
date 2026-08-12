@@ -281,10 +281,22 @@ export function askApproval({ title, rows, danger = false, actions, family = nul
     type: 'checkbox', 'aria-label': '本会话内同类操作不再询问',
   }) : null;
 
+  const dl = h('dl', null, ...rows.flatMap(([k, v]) => [h('dt', null, k), h('dd', null, v)]));
   el.append(
     h('div', { class: 'hd' }, icon(danger ? 'warn' : 'shield'), title),
-    h('dl', null, ...rows.flatMap(([k, v]) => [h('dt', null, k), h('dd', null, v)])),
+    dl,
     acts, verdict);
+
+  /** 服务端权威数据到达后原位更新/追加行（先本地即时估算，后服务端校准）。
+      已作出决定的卡不再改动 —— 卡面必须如实反映用户批准时看到的内容。 */
+  el.updateRows = (pairs) => {
+    if (el.dataset.resolved) return;
+    for (const [k, v] of pairs) {
+      const dt = [...dl.querySelectorAll('dt')].find((n) => n.textContent === k);
+      if (dt) dt.nextElementSibling.replaceChildren(v instanceof Node ? v : txt(v));
+      else dl.append(h('dt', null, k), h('dd', null, v));
+    }
+  };
 
   const resolve = (label, tone) => {
     el.dataset.resolved = '1';
@@ -398,8 +410,20 @@ export function note(tone, content, actions = []) {
    §7.4 四种新条目：degrade / gate_stop / reattach / intervention
    ============================================================ */
 
-/** degrade（橙）：降级发生时显式告知，附证据级别代价（§4.12 降级矩阵）。 */
-export function degradeEntry({ from, to, evidenceFrom = 'validated', evidenceTo = 'checked', detail, reason }) {
+/** degrade（橙）：降级发生时显式告知，附证据级别代价（§4.12 降级矩阵）。
+    两种事件形态：服务端是文本形态 {text, evidenceBefore, evidenceAfter}；
+    mock 剧情才有 from/to/failClass 等结构化字段。 */
+export function degradeEntry({ from, to, evidenceFrom = 'validated', evidenceTo = 'checked',
+                               detail, reason, text = '', evidenceBefore, evidenceAfter }) {
+  if (text) {
+    return push(h('div', { class: 'degrade turn rise', role: 'status', 'aria-label': '降级通知' },
+      icon('warn'),
+      h('span', { class: 'grow' },
+        h('b', null, '已降级：'), text,
+        '。证据级别 ', h('b', null, evidenceBefore || evidenceFrom),
+        ' → ', h('b', null, evidenceAfter || evidenceTo),
+        '。已写入 provenance 与证据边界表。')));
+  }
   return push(h('div', { class: 'degrade turn rise', role: 'status', 'aria-label': '降级通知' },
     icon('warn'),
     h('span', { class: 'grow' },
@@ -410,8 +434,22 @@ export function degradeEntry({ from, to, evidenceFrom = 'validated', evidenceTo 
       reason ? `（${reason}）` : '', '。已写入 provenance 与证据边界表。')));
 }
 
-/** gate_stop（红）：质量门拦停 —— 不是错误，附建议动作按钮。 */
-export function gateStopEntry({ stepId, metric, value, threshold, msg, suggestions = [] }) {
+/** gate_stop（红）：质量门拦停 —— 不是错误，附建议动作按钮。
+    服务端事件是文本形态 {text, suggestions:[string]}（建议是文字说明，
+    非可执行动作）；mock 剧情才有 metric/value/threshold 与按钮回调。 */
+export function gateStopEntry({ stepId, metric, value, threshold, msg, suggestions = [], text = '' }) {
+  if (text) {
+    const def = stepId ? def_(stepId) : null;
+    const tips = suggestions.map((sg) => (typeof sg === 'string' ? sg : sg?.label)).filter(Boolean);
+    return push(h('div', { class: 'gate turn rise', role: 'status', 'aria-label': '质量门拦停' },
+      h('div', { class: 'hd' }, icon('stop'),
+        stepId ? `质量门拦停 · 第 ${stepId} 步${def ? ` ${def.name}` : ''}` : '质量门拦停',
+        metric ? h('span', { class: 'cls mono' }, metric) : null),
+      h('div', { class: 'bd' },
+        h('p', null, text),
+        h('p', { class: 'em' }, '这不是错误，是质量门拦截 —— 上游质量不足以支撑下游继续。'),
+        tips.length ? h('p', { class: 'em' }, '建议：', tips.join('；')) : null)));
+  }
   const def = def_(stepId);
   return push(h('div', { class: 'gate turn rise', role: 'status', 'aria-label': '质量门拦停' },
     h('div', { class: 'hd' }, icon('stop'),
@@ -428,8 +466,14 @@ export function gateStopEntry({ stepId, metric, value, threshold, msg, suggestio
       }, sg.label))) : null));
 }
 
-/** reattach（蓝横幅）：服务重启后接回运行中任务。 */
-export function reattachEntry({ engine = 'MintPy', pid, runFor, stepId, logOffset }) {
+/** reattach（蓝横幅）：服务重启后接回运行中任务。
+    服务端事件是文本形态 {text}；mock 演示才有 pid/runFor 等字段。 */
+export function reattachEntry({ engine = 'MintPy', pid, runFor, stepId, logOffset, text = '' }) {
+  if (text) {
+    return push(h('div', { class: 'reattach turn rise', role: 'status', 'aria-label': '任务接回通知' },
+      icon('link'),
+      h('span', { class: 'grow' }, h('b', null, '已接回运行中任务：'), text)));
+  }
   return push(h('div', { class: 'reattach turn rise', role: 'status', 'aria-label': '任务接回通知' },
     icon('link'),
     h('span', { class: 'grow' },

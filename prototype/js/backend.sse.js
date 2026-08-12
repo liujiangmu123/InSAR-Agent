@@ -153,6 +153,106 @@ async function syncConfig(stepIds) {
   }
 }
 
+/* ============================================================
+   只读查询(GET):失败 / file:// / 后端不可达一律返回 null,
+   调用方拿 null 就保持本地估算或演示数据 —— 绝不抛错打断 UI。
+   ============================================================ */
+
+async function getJson(path, params) {
+  if (useMock) return null;
+  try {
+    const qs = new URLSearchParams({ session: S.sessionId, ...params });
+    const resp = await fetch(`${API_BASE}${path}?${qs}`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** 权威影响预估(审批卡数据源):服务端指纹系统对「改这一步」做纯预览。
+    返回 { changedStep, reason, affected:[{step_id,reason,state_before}],
+           rerunMinutes(null=历史样本不足), rerunBasis } 或 null。 */
+export async function fetchImpact(stepId, { method, params } = {}) {
+  const q = { step: String(stepId) };
+  if (method) q.method = method;
+  if (params && Object.keys(params).length) q.params = JSON.stringify(params);
+  return getJson('/api/impact', q);
+}
+
+/** 服务端状态镜像:{ run, steps:[{id,method,state,stale,...}] } 或 null。 */
+export function fetchState() {
+  return getJson('/api/state', {});
+}
+
+/** 历史对话:[{role:'user'|'agent', content, created_at, ...}] 或 null。 */
+export function fetchChat() {
+  return getJson('/api/chat', {});
+}
+
+/** 轨迹(OpenDiscoveryTrace 表):[{step_no,phase,action,error_occurred,...}] 或 null。 */
+export function fetchTrace() {
+  return getJson('/api/trace', {});
+}
+
+/** 步骤日志尾部。404(该步无日志)返回 { missing:true };离线/其它失败返回 null。 */
+export async function fetchLogs(stepId, { runId, tailKb } = {}) {
+  if (useMock) return null;
+  try {
+    const qs = new URLSearchParams({ session: S.sessionId, step: String(stepId) });
+    if (runId) qs.set('run_id', runId);
+    if (tailKb) qs.set('tail_kb', String(tailKb));
+    const resp = await fetch(`${API_BASE}/api/logs?${qs}`);
+    if (resp.status === 404) return { missing: true, text: '' };
+    if (!resp.ok) return null;
+    return {
+      missing: false,
+      text: await resp.text(),
+      truncated: resp.headers.get('X-Log-Truncated') === '1',
+      size: Number(resp.headers.get('X-Log-Size')) || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/* ============================================================
+   全局事件通道(SSE /api/events):回合之外的带外事件
+   (reattach / intervention / degrade / gate_stop / note)。
+   EventSource 自带同连接重试;连接被判死(服务重启、网络断开后部分
+   浏览器置 CLOSED 放弃)时手动指数退避重开。
+   file:// 或后端不可达:静默返回 no-op 的断开函数。
+   ============================================================ */
+export function connectEvents(onEvent) {
+  if (useMock || typeof EventSource === 'undefined') return () => {};
+  let es = null;
+  let timer = null;
+  let closed = false;
+  let retryMs = 1000;
+
+  const open = () => {
+    if (closed || useMock) return;   // 期间退回 mock 则不再重连
+    try {
+      es = new EventSource(`${API_BASE}/api/events?session=${encodeURIComponent(S.sessionId)}`);
+    } catch {
+      return;   // 环境不支持(如 file:// 下相对地址无效)→ 静默 no-op
+    }
+    es.onopen = () => { retryMs = 1000; };
+    es.onmessage = (e) => {
+      if (!e.data) return;
+      try { onEvent(JSON.parse(e.data)); } catch { /* 非 JSON 行(keepalive 等)忽略 */ }
+    };
+    es.onerror = () => {
+      if (es.readyState !== EventSource.CLOSED) return;   // 浏览器还在自动重试
+      es.close();
+      timer = setTimeout(open, retryMs);
+      retryMs = Math.min(retryMs * 2, 15000);
+    };
+  };
+  open();
+  return () => { closed = true; clearTimeout(timer); es?.close(); };
+}
+
 /** 重跑摘要(审批卡)。与 mock 相同:由前端状态镜像即时计算;
     服务端在执行时会用指纹系统重新推导权威影响范围。 */
 export function rerunSummary() {

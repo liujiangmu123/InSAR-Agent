@@ -10,6 +10,7 @@ import {
 } from './state.js';
 import { figureNode, figureSvg, mapSvg, timeSeriesSvg, IMAGES, POINTS, DATES } from './figures.js';
 import { ENV_NOTE, WSL, WORKSPACE, ENGINES, DISKS, TERM_LOGS, cmdSh, TRACE } from './envdata.js';
+import * as API from './backend.sse.js';   // 面板 7/8 实时数据；离线时各视图回落演示数据
 
 const TABS = [
   { id: 'pipeline', label: '流水线', ic: 'list' },
@@ -661,6 +662,18 @@ function fmtWall(sec) {
   return sec >= 120 ? `${Math.round(sec / 60)} min` : `${sec} s`;
 }
 
+/* 面板 7/8 实时数据的短 TTL 缓存：Dock.refresh 在运行期间高频触发，
+   同一键 3 秒内复用同一个 in-flight promise，避免打爆后端。 */
+const liveCache = new Map();
+
+function cachedFetch(key, loader, ttlMs = 3000) {
+  const hit = liveCache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.promise;
+  const promise = loader();
+  liveCache.set(key, { at: Date.now(), promise });
+  return promise;
+}
+
 /* ============================================================
    环境视图（面板 9 · §7.7 优先级最高）
    运行环境 / 磁盘 / 候选收窄原因 / 质量门阈值 —— 可行性可解释
@@ -756,11 +769,138 @@ function envView() {
 
 /* ============================================================
    终端视图（面板 8 · §7.7）
-   按步骤全量日志 + 正则过滤 + 错误定位 + issue 模板 + cmd.sh
+   实时：步骤下拉（/api/state）→ 该步日志尾部（/api/logs）
+        + 正则过滤 + ERROR/WARNING 高亮 + 跳到末尾。
+   后端不可达（file:// / 静态托管）→ 回落 envdata.js 演示日志。
    ============================================================ */
-const termUI = { step: null, filter: '' };
+const termLive = { step: null, filter: '' };
 
 function termView() {
+  const body = h('div', null,
+    h('p', { class: 'blurb' }, '正在读取运行状态（GET /api/state）…'));
+  loadTermView(body);
+  return body;
+}
+
+async function loadTermView(body) {
+  const state = await cachedFetch(`state:${S.sessionId}`, () => API.fetchState());
+  if (!body.isConnected) return;                      // 面板已切走/重渲染，丢弃过期结果
+  if (state === null) { body.replaceChildren(termDemoView()); return; }
+  if (!state.steps?.length) {
+    body.replaceChildren(h('div', null,
+      h('h3', { class: 'sect' }, '终端 · 步骤日志（服务端）'),
+      h('div', { class: 'fview' }, h('div', { class: 'empty' },
+        '本会话还没有运行记录 —— 发起一次执行后，每步日志（log_path 尾部）在此可读。'))));
+    return;
+  }
+  body.replaceChildren(termLiveView(state));
+}
+
+/** 日志行着色：ERROR/WARNING 高亮（经典大写日志级别 + Traceback），命令行提示符青色。 */
+function lineTone(ln) {
+  if (/ERROR|CRITICAL|Traceback/.test(ln)) return ' is-err';
+  if (/WARN/.test(ln)) return ' is-warn';
+  if (/^\$\s/.test(ln)) return ' is-cmd';
+  return '';
+}
+
+function termLiveView(state) {
+  const steps = state.steps;
+  if (!steps.some((s) => s.id === termLive.step)) {
+    // 默认选中最后一个「跑过」的步骤（pending 必然 404），一个都没跑过则选第一步
+    const ran = steps.filter((s) => s.state !== 'pending');
+    termLive.step = (ran.length ? ran[ran.length - 1] : steps[0]).id;
+  }
+  const runId = state.run?.run_id;
+
+  const sel = h('select', {
+    'aria-label': '选择要查看日志的步骤',
+    onchange: (e) => { termLive.step = Number(e.target.value); refresh(); },
+  }, ...steps.map((s) => h('option', {
+    value: String(s.id), selected: s.id === termLive.step || undefined,
+  }, `${String(s.id).padStart(2, '0')} ${s.name} · ${s.state}${s.stale ? '（STALE）' : ''}`)));
+
+  const logBox = h('pre', {
+    class: 'term-log', tabindex: '0',
+    'aria-label': `第 ${termLive.step} 步日志`,
+  }, h('span', { class: 'tl is-dim' }, '读取日志中…（GET /api/logs）'));
+  const meta = h('div', { class: 'term-meta' }, '—');
+
+  let lineEls = [];
+  const applyFilter = () => {
+    const q = termLive.filter.trim();
+    let re = null;
+    if (q) {
+      try { re = new RegExp(q, 'i'); }
+      catch { re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }   // 无效正则退回文本匹配
+    }
+    let shown = 0;
+    for (const el of lineEls) {
+      const hit = !re || re.test(el.textContent);
+      el.classList.toggle('hide', !hit);
+      if (hit) shown++;
+    }
+    meta.textContent = (re ? `${shown}/${lineEls.length} 行匹配` : `${lineEls.length} 行`) + metaSuffix;
+  };
+  let metaSuffix = '';
+
+  (async () => {
+    const log = await cachedFetch(
+      `logs:${S.sessionId}:${runId}:${termLive.step}`,
+      () => API.fetchLogs(termLive.step, { runId }));
+    if (!logBox.isConnected) return;
+    if (log === null) {
+      logBox.replaceChildren(h('span', { class: 'tl is-warn' }, '后端不可达，无法读取日志。'));
+      return;
+    }
+    if (log.missing) {
+      logBox.replaceChildren(h('span', { class: 'tl is-dim' },
+        '该步骤暂无日志文件（未执行过，或日志已被清理）—— /api/logs 返回 404。'));
+      meta.textContent = '0 行';
+      return;
+    }
+    const lines = log.text.replace(/\r/g, '').replace(/\n$/, '').split('\n');   // Windows CRLF 日志去 \r
+    lineEls = lines.map((ln) => h('span', { class: `tl${lineTone(ln)}` }, ln));
+    logBox.replaceChildren(...lineEls);
+    metaSuffix = log.truncated ? ` · 已截断至尾部（全文 ${Math.round((log.size || 0) / 1024)} KB）` : '';
+    applyFilter();
+    logBox.scrollTop = logBox.scrollHeight;   // 默认贴底：最新输出优先
+  })();
+
+  const filterInp = h('input', {
+    type: 'search', value: termLive.filter,
+    placeholder: '过滤日志 · 支持正则（如 ERROR|WARN）',
+    'aria-label': '过滤日志，支持正则表达式',
+    oninput: (e) => { termLive.filter = e.target.value; applyFilter(); },
+  });
+
+  return h('div', null,
+    h('h3', { class: 'sect' }, '终端 · 步骤日志（服务端）'),
+    h('div', { class: 'field' }, h('label', null, '步骤'), sel),
+    h('div', { class: 'term-tools' },
+      filterInp,
+      h('button', {
+        class: 'btn btn-gho btn-sm', type: 'button', 'aria-label': '跳到日志末尾',
+        onclick: () => { logBox.scrollTop = logBox.scrollHeight; },
+      }, icon('chevron'), '跳到末尾'),
+      h('button', {
+        class: 'btn btn-gho btn-sm', type: 'button', 'aria-label': '重新读取日志',
+        onclick: () => {
+          liveCache.delete(`logs:${S.sessionId}:${runId}:${termLive.step}`);
+          refresh();
+        },
+      }, icon('refresh'), '刷新')),
+    logBox,
+    meta,
+    h('p', { class: 'blurb' },
+      '日志读取 GET /api/logs（该步 log_path 的尾部 64 KB）。' +
+      'ERROR / WARNING 行自动高亮；过滤支持正则，无效正则自动退回文本匹配。'));
+}
+
+/* ---------------- 演示回退（后端未接入时的 mock 日志） ---------------- */
+const termUI = { step: null, filter: '' };
+
+function termDemoView() {
   // 只有「跑过」的步骤才有全量日志：done / stale / failed，
   // 以及 §7.8 的 interrupted / orphaned（中断前已产生日志，排查断点正需要看）
   const avail = STEP_DEFS.filter((d) => {
@@ -890,9 +1030,93 @@ function issueTemplate(stepId, lines) {
 
 /* ============================================================
    轨迹视图（面板 7 · Lab Notebook）
-   schema 对齐 OpenDiscoveryTrace；导出 JSON / Markdown
+   实时：GET /api/trace（SQLite trace 表，OpenDiscoveryTrace 对齐），
+        表格式列出 step_no / phase / action / error / revision_trigger，
+        顶部「导出 JSON」（Blob 下载）。
+   后端不可达 → 回落 envdata.js 演示轨迹。
    ============================================================ */
 function traceView() {
+  const body = h('div', null,
+    h('p', { class: 'blurb' }, '正在读取轨迹（GET /api/trace）…'));
+  loadTraceView(body);
+  return body;
+}
+
+async function loadTraceView(body) {
+  const rows = await cachedFetch(`trace:${S.sessionId}`, () => API.fetchTrace());
+  if (!body.isConnected) return;
+  if (rows === null) { body.replaceChildren(traceDemoView()); return; }
+  body.replaceChildren(traceLiveView(rows));
+}
+
+/** action 列：trace 表里 action 存 canonical JSON 字符串，取 tool 名作类型。 */
+function actionKind(action) {
+  if (!action) return '—';
+  try {
+    const a = typeof action === 'string' ? JSON.parse(action) : action;
+    return a.tool || a.kind || (Object.keys(a).length ? Object.keys(a)[0] : '—');
+  } catch {
+    return String(action).slice(0, 24) || '—';
+  }
+}
+
+function traceLiveView(rows) {
+  const errs = rows.filter((r) => r.error_occurred).length;
+  const revs = rows.filter((r) => r.revision_trigger).length;
+
+  const table = h('table', { class: 'grid' },
+    h('thead', null, h('tr', null,
+      h('th', null, '#'), h('th', null, 'step'), h('th', null, 'phase'),
+      h('th', null, 'action'), h('th', null, 'error'), h('th', null, 'revision'))),
+    h('tbody', null, ...rows.map((r, i) => h('tr', {
+      // 长字段不进表格：悬停行可见 thought / observation / 错误信息
+      title: [r.thought, r.observation, r.error_message].filter(Boolean).join('\n') || undefined,
+    },
+      h('td', { class: 'mono' }, String(i + 1)),
+      h('td', { class: 'mono' }, r.step_no ?? '—'),
+      h('td', null, r.phase || '—'),
+      h('td', { class: 'mono' }, actionKind(r.action)),
+      h('td', null, r.error_occurred
+        ? h('span', { class: 'tag is-bad' }, icon('x'), r.error_type || 'error')
+        : '—'),
+      h('td', null, r.revision_trigger
+        ? h('span', { class: 'tag is-stale' }, r.revision_trigger)
+        : '—')))));
+
+  return h('div', null,
+    h('h3', { class: 'sect' }, '轨迹 · OpenDiscoveryTrace（服务端）'),
+    h('div', { class: 'tstats' },
+      h('span', { class: 'tag' }, `${rows.length} 条记录`),
+      h('span', { class: `tag${errs ? ' is-bad' : ''}` }, `${errs} 次 error`),
+      h('span', { class: `tag${revs ? ' is-stale' : ''}` }, `${revs} 次 revision`)),
+    h('div', { class: 'term-acts', style: { marginTop: '0', marginBottom: '8px' } },
+      h('button', {
+        class: 'btn btn-pri btn-sm', type: 'button', 'aria-label': '导出轨迹为 JSON',
+        onclick: () => {
+          download(`trace_${S.sessionId}.json`, JSON.stringify({
+            schema: 'OpenDiscoveryTrace/1.0',
+            session: S.sessionId,
+            generated_at: new Date().toISOString(),
+            source: 'GET /api/trace',
+            entries: rows,
+          }, null, 2), 'application/json');
+          toast('已导出轨迹 JSON（服务端数据）');
+        },
+      }, '导出 JSON'),
+      h('button', {
+        class: 'btn btn-gho btn-sm', type: 'button', 'aria-label': '刷新轨迹',
+        onclick: () => { liveCache.delete(`trace:${S.sessionId}`); refresh(); },
+      }, icon('refresh'), '刷新')),
+    rows.length ? table : h('div', { class: 'fview' },
+      h('div', { class: 'empty' },
+        '本会话还没有轨迹记录 —— 发起一次规划/执行后，每一步的 phase / action / error 在此可审。')),
+    h('p', { class: 'blurb' },
+      'schema 对齐 OpenDiscoveryTrace：step_no / phase / action / error / revision_trigger。' +
+      '悬停行可见 thought 与 observation；导出 JSON 含全部字段。'));
+}
+
+/* ---------------- 演示回退（后端未接入时的 mock 轨迹） ---------------- */
+function traceDemoView() {
   const errs = TRACE.filter((e) => e.error?.occurred).length;
   const recovOk = TRACE.filter((e) => e.recovery?.attempted && e.recovery?.successful).length;
 
