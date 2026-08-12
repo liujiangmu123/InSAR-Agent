@@ -1,8 +1,10 @@
 # InSAR-Agent 桌面自动更新方案(Tauri 2 updater)
 
-> 状态:方案文档。桌面壳当前 `bundle.active = false`(只出裸 exe,开发用),
-> 自动更新在启用打包(README「打包路线」)后接入。`tauri.conf.json` 归另一分支
-> 管理,本文只给出需要合入的配置片段,不直接改动该文件。
+> 状态:**壳侧已接入**(2026-08,`bundle.active` 已开启)。`tauri-plugin-updater`
+> 已挂进 `desktop/src/main.rs`:仅当环境变量 `INSAR_UPDATE_ENDPOINT` 配置了清单
+> 地址时插件才挂载并在启动后后台检查(未配置 = 完全不启用,代码中绝不硬编码
+> endpoint);当前只做「检查 + 日志提示」,`download_and_install` 编排与签名密钥
+> 生成(§2)留待发布期执行 —— 没有公钥前不可能有可验签的更新包。
 
 ## 0. 总览:两条通道,一个版本号
 
@@ -19,51 +21,48 @@
 - 引擎 conda 环境(ISCE2 / MintPy,2GB+)不进安装包,不参与本机制
   (`docs/OPTIMIZATION.md` §4)。
 
-## 1. 依赖与代码接入(desktop/)
+## 1. 依赖与代码接入(desktop/,已落地)
 
-`desktop/Cargo.toml` 新增依赖:
+`desktop/Cargo.toml` 已有依赖:
 
 ```toml
 [dependencies]
 tauri-plugin-updater = "2"
 ```
 
-`desktop/src/main.rs` 注册插件并在启动后台线程里检查更新。本壳没有 JS 前端
-(WebView 加载的是 `http://127.0.0.1:{port}/` 外部页面,不走 Tauri IPC),
-所以用 **Rust 侧 API** 编排,无需在 capabilities 里开放 `updater:default`,
-也避免了给远程 URL 开 IPC 权限的安全面:
+`desktop/src/main.rs` 的实际接线(与代码同步维护):
 
-```rust
-use tauri_plugin_updater::UpdaterExt;
+- `update_endpoint()`:只从环境变量 `INSAR_UPDATE_ENDPOINT` 读清单地址,
+  未配置或空白 → `None`;
+- `main()`:`INSAR_UPDATE_ENDPOINT` 有值时才
+  `.plugin(tauri_plugin_updater::Builder::new().build())`(在单实例守卫之后),
+  未配置则插件完全不挂载 —— 不发任何网络请求;
+- `spawn_update_check()`:setup 阶段丢进 `tauri::async_runtime`,
+  `updater_builder().endpoints(vec![url])`(endpoint 运行时注入,不依赖
+  `tauri.conf.json` 的 `plugins.updater` 配置段)→ `check().await`,
+  发现新版只打日志提示,失败也只打日志,绝不影响主流程。
 
-let app = tauri::Builder::default()
-    .plugin(tauri_plugin_updater::Builder::new().build())
-    .setup(move |app| {
-        let handle = app.handle().clone();
-        tauri::async_runtime::spawn(async move {
-            // 静默检查;找到更新后先提示用户(对话框/托盘),确认再装
-            if let Ok(updater) = handle.updater() {
-                if let Ok(Some(update)) = updater.check().await {
-                    // update.version / update.body(notes)
-                    // update.download_and_install(|_, _| {}, || {}).await
-                    // 安装完成后由用户选择重启(NSIS passive 模式会自动接管)
-                }
-            }
-        });
-        Ok(())
-    })
-    // ... 现有 boot/sidecar 逻辑不变
-```
+本壳没有 JS 前端(WebView 加载的是 `http://127.0.0.1:{port}/` 外部页面,
+不走 Tauri IPC),所以用 **Rust 侧 API** 编排,无需在 capabilities 里开放
+`updater:default`,也避免了给远程 URL 开 IPC 权限的安全面。
+
+后续发布期要补的两步(本轮不做):
+
+1. 生成密钥(§2),公钥进 `tauri.conf.json` 的 `plugins.updater.pubkey`
+   (或运行时 `updater_builder().pubkey(...)` 注入);
+2. 把「发现新版 → 提示用户 → `update.download_and_install(...)` → 重启」的
+   UI 编排接上(NSIS `passive` 模式会自动接管安装)。
 
 > dev 模式(`cargo run`)下 updater 不工作也不需要工作;只在打包分发版里生效。
 
 ## 2. 密钥生成与保管(tauri signer)
 
-本工程是纯 cargo 工程(无 node),用 cargo 版 tauri-cli:
+本工程是纯 cargo 工程(无 node),用预编译 tauri-cli(勿 `cargo install`,
+本地全量编译要 20-60 分钟;获取脚本详见 `desktop/bundle/BUNDLING.md` §2):
 
 ```powershell
-cargo install tauri-cli --version "^2"        # 一次性
-cargo tauri signer generate -w $env:USERPROFILE\.tauri\insar-agent.key
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\fetch_tauri_cli.ps1   # 一次性,落 .tools\tauri-cli\
+.tools\tauri-cli\cargo-tauri.exe signer generate -w $env:USERPROFILE\.tauri\insar-agent.key
 ```
 
 输出两样东西:

@@ -3,9 +3,11 @@
 // 架构决策见 docs/OPTIMIZATION.md §4;sidecar 进程/日志细节在 src/sidecar.rs。
 //
 // 启动流程:读 INSAR_PORT → 端口裁决(已有健康后端 → 复用;被占且非本后端 →
-//           从 8873 起找空闲端口)→ 探测 Python(INSAR_PYTHON > 仓库根 .venv >
-//           PATH)→ spawn `python -m insar_agent.api.app`(CREATE_NO_WINDOW,
-//           stdout/stderr 走 5MB 滚动日志)→ 轮询 /api/health(30 秒超时)
+//           从 8873 起找空闲端口)→ 探测后端(① exe 同目录 backend\
+//           insar-backend.exe 冻结产物,免 Python;② INSAR_PYTHON;③ 仓库根
+//           .venv;④ PATH python)→ spawn(冻结 exe 直接运行 / Python 跑
+//           `python -m insar_agent.api.app`;CREATE_NO_WINDOW,stdout/stderr
+//           走 5MB 滚动日志)→ 轮询 /api/health(30 秒超时)
 //           → 打开 WebView 窗口指向后端。
 // 运行期:sidecar 意外退出 → 指数退避自动重启(最多 3 次,窗口标题实时提示),
 //         仍未恢复 → 弹诊断页。
@@ -168,7 +170,13 @@ fn read_log_tail(path: &Path, max_bytes: usize) -> String {
     }
 }
 
-fn diagnostics_html(error: &str, python_desc: &str, port: u16, workdir: &Path) -> String {
+fn diagnostics_html(
+    error: &str,
+    backend_desc: &str,
+    launch_desc: &str,
+    port: u16,
+    workdir: &Path,
+) -> String {
     let log_path = sidecar::log_path(port);
     format!(
         r#"<!doctype html>
@@ -180,11 +188,11 @@ code,pre{{background:#161f2b;border-radius:6px}} code{{padding:.1rem .4rem}}
 pre{{padding:1rem;overflow:auto;max-height:40vh;white-space:pre-wrap}}
 td{{padding:.25rem .75rem .25rem 0;vertical-align:top}} .k{{color:#8b98a5;white-space:nowrap}}
 </style></head><body>
-<h1>InSAR-Agent 后端(Python sidecar)启动失败</h1>
+<h1>InSAR-Agent 后端(sidecar)启动失败</h1>
 <p><strong>{error}</strong></p>
 <table>
-<tr><td class="k">Python</td><td><code>{python}</code></td></tr>
-<tr><td class="k">启动命令</td><td><code>python -m insar_agent.api.app</code></td></tr>
+<tr><td class="k">后端</td><td><code>{backend}</code>(探测顺序:exe 旁 <code>backend\insar-backend.exe</code> → <code>INSAR_PYTHON</code> → 仓库根 <code>.venv</code> → PATH)</td></tr>
+<tr><td class="k">启动命令</td><td><code>{launch}</code></td></tr>
 <tr><td class="k">端口</td><td><code>{port}</code>(环境变量 <code>INSAR_PORT</code> 可改)</td></tr>
 <tr><td class="k">工作目录</td><td><code>{workdir}</code></td></tr>
 <tr><td class="k">sidecar 日志</td><td><code>{log}</code>(滚动历史在同名 <code>.1</code> 文件)</td></tr>
@@ -193,16 +201,19 @@ td{{padding:.25rem .75rem .25rem 0;vertical-align:top}} .k{{color:#8b98a5;white-
 <pre>{log_tail}</pre>
 <h2>排查建议</h2>
 <ul>
-<li>项目约定使用仓库内虚拟环境:若 <code>.venv</code> 不存在,在仓库根执行
-<code>py -m venv .venv</code>,再 <code>.venv\Scripts\python.exe -m pip install -r requirements.txt</code></li>
-<li>确认该解释器已装本项目依赖,并能手动运行 <code>python -m insar_agent.api.app</code></li>
-<li>用 <code>INSAR_PYTHON</code> 显式指定解释器;用 <code>INSAR_PORT</code> 指定端口
-(被占用时壳会自动从 8873 起改用空闲端口)</li>
+<li>打包分发形态:确认主程序旁 <code>backend\</code> 目录完整(<code>insar-backend.exe</code>
+与 <code>_internal\</code> 同在),该形态无需安装 Python;若目录残缺请重新安装</li>
+<li>源码开发形态:项目约定使用仓库内虚拟环境 —— 若 <code>.venv</code> 不存在,在仓库根执行
+<code>py -m venv .venv</code>,再 <code>.venv\Scripts\python.exe -m pip install -r requirements.txt</code>,
+并确认能手动运行 <code>python -m insar_agent.api.app</code></li>
+<li>用 <code>INSAR_PYTHON</code> 显式指定解释器(仅源码形态生效;冻结后端优先级更高);
+用 <code>INSAR_PORT</code> 指定端口(被占用时壳会自动从 8873 起改用空闲端口)</li>
 <li>修复后关闭本窗口重开应用即可 —— 后端支持断点续跑,不会丢进度</li>
 </ul>
 </body></html>"#,
         error = escape_html(error),
-        python = escape_html(python_desc),
+        backend = escape_html(backend_desc),
+        launch = escape_html(launch_desc),
         port = port,
         workdir = escape_html(&workdir.display().to_string()),
         log = escape_html(&log_path.display().to_string()),
@@ -280,9 +291,16 @@ fn set_main_title(handle: &AppHandle, title: String) {
     });
 }
 
-fn show_diagnostics(handle: &AppHandle, error: &str, python_desc: &str, port: u16, workdir: &Path) {
+fn show_diagnostics(
+    handle: &AppHandle,
+    error: &str,
+    backend_desc: &str,
+    launch_desc: &str,
+    port: u16,
+    workdir: &Path,
+) {
     eprintln!("[desktop] 启动失败:{error}");
-    match serve_html(diagnostics_html(error, python_desc, port, workdir)) {
+    match serve_html(diagnostics_html(error, backend_desc, launch_desc, port, workdir)) {
         Ok(diag_port) => open_window(
             handle,
             "diagnostics",
@@ -319,44 +337,51 @@ fn boot(handle: AppHandle, desired_port: u16) {
             p
         }
         Err(e) => {
-            show_diagnostics(&handle, &e, "(未探测)", desired_port, &workdir);
+            show_diagnostics(&handle, &e, "(未探测)", "(未探测)", desired_port, &workdir);
             return;
         }
     };
 
-    let (python, python_src) = match sidecar::find_python(&workdir) {
+    let backend = match sidecar::find_backend(&workdir) {
         Ok(v) => v,
         Err(e) => {
-            show_diagnostics(&handle, &e, "(未找到)", port, &workdir);
+            show_diagnostics(&handle, &e, "(未找到)", "(未探测)", port, &workdir);
             return;
         }
     };
-    let python_desc = format!("{}(来源:{python_src})", python.display());
-    println!("[desktop] python = {python_desc}");
+    let backend_desc = backend.describe();
+    let launch_desc = backend.launch_desc();
+    println!("[desktop] 后端 = {backend_desc}");
     println!(
         "[desktop] spawn sidecar:cwd={},log={}",
         workdir.display(),
         sidecar::log_path(port).display()
     );
 
-    if let Err(e) = sidecar::spawn(&python, port, &workdir) {
-        show_diagnostics(&handle, &e, &python_desc, port, &workdir);
+    if let Err(e) = sidecar::spawn(&backend, port, &workdir) {
+        show_diagnostics(&handle, &e, &backend_desc, &launch_desc, port, &workdir);
         return;
     }
     match wait_health(port, Duration::from_secs(HEALTH_TIMEOUT_SECS)) {
         Ok(()) => {
             println!("[desktop] /api/health = 200,打开主窗口");
             open_main_window(&handle, port);
-            std::thread::spawn(move || supervise(handle, python, python_desc, port, workdir));
+            std::thread::spawn(move || supervise(handle, backend, backend_desc, port, workdir));
         }
-        Err(e) => show_diagnostics(&handle, &e, &python_desc, port, &workdir),
+        Err(e) => show_diagnostics(&handle, &e, &backend_desc, &launch_desc, port, &workdir),
     }
 }
 
 /// 运行期看护:sidecar 意外退出 → 指数退避(1s/2s/4s)自动重启,最多
 /// MAX_RESTARTS 次;稳定运行满 STABLE_UPTIME_SECS 后预算清零。重启期间
 /// 窗口标题实时提示;重启预算耗尽仍未恢复 → 弹诊断页并停止看护。
-fn supervise(handle: AppHandle, python: PathBuf, python_desc: String, port: u16, workdir: PathBuf) {
+fn supervise(
+    handle: AppHandle,
+    backend: sidecar::Backend,
+    backend_desc: String,
+    port: u16,
+    workdir: PathBuf,
+) {
     let mut attempts: u32 = 0;
     let mut spawned_at = Instant::now();
     loop {
@@ -388,7 +413,7 @@ fn supervise(handle: AppHandle, python: PathBuf, python_desc: String, port: u16,
                 format!("InSAR-Agent — 后端重启中({attempts}/{MAX_RESTARTS})…"),
             );
             spawned_at = Instant::now();
-            if let Err(e) = sidecar::spawn(&python, port, &workdir) {
+            if let Err(e) = sidecar::spawn(&backend, port, &workdir) {
                 eprintln!("[desktop] 第 {attempts} 次重启 spawn 失败:{e}");
                 continue;
             }
@@ -416,12 +441,60 @@ fn supervise(handle: AppHandle, python: PathBuf, python_desc: String, port: u16,
         show_diagnostics(
             &handle,
             &format!("sidecar 意外退出({exit_desc}),自动重启 {MAX_RESTARTS} 次均未恢复"),
-            &python_desc,
+            &backend_desc,
+            &backend.launch_desc(),
             port,
             &workdir,
         );
         return;
     }
+}
+
+// ---------------- 自动更新(可选,环境变量开关) ----------------
+
+/// 更新清单地址:只从环境变量 INSAR_UPDATE_ENDPOINT 读取,绝不硬编码。
+/// 未配置(或空白)→ 返回 None → updater 插件不挂载、不做任何更新检查。
+/// 清单格式 / 密钥生成 / 发布流程见 desktop/updater/UPDATER.md。
+fn update_endpoint() -> Option<String> {
+    std::env::var("INSAR_UPDATE_ENDPOINT")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// 后台静默检查更新:只「检查 + 日志提示」,不自动下载安装(签名密钥
+/// 尚未生成,download_and_install 的编排留给发布期的 UI 决策)。
+/// 任何失败只记日志,绝不影响主流程。
+fn spawn_update_check(handle: AppHandle, endpoint: String) {
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_updater::UpdaterExt;
+        let url = match tauri::Url::parse(&endpoint) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("[desktop] INSAR_UPDATE_ENDPOINT 不是合法 URL({endpoint}):{e}");
+                return;
+            }
+        };
+        let updater = match handle
+            .updater_builder()
+            .endpoints(vec![url])
+            .and_then(|b| b.build())
+        {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("[desktop] updater 初始化失败(不影响使用):{e}");
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => println!(
+                "[desktop] 更新检查:发现新版本 {}(当前 {}),安装编排待发布期接入",
+                update.version, update.current_version
+            ),
+            Ok(None) => println!("[desktop] 更新检查:已是最新版本"),
+            Err(e) => eprintln!("[desktop] 更新检查失败(不影响使用):{e}"),
+        }
+    });
 }
 
 /// 无 GUI 自检(`--smoke` 或 INSAR_DESKTOP_SMOKE=1):
@@ -445,7 +518,7 @@ fn run_smoke(desired_port: u16) -> i32 {
         }
     };
     let workdir = sidecar::repo_root();
-    let (python, src) = match sidecar::find_python(&workdir) {
+    let backend = match sidecar::find_backend(&workdir) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("[smoke] FAIL:{e}");
@@ -453,11 +526,11 @@ fn run_smoke(desired_port: u16) -> i32 {
         }
     };
     println!(
-        "[smoke] python={}({src}) cwd={}",
-        python.display(),
+        "[smoke] 后端={} cwd={}",
+        backend.describe(),
         workdir.display()
     );
-    if let Err(e) = sidecar::spawn(&python, port, &workdir) {
+    if let Err(e) = sidecar::spawn(&backend, port, &workdir) {
         eprintln!("[smoke] FAIL:{e}");
         return 1;
     }
@@ -486,8 +559,15 @@ fn main() {
         std::process::exit(run_smoke(port));
     }
 
+    // 更新检查开关:读 INSAR_UPDATE_ENDPOINT(未配置 = 完全不启用,绝不硬编码)
+    let update_endpoint = update_endpoint();
+
     // 单实例包装必须在其他插件之前(见 INTEGRATION-tray.md)
-    let app = singleton::ensure_single_instance(tauri::Builder::default())
+    let mut builder = singleton::ensure_single_instance(tauri::Builder::default());
+    if update_endpoint.is_some() {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    let app = builder
         .invoke_handler(commands::handlers())
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -495,6 +575,10 @@ fn main() {
             window_state::attach_when_ready(app.handle()); // 窗口几何持久化(主窗异步创建)
             if let Err(e) = shortcuts::setup_shortcuts(app.handle()) {
                 eprintln!("[desktop] 全局快捷键注册失败(不影响主流程):{e}");
+            }
+            if let Some(endpoint) = update_endpoint.clone() {
+                println!("[desktop] 更新检查已启用:INSAR_UPDATE_ENDPOINT={endpoint}");
+                spawn_update_check(app.handle().clone(), endpoint);
             }
             // 健康检查最长 30 秒,放后台线程,避免卡死事件循环
             std::thread::spawn(move || boot(handle, port));
