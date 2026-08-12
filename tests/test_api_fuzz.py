@@ -407,26 +407,22 @@ def test_content_type_and_charset(fuzz_ctx):
         assert seen >= 2, f"回合流事件过少:{seen}"
 
 
-# ---------------- 已知缺陷(xfail 回归钉死;详见本波报告 P0/P1/P2) ----------------
-# 以下向量只能经「原始字节体」构造(合法的 HTTP 客户端 / 浏览器 无法用 json= 送出),
-# 但服务端 json.loads 会解出对应值并在处理/响应渲染时抛未捕获异常 → 5xx(非 JSON 体)。
-# 不修 api/*.py(归网格视图分支独占);strict=False:修复后自动转 XPASS,不阻断门禁。
+# ---------------- 原始字节体向量(fuzz 波次发现,已修,正式断言) ----------------
+# 以下向量只能经「原始字节体」构造(合法的 HTTP 客户端 / 浏览器 无法用 json= 送出)。
+# 修复:check_session_id 加 UTF-8 可编码性守卫;RequestValidationError 处理器
+# 以非有限浮点 → None 的安全编码渲染 422(api/app.py)。
 
-@pytest.mark.xfail(reason="P1:check_session_id 未拒绝孤代理,原始体经 sqlite/mkdir "
-                          "抛 UnicodeEncodeError → 500(见报告 §发现1)", strict=False)
-def test_known_bug_surrogate_session_id_should_be_4xx(fuzz_ctx):
+def test_surrogate_session_id_rejected_as_4xx(fuzz_ctx):
     client, _ = fuzz_ctx
     resp = client.post("/api/sessions", content=rb'{"id": "s\ud834x"}',
                        headers=JSON_HEADERS)
-    assert resp.status_code < 500
+    assert 400 <= resp.status_code < 500
     resp.json()
 
 
-@pytest.mark.xfail(reason="P1:体内非有限数(NaN/Infinity)触发 422 回显,Starlette "
-                          "JSONResponse(allow_nan=False) 渲染再抛 → 500(见报告 §发现2)",
-                   strict=False)
-def test_known_bug_nonfinite_number_in_body_should_be_4xx(fuzz_ctx):
+def test_nonfinite_number_in_body_rejected_as_4xx(fuzz_ctx):
     client, _ = fuzz_ctx
     resp = client.post("/api/turn", content=rb'{"session": "demo", "text": NaN}',
                        headers=JSON_HEADERS)
-    assert resp.status_code < 500
+    assert 400 <= resp.status_code < 500
+    resp.json()

@@ -14,11 +14,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse,
                                StreamingResponse)
 from fastapi.staticfiles import StaticFiles
@@ -89,6 +92,12 @@ def check_session_id(session_id: str) -> str:
         raise HTTPException(400, "session 不合法:首尾不允许空格,结尾不允许 '.'")
     if sid.split(".")[0].upper() in _WINDOWS_RESERVED_NAMES:
         raise HTTPException(400, f"session 不合法:{sid} 是 Windows 保留设备名")
+    try:
+        # 孤代理(U+D800-DFFF)可经原始字节体注入:无法编码 UTF-8,落到 SQLite
+        # 绑定或 mkdir 时抛 UnicodeEncodeError 逃逸为 500(fuzz 波次发现 1,P1)
+        sid.encode("utf-8")
+    except UnicodeEncodeError:
+        raise HTTPException(400, "session 不合法:含无法编码为 UTF-8 的码位(孤代理)")
     return sid
 
 
@@ -140,6 +149,17 @@ def create_app(home: Path | None = None) -> FastAPI:
     drivers: dict[str, Driver] = {}
 
     app = FastAPI(title="insar-agent", version="0.1.0")
+
+    @app.exception_handler(RequestValidationError)
+    def _on_validation_error(request: Request, exc: RequestValidationError):
+        # 422 错误体会回显出错输入;体内 NaN/Infinity(json.loads 的非标准扩展,
+        # requests 类客户端可发出)经默认渲染 allow_nan=False 二次抛错逃逸为
+        # 500(fuzz 波次发现 2,P2)。非有限浮点替换为 None 后安全渲染。
+        safe = jsonable_encoder(
+            {"detail": exc.errors()},
+            custom_encoder={float: lambda v: v if math.isfinite(v) else None})
+        return JSONResponse(status_code=422, content=safe)
+
     app.include_router(create_setup_router(home))  # 环境向导(/api/setup/*,settings.json 与 DB 同目录)
     app.include_router(version_router)             # 版本信息与更新检查(/api/version*)
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
