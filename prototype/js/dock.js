@@ -128,12 +128,18 @@ const STATE_TXT = {
 
 function pipelineView() {
   const list = h('div', { class: 'pipe', role: 'list' });
+  // 行级视图模型:本地状态先渲染;服务端字段(staleReason / skipped 三态)异步并入
+  const vms = new Map();
   for (const d of STEP_DEFS) {
     const st = st_(d.id);
+    vms.set(d.id, {
+      id: d.id, name: d.name, state: st.state, stale: !!st.stale,
+      staleReason: null, fingerprint: st.fingerprint,
+    });
     const cls = STATE_CLS[st.state] || 'p';
     const mth = d.methods.find((m) => m.id === st.method);
-    const row = h('button', {
-      class: `pstep ${cls}`, type: 'button', role: 'listitem',
+    const btn = h('button', {
+      class: `pstep ${cls}`, type: 'button',
       dataset: { step: d.id },
       'aria-current': String(S.selectedStep === d.id),
       onclick: () => { S.selectedStep = d.id; refresh(); },
@@ -143,18 +149,96 @@ function pipelineView() {
       h('span', { class: 'nm' }, d.name,
         mth ? h('span', { class: 'mth' }, ` ${mth.label}`) : null),
       h('span', { class: 'fl' }, STATE_TXT[st.state] || ''));
-    if (S.selectedStep === d.id) row.style.boxShadow = 'inset 0 0 0 1px var(--accent)';
-    list.appendChild(row);
+    if (S.selectedStep === d.id) btn.style.boxShadow = 'inset 0 0 0 1px var(--accent)';
+    // 行 = 步骤按钮 + 行内动作区(失效徽标/重跑入口,不能嵌进 button)
+    list.appendChild(h('div', { class: 'prow', role: 'listitem' },
+      btn, h('span', { class: 'pacts' })));
   }
 
-  return h('div', null,
+  const sumHost = h('div', { class: 'plr-sumhost' });
+  const wrap = h('div', { class: 'plr-wrap' }, list);
+  const root = h('div', null,
     h('h3', { class: 'sect' }, '处理流水线 · 11 步'),
-    list,
+    sumHost,
+    wrap,
     stepDetail(S.selectedStep),
     h('h3', { class: 'sect' }, '失效传播'),
     h('p', { class: 'blurb' },
       '改动任一步的方法或参数 → 重算 sha256 指纹 → 沿依赖图级联标记全部下游为 STALE。' +
       '断点续跑只重跑受影响段，指纹未变的步骤直接跳过。'));
+
+  // 异步增强(envView 的动态 import 先例,不新增模块级依赖):
+  // 依赖轨道 rail / 摘要条 / 失效原因 popover / 重跑影响确认。
+  (async () => {
+    const [R, state] = await Promise.all([
+      import('./pipelinerail.js'),
+      cachedFetch(`state:${S.sessionId}`, () => API.fetchState()),
+    ]);
+    if (!root.isConnected) return;
+    R.closeOverlay();   // 面板已重渲染,旧浮层的锚点失效
+    for (const s of state?.steps || []) {
+      const vm = vms.get(s.id);
+      if (!vm) continue;
+      if (s.state) vm.state = s.state;   // 保留 skipped(本地镜像映射为 done,第三态在此恢复)
+      vm.stale = !!s.stale;
+      vm.staleReason = s.staleReason || null;
+      if (s.fingerprint) vm.fingerprint = s.fingerprint;
+    }
+    const steps = [...vms.values()];
+
+    // 摘要条计数点击 → 滚动到首个对应步骤行并高亮一闪
+    const jumpTo = (id) => {
+      const el = list.querySelector(`[data-step="${id}"]`);
+      if (!el) return;
+      el.scrollIntoView({ block: 'center' });
+      el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+    };
+    // 重跑入口:先调 /api/impact 预览影响集;服务端视角无变化或不可达 → 本地估算
+    const openRerun = async (id) => {
+      const st = st_(id);
+      const imp = await API.fetchImpact(id, { method: st.method, params: st.params });
+      if (!root.isConnected) return;
+      const useSrv = !!(imp && imp.affected?.length);
+      R.openImpactCard({
+        step: vms.get(id), local: !useSrv,
+        impact: useSrv ? imp : R.localImpact(id, steps),
+        onConfirm: (ids) => (hooks.runSteps ? hooks.runSteps(ids) : toast('运行入口未接线(演示)')),
+      });
+    };
+
+    for (const vm of steps) {
+      const btn = list.querySelector(`[data-step="${vm.id}"]`);
+      const acts = btn?.parentNode?.querySelector('.pacts');
+      if (!btn || !acts) continue;
+      if (vm.state === 'skipped') {   // 缓存/云端跳过的行内语言(第三态,非 done)
+        btn.classList.add('k');
+        const fl = btn.querySelector('.fl');
+        if (fl) fl.textContent = '↷ 缓存/云端';
+      }
+      if (vm.stale || vm.state === 'stale') {
+        acts.appendChild(h('button', {
+          class: 'pbadge', type: 'button', 'aria-label': `第 ${vm.id} 步失效原因`,
+          onclick: (e) => R.openStalePopover({
+            anchor: e.currentTarget, step: vm, steps,
+            onGoto: (sid) => gotoStep(sid),
+            onImpact: (sid) => openRerun(sid),
+          }),
+        }, '失效'));
+      }
+      // skipped 不给重跑入口:云端已完成步骤强行入列会触发 contract_broken(实测教训)
+      if (vm.stale || ['done', 'stale', 'failed', 'interrupted', 'orphaned'].includes(vm.state)) {
+        acts.appendChild(h('button', {
+          class: 'prerun', type: 'button', 'aria-label': `从第 ${vm.id} 步重跑(先看影响集)`,
+          onclick: () => openRerun(vm.id),
+        }, '重跑'));
+      }
+    }
+    sumHost.replaceChildren(R.summaryBar(steps, { onJump: jumpTo }));
+    // rail 最后挂载:行内动作已就位,节点 y 按行实际 offsetTop 实测(调研 §4.7 的坑)
+    R.mountRail(wrap, steps, { onPick: (id, chain) => flashSteps([id, ...chain]) });
+  })();
+
+  return root;
 }
 
 function stepDetail(stepId) {
