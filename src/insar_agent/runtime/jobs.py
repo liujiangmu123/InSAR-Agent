@@ -87,10 +87,20 @@ class LocalJobBackend:
     def launch(self, job_dir: Path) -> None:
         kwargs: dict = {}
         if sys.platform == "win32":
-            DETACHED_PROCESS = 0x00000008
+            # 关键教训:CREATE_NO_WINDOW 与 DETACHED_PROCESS 同用时会被系统忽略
+            # (MSDN CreateProcess 文档)。venv 的 python.exe 是启动器,会再拉起
+            # 真解释器;DETACHED 让启动器"无控制台",真解释器无可继承的控制台
+            # 就会自己分配一个可见新窗 —— 之前"测试不断弹窗"的根因。
+            # 改为只用 CREATE_NO_WINDOW:wrapper 拿到一个隐藏控制台,整条子孙链
+            # (启动器→真解释器→作业子进程)继承同一个隐藏控制台,全程不可见;
+            # 子进程存活性与控制台标志无关,父进程退出后 wrapper 照常存活(reattach 不受影响)。
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             CREATE_NO_WINDOW = 0x08000000
-            kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+            kwargs["creationflags"] = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # SW_HIDE 双保险
+            si.wShowWindow = 0  # SW_HIDE
+            kwargs["startupinfo"] = si
         else:
             kwargs["start_new_session"] = True
         # wrapper 自身的启动错误必须可诊断(显式失败原则,§1.4)——

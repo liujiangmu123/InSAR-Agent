@@ -54,10 +54,16 @@ def main(job_dir_arg: str) -> int:
 
     kwargs: dict = {}
     if sys.platform == "win32":
-        # CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW
-        # 低优先级:重型计算不干扰宿主日常使用(工作区重算管控);
-        # NO_WINDOW:wrapper 本身无控制台,子进程若不加此标志会各自弹出黑窗
-        kwargs["creationflags"] = 0x00000200 | 0x00004000 | 0x08000000
+        # CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL_PRIORITY_CLASS
+        # 低优先级:重型计算不干扰宿主日常使用(工作区重算管控)。
+        # 不加 CREATE_NO_WINDOW:wrapper 自己已持有隐藏控制台(由 jobs.launch 创建),
+        # 子进程直接继承同一个隐藏控制台即不可见;若再开新隐藏控制台,
+        # venv 启动器等多级链路反而可能踩到标志互斥的坑。SW_HIDE 双保险。
+        kwargs["creationflags"] = 0x00000200 | 0x00004000
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        kwargs["startupinfo"] = si
     else:
         kwargs["start_new_session"] = True
 
