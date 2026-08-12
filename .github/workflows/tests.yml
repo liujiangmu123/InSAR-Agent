@@ -1,0 +1,66 @@
+# 测试流水线骨架:ubuntu + windows 矩阵跑全量 pytest。
+# 【骨架声明】本文件按仓库纪律只做过 YAML 语法校验、未在本机实际运行;
+# 首次推上 GitHub 后按真实日志微调(尤其 Windows 侧,见下方注意点)。
+
+name: tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+    # 子进程测试(五阶段执行器/双超时/取消/reattach)在 Windows 上
+    # 进程起停慢,上限给足;若挂死由 job 级超时兜底回收 runner
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          # pyproject.toml 的 requires-python >= 3.11;本地开发在 3.14,
+          # CI 先钉下限版本,后续要扩就把矩阵加一维 python-version
+          python-version: "3.11"
+
+      # 依赖装进项目内虚拟环境(与本地开发约定一致);tests/conftest.py
+      # 会把 src/ 插入 sys.path,因此无需 pip install -e . 也能跑
+      - name: 建立虚拟环境并安装依赖(Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
+
+      - name: 建立虚拟环境并安装依赖(Windows)
+        if: runner.os == 'Windows'
+        run: |
+          py -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+      - name: 运行 pytest(Linux)
+        if: runner.os == 'Linux'
+        run: .venv/bin/python -m pytest tests/ -v
+
+      # Windows 上子进程测试的注意点(tests/ 会 spawn 真实子进程,
+      # 用 sys.executable 跑模拟步骤脚本,验证作业目录契约与五阶段执行器):
+      # 1) 作业以 DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP 启动
+      #    (runtime/jobs.py),Windows 无 fork、进程起停显著比 Linux 慢,
+      #    单测阈值与本 job 的 timeout-minutes 都要放宽;
+      # 2) pytest 的 basetemp 已在 pyproject.toml 钉到项目内 .pytest_tmp
+      #    (规避 %TEMP% 的 ACL 坑);Windows 句柄释放有延迟,清理临时目录
+      #    偶发 PermissionError 属已知噪声,runner 一次性用完即弃;
+      # 3) 若出现挂死,优先怀疑孤儿子进程未退出——排查对应作业目录的
+      #    job.pid / job.log,而不是盲目重试。
+      - name: 运行 pytest(Windows)
+        if: runner.os == 'Windows'
+        run: .venv\Scripts\python.exe -m pytest tests/ -v

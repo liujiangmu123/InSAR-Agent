@@ -1,0 +1,66 @@
+# 桌面版 Windows 构建流水线:cargo build --release 出裸 exe 并存档。
+# 只做构建验证与产物上传,不打 NSIS/MSI 安装包、不签名——那是发布分支的
+# 手动流程,见 docs/DESKTOP.md §3 与 docs/RELEASE-CHECKLIST.md。
+
+name: desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链(stable-msvc)
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
+          rustup default stable-x86_64-pc-windows-msvc
+          rustc --version
+          cargo --version
+
+      - name: 缓存 cargo registry 与构建产物
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: 建立 Python 虚拟环境并安装依赖
+        # 装依赖是为了验证 requirements.txt 在干净 Windows 上可安装,
+        # 并给后续接入打包/冒烟步骤留好现场。这里刻意【不跑 pytest】:
+        # 本仓测试会 spawn 真实子进程(作业目录契约、detached 进程组),
+        # 需要独立的超时与清理策略,由 .github/workflows/tests.yml 专门负责。
+        run: |
+          py -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+      - name: 构建桌面壳(release)
+        working-directory: desktop
+        # desktop/.cargo/config.toml 把 crates-io 换成了 rsproxy(国内镜像,
+        # 服务本地开发)。GitHub 托管 runner 直连官方源更快更稳,这里用
+        # --config(优先级最高)把源换回官方 sparse index,不改仓库内文件;
+        # 若该覆盖失效,退路是删掉两个 --config 直接走 rsproxy(公网可达)。
+        run: >-
+          cargo build --release
+          --config "source.crates-io.replace-with='official'"
+          --config "source.official.registry='sparse+https://index.crates.io/'"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: insar-agent-desktop-windows-exe
+          path: desktop/target/release/*.exe
+          if-no-files-found: error
+          retention-days: 30
