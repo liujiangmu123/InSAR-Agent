@@ -4,12 +4,73 @@
      user / agent / thinking / tool_call / plan / ask / result / note
    长任务不再抢占全屏，日志流在 tool_call 条目内滚动。
    ============================================================ */
-import { h, txt, icon, frag, mmss, replay, toast } from './dom.js';
+import { h, txt, icon, frag, mmss, hhmm, replay, toast } from './dom.js';
 import { S, LADDER, def_, st_, STEP_DEFS } from './state.js';
 import { figureNode, figureSvg, IMAGES, POINTS, DATES, timeSeriesSvg } from './figures.js';
 
 let host = null;
 let autoScroll = true;
+
+/* ============================================================
+   失败上下文与动作接线（P2-003）
+   工具卡以 exit≠0 收尾时记下上下文（步骤号、名称、日志尾部）；
+   紧随其后的 note(tone=bad) / gate_stop / failureCard 消费它，
+   渲染出带日志预览与处置入口的一等公民失败卡。
+   ============================================================ */
+
+// app.js 在 boot 时注入：openTerminal → 切到 dock 终端面板；resume → 复用断点续跑入口。
+// 未注入时按钮降级：日志按钮回落为展开原地工具卡；续跑按钮不渲染。
+let failureHooks = {};
+export function setFailureHooks(hooks) {
+  failureHooks = { ...failureHooks, ...hooks };
+}
+
+let lastFailure = null;               // { stepNo, stepName, exit, logTail, el, at }
+const FAILURE_FRESH_MS = 120000;      // 超过时限视为与后续条目无关，不再挂靠
+
+/** 消费一次失败上下文（取走即清空，过期返回 null）。 */
+function takeFailure() {
+  const f = lastFailure;
+  lastFailure = null;
+  return f && Date.now() - f.at <= FAILURE_FRESH_MS ? f : null;
+}
+
+/** 日志尾部预览区：终端配色，最多 8 行（截尾）。 */
+function logPreview(f) {
+  if (!f?.logTail?.length) return null;
+  return h('div', { class: 'logs' },
+    h('div', { class: 'cap' },
+      `最后 ${f.logTail.length} 行日志`,
+      h('span', { class: 'mono' }, `exit ${f.exit}`)),
+    h('div', { class: 'out' },
+      ...f.logTail.map((l) => h('div', { class: `ln ${l.tone || ''}` }, l.line))));
+}
+
+/** 「查看完整日志」：优先走注入的 dock 终端面板入口，否则展开原地工具卡。 */
+function viewLogBtn(f) {
+  return h('button', {
+    class: 'btn btn-gho btn-sm', type: 'button',
+    'aria-label': '查看完整日志（切换到终端面板）',
+    onclick: () => {
+      if (failureHooks.openTerminal) { failureHooks.openTerminal(f?.stepNo); return; }
+      if (f?.el?.isConnected) {
+        f.el.open = true;
+        const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+        f.el.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+      }
+    },
+  }, '查看完整日志');
+}
+
+/** 「从断点继续」：复用 app.js 的续跑入口；未接线（静态演示页）时不渲染。 */
+function resumeBtn() {
+  if (!failureHooks.resume) return null;
+  return h('button', {
+    class: 'btn btn-wrn btn-sm', type: 'button',
+    'aria-label': '从断点继续（已完成步骤直接跳过）',
+    onclick: () => failureHooks.resume(),
+  }, '从断点继续');
+}
 
 export function mount(el) {
   host = el;
@@ -54,12 +115,14 @@ export function refollow() {
 export function clear() {
   host.replaceChildren(h('div', { class: 'stream-inner' }));
   autoScroll = true;
+  lastFailure = null;
 }
 
 /* ============================================================
    空态
    ============================================================ */
 export function renderHero(onPick, onDemoEvents = null) {
+  lastFailure = null;   // 回到空态即换会话/重置，旧失败上下文不再有效
   // 第一条是唯一有真实数据的场景，标 ready；另两条明确标注数据待获取，
   // 避免演示时让人误以为所有场景都能跑（诚实性要求，见 AGENT-DESIGN §0.5.5）
   const prompts = [
@@ -158,11 +221,17 @@ export function toolCall({ cmd, verb = '', label = '', open = false, determinate
     clock.textContent = mmss((Date.now() - t0) / 1000);
   }, 500);
 
+  // 日志尾部环形缓冲：失败卡的预览数据源（截尾 8 行，P2-003）
+  const logTail = [];
+  const LOG_TAIL_MAX = 8;
+
   const api = {
     el,
     /** 追加一行输出。tone: dim|cmd|ok|warn|err */
     log(line, tone = '') {
       out.insertBefore(h('div', { class: `ln ${tone}` }, line), caret);
+      logTail.push({ line, tone });
+      if (logTail.length > LOG_TAIL_MAX) logTail.shift();
       out.scrollTop = out.scrollHeight;   // 终端框内部跟随，不影响外层流
       follow();
       return api;
@@ -173,13 +242,22 @@ export function toolCall({ cmd, verb = '', label = '', open = false, determinate
       return api;
     },
     peek(text) { peek.textContent = text; return api; },
-    /** 收尾：exit=0 → ok；其它 → bad。 */
+    /** 收尾：exit=0 → ok；其它 → bad，并留存失败上下文供后续失败卡挂靠。 */
     finish({ exit = 0, summary = '', artifacts = [], onArtifact = null } = {}) {
       clearInterval(tick);
       caret.remove();
       clock.textContent = mmss((Date.now() - t0) / 1000);
       el.classList.remove('is-run');
       el.classList.add(exit === 0 ? 'is-ok' : 'is-bad');
+      if (exit !== 0) {
+        // verb 形如 [08/11] → 步骤号 8；探测类工具（probe/inspect）不匹配 → null
+        const m = /^\[(\d+)\/\d+\]$/.exec(verb.trim());
+        lastFailure = {
+          stepNo: m ? parseInt(m[1], 10) : null,
+          stepName: label || '', exit,
+          logTail: [...logTail], el, at: Date.now(),
+        };
+      }
       codeTag.classList.remove('hidden');
       codeTag.textContent = exit === 0 ? 'exit 0' : `exit ${exit}`;
       prog.classList.remove('indet');
@@ -298,9 +376,13 @@ export function askApproval({ title, rows, danger = false, actions, family = nul
     }
   };
 
+  // P2-002：决定后的完成态是紧凑单行 —— 小图标 + 结论 + 时间，
+  // 不放大占位，不遮挡后续执行流卡片（图标尺寸由 .ask .verdict svg 约束）
   const resolve = (label, tone) => {
     el.dataset.resolved = '1';
-    verdict.replaceChildren(icon(tone === 'ok' ? 'check' : 'x'), txt(label));
+    verdict.replaceChildren(
+      icon(tone === 'ok' ? 'check' : 'x'), txt(label),
+      h('span', { class: 'time mono' }, hhmm()));
     verdict.style.color = tone === 'ok' ? 'var(--ok-text)' : 'var(--text-3)';
   };
 
@@ -397,12 +479,46 @@ export function candidateSet({ stepId, onPick }) {
    通知横幅
    ============================================================ */
 export function note(tone, content, actions = []) {
+  // P2-003：失败通知（tone=bad）紧随工具卡失败出现时，升级为结构化失败卡，
+  // 不再只是一条与普通提示同级的横幅。无失败上下文（如运行时错误）保持横幅。
+  if (tone === 'bad') {
+    const f = takeFailure();
+    if (f) return stepFailureCard(f, content, actions);
+  }
   const el = h('div', { class: `note turn rise is-${tone}`, role: tone === 'bad' ? 'alert' : 'status' },
-    icon(tone === 'ok' ? 'check' : tone === 'info' ? 'bolt' : 'warn'),
+    icon(tone === 'ok' ? 'check' : tone === 'info' ? 'bolt' : tone === 'bad' ? 'x' : 'warn'),
     h('span', { class: 'grow' }, content),
     ...actions.map((a) => h('button', {
       class: `btn ${a.kind || 'btn-wrn'} btn-sm`, type: 'button', onclick: a.run,
     }, a.label)));
+  return push(el);
+}
+
+/* ============================================================
+   一等公民失败卡（P2-003）：步骤号与名称 + 失败类别徽标 +
+   日志尾部预览 + 处置入口（查看完整日志 / 从断点继续）。
+   数据源：toolCall 失败留存的上下文 + note(bad) 的原文
+   （服务端文本已含 failure_class 描述与处置建议）。
+   ============================================================ */
+function stepFailureCard(f, content, actions = []) {
+  // 从 note 原文提取失败类别（driver 格式「第 N 步失败 · service_down(…)」）
+  const text = typeof content === 'string' ? content : content?.textContent || '';
+  const failClass = /·\s*([a-z_][a-z0-9_]*)/i.exec(text)?.[1] || null;
+  const title = f.stepNo
+    ? `第 ${f.stepNo} 步失败${f.stepName ? ` · ${f.stepName}` : ''}`
+    : '执行失败';
+
+  const el = h('div', { class: 'stepfail turn rise', role: 'alert', 'aria-label': title },
+    h('div', { class: 'hd' }, icon('x'), title,
+      failClass ? h('span', { class: 'cls mono' }, failClass) : null),
+    h('div', { class: 'bd' }, content),
+    logPreview(f),
+    h('div', { class: 'acts' },
+      viewLogBtn(f),
+      resumeBtn(),
+      ...actions.map((a) => h('button', {
+        class: `btn ${a.kind || 'btn-gho'} btn-sm`, type: 'button', onclick: a.run,
+      }, a.label))));
   return push(el);
 }
 
@@ -415,6 +531,7 @@ export function note(tone, content, actions = []) {
     mock 剧情才有 from/to/failClass 等结构化字段。 */
 export function degradeEntry({ from, to, evidenceFrom = 'validated', evidenceTo = 'checked',
                                detail, reason, text = '', evidenceBefore, evidenceAfter }) {
+  takeFailure();   // 降级横幅已交代该失败，上下文不再挂到后续条目
   if (text) {
     return push(h('div', { class: 'degrade turn rise', role: 'status', 'aria-label': '降级通知' },
       icon('warn'),
@@ -434,13 +551,25 @@ export function degradeEntry({ from, to, evidenceFrom = 'validated', evidenceTo 
       reason ? `（${reason}）` : '', '。已写入 provenance 与证据边界表。')));
 }
 
-/** gate_stop（红）：质量门拦停 —— 不是错误，附建议动作按钮。
-    服务端事件是文本形态 {text, suggestions:[string]}（建议是文字说明，
-    非可执行动作）；mock 剧情才有 metric/value/threshold 与按钮回调。 */
+/** gate_stop（红）：质量门拦停 —— 不是错误，建议列表是一等公民的可点操作。
+    服务端事件是文本形态 {text, suggestions:[string]}：建议按钮点击后回填输入框，
+    一键交给 Agent 处理；mock 剧情才有 metric/value/threshold 与按钮回调。
+    紧随工具卡失败出现时（P2-003）附日志尾部预览与完整日志入口。 */
 export function gateStopEntry({ stepId, metric, value, threshold, msg, suggestions = [], text = '' }) {
+  const f = takeFailure();
+  // 建议按钮：首选项加重（btn-wrn），其余幽灵按钮；字符串建议回填输入框
+  const suggestBtn = (sg, i) => {
+    const label = typeof sg === 'string' ? sg : sg?.label;
+    if (!label) return null;
+    return h('button', {
+      class: `btn ${i === 0 ? 'btn-wrn' : 'btn-gho'} btn-sm`, type: 'button',
+      'aria-label': `建议动作：${label}`,
+      onclick: sg.run || (() => fillComposer(label)),
+    }, label);
+  };
   if (text) {
     const def = stepId ? def_(stepId) : null;
-    const tips = suggestions.map((sg) => (typeof sg === 'string' ? sg : sg?.label)).filter(Boolean);
+    const btns = suggestions.map(suggestBtn).filter(Boolean);
     return push(h('div', { class: 'gate turn rise', role: 'status', 'aria-label': '质量门拦停' },
       h('div', { class: 'hd' }, icon('stop'),
         stepId ? `质量门拦停 · 第 ${stepId} 步${def ? ` ${def.name}` : ''}` : '质量门拦停',
@@ -448,7 +577,10 @@ export function gateStopEntry({ stepId, metric, value, threshold, msg, suggestio
       h('div', { class: 'bd' },
         h('p', null, text),
         h('p', { class: 'em' }, '这不是错误，是质量门拦截 —— 上游质量不足以支撑下游继续。'),
-        tips.length ? h('p', { class: 'em' }, '建议：', tips.join('；')) : null)));
+        btns.length ? h('p', { class: 'em' }, '建议（点击填入输入框，交给 Agent 处理）：') : null),
+      logPreview(f),
+      btns.length || f ? h('div', { class: 'acts' },
+        ...btns, f ? viewLogBtn(f) : null) : null));
   }
   const def = def_(stepId);
   return push(h('div', { class: 'gate turn rise', role: 'status', 'aria-label': '质量门拦停' },
@@ -459,11 +591,19 @@ export function gateStopEntry({ stepId, metric, value, threshold, msg, suggestio
       h('p', null, h('b', { class: 'mono' }, `${metric} ${value} < ${threshold}`), '，已停链。'),
       h('p', { class: 'em' }, '这不是错误，是质量门拦截 —— 上游质量不足以支撑下游继续。',
         msg ? ` ${msg}` : '')),
-    suggestions.length ? h('div', { class: 'acts' },
-      ...suggestions.map((sg) => h('button', {
-        class: 'btn btn-gho btn-sm', type: 'button', onclick: sg.run,
-        'aria-label': `建议动作：${sg.label}`,
-      }, sg.label))) : null));
+    logPreview(f),
+    suggestions.length || f ? h('div', { class: 'acts' },
+      ...suggestions.map(suggestBtn).filter(Boolean),
+      f ? viewLogBtn(f) : null) : null));
+}
+
+/** 建议文本回填输入框：同步触发 input 事件，让发送按钮态与高度自适应生效。 */
+function fillComposer(textValue) {
+  const input = document.getElementById('prompt');
+  if (!input) return;
+  input.value = textValue;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.focus();
 }
 
 /** reattach（蓝横幅）：服务重启后接回运行中任务。
@@ -496,11 +636,15 @@ export function interventionEntry({ text, mode = 'queue' }) {
    失败卡（§7.8）：失败分类徽标 + 处置按钮组（附代价说明）
    ============================================================ */
 export function failureCard({ stepId, failClass, title, detail, options = [] }) {
+  // 同一失败的处置卡：消费失败上下文，把日志尾部预览一并渲染（P2-003）
+  const f = takeFailure();
+  const preview = f && (!stepId || !f.stepNo || f.stepNo === stepId) ? logPreview(f) : null;
   const verdict = h('div', { class: 'verdict' });
   const acts = h('div', { class: 'acts' });
   const el = h('div', { class: 'fail turn rise', role: 'alert', 'aria-label': title },
     h('div', { class: 'hd' }, icon('x'), title, h('span', { class: 'cls mono' }, failClass)),
     detail ? h('div', { class: 'bd' }, detail) : null,
+    preview,
     h('div', { class: 'cap' }, '可选处置：'),
     acts, verdict);
 
