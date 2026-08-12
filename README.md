@@ -8,6 +8,7 @@
 |---|---|
 | `docs/DESIGN.md` | 产品定稿:novelty、11 步 × 方法矩阵、桥梁地图、竞品分析 |
 | `docs/AGENT-DESIGN.md` | 架构定稿:七条硬约束 → 分层/五阶段执行器/指纹/SQLite/UI |
+| `docs/VALIDATION-isce2-wsl.md` | 最新实测:ISCE2 WSL 全链(ALOS Baja 同震对,2026-08-12 跑通) |
 | `reference/AGENT_PRODUCTS_LEARNING.md` | codex/gemini-cli/OpenHands/cline + snakemake/dvc 定向调研(absorb-E~P) |
 | `reference/COMPARISON_LEARNING.md` | redun/aiida/agentic-swmm 等对照学习(absorb-A~D) |
 | `reference/PI_FRAMEWORK_ANALYSIS.md` | pi 框架对标与吸收决议(absorb-E1~E8) |
@@ -38,12 +39,12 @@
 ```powershell
 # 推荐:虚拟环境 + 可编辑安装
 python -m venv .venv
-.venv\Scripts\pip install -e ".[dev]"
-.venv\Scripts\python -m pytest tests/ -v     # 109 项测试
+.venv\Scripts\pip install -e ".[dev]"        # 跑测试足够;真实 qa/出图另加 raster:".[dev,raster]"
+.venv\Scripts\python -m pytest tests/ -q     # 215 项测试(2026-08-12 全绿)
 .venv\Scripts\python -m insar_agent.api.app  # http://127.0.0.1:8873(UI + API)
 
 # 备选:不安装也能跑(tests/conftest.py 把 src 插入 sys.path;需全局 pytest)
-python -m pytest tests/ -v
+python -m pytest tests/ -q
 ```
 
 浏览器打开 http://127.0.0.1:8873 ,输入「Ridgecrest 地震同震形变」→ 确认执行。
@@ -84,7 +85,7 @@ src/insar_agent/
 ├── report/      run.sh 等价命令 / 方法章节模板
 └── api/         FastAPI:NDJSON 回合流 + SSE + 干预/预览/fork/导出
 prototype/       Web UI(零依赖);backend.sse.js 接真后端,mock 保留为离线演示
-tests/           109 项:哈希坑/幂等重放/reattach/孤儿/取消/超时/级联标脏/契约纪律/拔除守护/API
+tests/           215 项:哈希坑/幂等重放/reattach/孤儿/取消/超时/级联标脏/契约纪律/拔除守护/API
 ```
 
 ## Phase 状态
@@ -92,7 +93,7 @@ tests/           109 项:哈希坑/幂等重放/reattach/孤儿/取消/超时/�
 | Phase | 内容 | 状态 |
 |---|---|---|
 | 0 地基 | schema / normalize / fingerprint / filehash / store / capabilities | **完成**,验收达标:哈希三坑有测试;`should_skip` 幂等重放(同一步执行两次,第二次全跳过);`record_version` 门控(absorb-M);fp 三段编码 `policy:algo:digest`;干预队列 `deliver_as` 双投递 + 未消费可编辑/撤回 |
-| 1 执行层 | 五阶段执行器 / 双超时 / reattach / run_ok | 完成(11 对 HyP3 真实数据验收,见下节) |
+| 1 执行层 | 五阶段执行器 / 双超时 / reattach / run_ok | 完成(11 对 HyP3 真实数据验收,见下节;ISCE2 全链见 `docs/VALIDATION-isce2-wsl.md`) |
 | 2 失效传播 | 级联标脏 + 原因分类 + 干预队列 | 完成 |
 | 3 审计 | contract.yaml / 证据阶梯 / provenance / run.sh | 完成 |
 | 4 Brain | intent/select/triage/narrate(可拔除有守护测试) | 完成 |
@@ -125,8 +126,10 @@ Phase 1 验收「11 对 HyP3 真实数据跑通 MintPy 链」**已通过**:
 
 ## 当前边界(诚实声明)
 
-- **ISCE2 全链(2-6 步)与 SNAPHU 未验证**:无 Windows 包,需 WSL(装法见对话记录)
-  或云端 Linux;当前 HyP3 路线把这些步骤交给 ASF 云端。
+- **ISCE2 全链(2-6 步)与 SNAPHU 已在 WSL 实测跑通**(ALOS Baja 同震对,2026-08-12,
+  见 `docs/VALIDATION-isce2-wsl.md`),但验证是经 §4.7 作业目录**文件契约 + `wsl_wrapper.sh`
+  手工**完成;把 WSL 后端(`runtime/wsl.py` 的 `WslJobBackend`)端到端接进 `Driver`/API
+  的自动编排尚未完成(当前默认走 `LocalJobBackend`)。日常 HyP3 路线仍把 2-6 步交给 ASF 云端。
 - **ISCE2→PyStamps 桥(主 novelty)是接口边界**:三个难点(par 字段自洽/TCN 基线/
   big-endian)不允许在无真值环境下猜测实现,见 `engines/bridges/isce2_to_pystamps.py`。
 - 阈值台账 5 项 PENDING 待标定 → 证据阶梯封顶 audited(§4.13 的自我约束);
