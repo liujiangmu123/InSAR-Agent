@@ -158,7 +158,11 @@ function createWizard(initialStatus) {
   function isReady() {
     if (!status) return false;
     if (status.ready === true) return true;
-    return checks().length > 0 && checks().every((c) => c.ok);
+    // 只按必需项判定(与后端 ready 同口径):可选项(required===false,如
+    // snaphu/pyaps/数据源)未配置不锁死「开始使用」—— 2026-08-12 用户实测反馈
+    const cs = checks();
+    const req = cs.filter((c) => c.required !== false);
+    return req.length > 0 && req.every((c) => c.ok);
   }
 
   /* ---- 提示条 ---- */
@@ -199,7 +203,8 @@ function createWizard(initialStatus) {
     icon('refresh'), refs.redetectLbl);
   const pane1 = h('section', { class: 'setup-pane', 'aria-label': '第 1 步 环境检测' },
     h('p', { class: 'setup-blurb' },
-      '桌面版需要以下条件全部就绪才能开始处理。未通过的项目按提示修复后，点「重新检测」。'),
+      '必需项全部就绪即可开始使用；可选项（本地解缠、数据源等）按所选路线配置。',
+      '未通过的必需项按提示修复后，点「重新检测」。'),
     refs.checks,
     refs.factsWrap,
     refs.note1,
@@ -301,18 +306,24 @@ function createWizard(initialStatus) {
         '后端未返回检测项，请点击下方「重新检测」。'));
       return;
     }
-    refs.checks.replaceChildren(...cs.map((c) => h('li', {
-      class: `setup-check ${c.ok ? 'is-ok' : 'is-bad'}`,
-    },
-      h('span', { class: 'st', 'aria-hidden': 'true' }, icon(c.ok ? 'ok' : 'fail')),
-      h('div', { class: 'bd' },
-        h('div', { class: 'msg' },
-          c.message || c.key || '（未命名检测项）',
-          c.key ? h('code', { class: 'key' }, c.key) : null),
-        !c.ok && c.fix_hint
-          ? h('div', { class: 'fix' }, h('b', null, '修复提示'), c.fix_hint)
-          : null),
-      h('span', { class: 'pill' }, c.ok ? '通过' : '未通过'))));
+    refs.checks.replaceChildren(...cs.map((c) => {
+      const optional = c.required === false;
+      // 可选项未配置是中性态(不算"未通过"):必需项才用红色失败视觉
+      const tone = c.ok ? 'is-ok' : optional ? 'is-opt' : 'is-bad';
+      const pill = c.ok ? '通过' : optional ? '可选 · 未配置' : '未通过';
+      return h('li', { class: `setup-check ${tone}` },
+        h('span', { class: 'st', 'aria-hidden': 'true' },
+          icon(c.ok ? 'ok' : optional ? 'info' : 'fail')),
+        h('div', { class: 'bd' },
+          h('div', { class: 'msg' },
+            c.message || c.key || '（未命名检测项）',
+            c.key ? h('code', { class: 'key' }, c.key) : null),
+          !c.ok && c.fix_hint
+            ? h('div', { class: 'fix' }, h('b', null, optional ? '配置提示' : '修复提示'),
+                c.fix_hint)
+            : null),
+        h('span', { class: 'pill' }, pill));
+    }));
   }
 
   /* ---- 渲染：环境概览（engines 形状未定，宽松处理） ---- */
@@ -515,11 +526,14 @@ function createWizard(initialStatus) {
     refs.next.disabled = step >= 3;
 
     const cs = checks();
-    const fails = cs.filter((c) => !c.ok).length;
+    const req = cs.filter((c) => c.required !== false);
+    const reqFails = req.filter((c) => !c.ok).length;
+    const optMiss = cs.filter((c) => c.required === false && !c.ok).length;
     refs.sum.className = `setup-sum${ready ? ' is-ok' : ''}`;
     refs.sum.textContent = ready
-      ? '全部检测通过，可以开始使用'
-      : cs.length ? `${fails} / ${cs.length} 项未通过` : '等待检测结果';
+      ? (optMiss ? `必需项全部通过（另有 ${optMiss} 项可选未配置），可以开始使用`
+                 : '全部检测通过，可以开始使用')
+      : cs.length ? `${reqFails} / ${req.length} 项必需检测未通过` : '等待检测结果';
     refs.start.disabled = !ready;
     if (ready) refs.start.removeAttribute('title');
     else refs.start.setAttribute('title', '所有检测项通过后可用');

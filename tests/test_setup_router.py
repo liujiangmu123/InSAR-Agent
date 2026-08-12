@@ -35,7 +35,13 @@ def home(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def client(home):
+def client(home, monkeypatch):
+    # WSL 探测密封为不可达:本文件的断言都以"纯宿主"为前提(真实 WSL 会让
+    # snaphu 合法变绿破坏可选缺失断言,且每次真探测约 40s);WSL 兜底语义由
+    # test_setup_optional_semantics.py 专测
+    monkeypatch.setattr(
+        "insar_agent.runtime.wsl_probe.probe_wsl_engines",
+        lambda **kw: {"ok": False, "error": "sealed", "engines": {}})
     app = FastAPI()
     app.include_router(setup_router)
     with TestClient(app) as c:

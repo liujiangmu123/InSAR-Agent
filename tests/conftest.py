@@ -12,6 +12,17 @@ from insar_agent.core.db import Database  # noqa: E402
 from insar_agent.core.store import Store  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _clear_wsl_probe_cache():
+    """WSL 探测缓存是模块级状态(runtime/wsl_probe._PROBE_CACHE):
+    每个测试从干净缓存出发,防止 reachable/unreachable 打桩互相泄漏。"""
+    from insar_agent.runtime import wsl_probe
+
+    wsl_probe._PROBE_CACHE.clear()
+    yield
+    wsl_probe._PROBE_CACHE.clear()
+
+
 @pytest.fixture()
 def db():
     d = Database(":memory:")

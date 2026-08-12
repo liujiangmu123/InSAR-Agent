@@ -104,6 +104,9 @@
 .setup-check.is-ok .st { background: var(--ok); color: var(--text-inv); }
 .setup-check.is-bad { border-color: var(--bad-border); background: var(--bad-weak); }
 .setup-check.is-bad .st { background: var(--bad); color: var(--text-inv); }
+/* 可选项未配置:中性态(灰),不是失败(2026-08-12 用户反馈:可选项标红误导) */
+.setup-check.is-opt { border-color: var(--border-strong); }
+.setup-check.is-opt .st { background: var(--bg-mute); color: var(--text-3); }
 .setup-check .bd { flex: 1; min-width: 0; }
 .setup-check .msg { font-weight: 600; font-size: var(--fs); }
 .setup-check .msg .key {
@@ -122,6 +125,7 @@
 }
 .setup-check.is-ok .pill { color: var(--ok-text); background: var(--ok-weak); border: 1px solid var(--ok-border); }
 .setup-check.is-bad .pill { color: var(--bad-text); background: var(--surface); border: 1px solid var(--bad-border); }
+.setup-check.is-opt .pill { color: var(--text-3); background: var(--bg-mute); border: 1px solid var(--border-strong); }
 .setup-check-empty {
   padding: 16px; text-align: center;
   color: var(--text-3); font-size: var(--fs-sm);

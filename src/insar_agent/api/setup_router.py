@@ -142,10 +142,33 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
         probe_root = next((p for p in (home_dir, *home_dir.parents) if p.exists()),
                           Path("."))
         probe = probe_environment(probe_root, with_versions=False, check_wsl=False)
+        # WSL 引擎并入(与 /api/env 同款):isce2/snaphu 作业已按引擎自动路由到
+        # WSL 执行(runtime/backend_select),宿主 PATH 探测不到 ≠ 系统跑不了——
+        # 2026-08-12 用户实测反馈:snaphu/pyaps 明明在 WSL 里有,向导却报"未探测到"
+        try:
+            from insar_agent.runtime.wsl_probe import (merge_wsl_probe,
+                                                       probe_wsl_engines_cached)
+
+            # 实测探测约 20s:带 TTL 缓存,首次付全价,之后秒回(与 /api/env 共享)
+            wsl_result = probe_wsl_engines_cached(timeout=30.0)
+            if wsl_result.get("ok"):
+                merge_wsl_probe(probe, wsl_result)
+        except Exception:
+            pass  # 纯查询,失败静默:没装 WSL 的机器行为不变
 
         prefix = os.environ.get("INSAR_ENGINE_PREFIX") or None
         prefix_exists = bool(prefix) and Path(prefix).is_dir()
-        engines = {k: probe.engines.get(k) for k in ("mintpy", "gdal", "snaphu", "pyaps")}
+
+        def _engine(name: str) -> str | None:
+            # merge_wsl_probe 把 WSL 引擎写成带 " (wsl)" 后缀的独立键,不覆盖裸键;
+            # 向导按"本地优先、WSL 兜底"解析 —— isce2/snaphu 作业本就路由到 WSL 执行
+            local = probe.engines.get(name)
+            if local:
+                return local
+            wsl = probe.engines.get(f"{name} (wsl)")
+            return f"{wsl} (wsl)" if wsl else None
+
+        engines = {k: _engine(k) for k in ("mintpy", "gdal", "snaphu", "pyaps")}
 
         source = os.environ.get("INSAR_HYP3_SOURCE") or None
         source_exists = bool(source) and Path(source).is_dir()
@@ -173,6 +196,10 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
                 "调用 POST /api/setup/engine-env 获取创建命令;环境建好后把 conda 环境路径"
                 "(如 E:\\miniforge3\\envs\\insar)通过 POST /api/setup/save 保存为 engine_prefix")
 
+        # 数据源是可选项(2026-08-12 用户实测反馈:必选会把"开始使用"永远锁死):
+        # 只有 HyP3 云端路线需要它;模拟演示、ALOS 条带链(数据在 WSL 工作区)、
+        # ASF 在线检索路线都不依赖本地 HyP3 目录。配置了但路径/内容有问题时仍
+        # 如实报错(用户显然想用它,坏配置不该沉默)。
         if source and source_exists and pair_count > 0:
             data_check = _check(
                 "data_source", True, f"数据源:{source}(解缠相位栅格 {pair_count} 个)")
@@ -181,15 +208,17 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
                 "data_source", False,
                 f"数据源目录里没有 */*unw_phase_clipped.tif:{source}",
                 "确认选择的是 HyP3 产品根目录:每个干涉对一个子目录,内含 *unw_phase_clipped.tif"
-                ";根目录下带 hyp3/ 子目录的布局也支持")
+                ";根目录下带 hyp3/ 子目录的布局也支持", required=False)
         elif source:
             data_check = _check(
                 "data_source", False, f"数据源目录不存在:{source}",
-                "确认路径后通过 POST /api/setup/save 重新保存 hyp3_source")
+                "确认路径后通过 POST /api/setup/save 重新保存 hyp3_source", required=False)
         else:
             data_check = _check(
-                "data_source", False, "未配置数据源(INSAR_HYP3_SOURCE)",
-                "在向导中选择 HyP3 产品目录,通过 POST /api/setup/save 保存为 hyp3_source")
+                "data_source", False,
+                "(可选)未配置数据源:HyP3 云端路线需要;模拟演示/条带链不需要",
+                "如走 HyP3 路线:在向导第 3 步选择 HyP3 产品目录保存为 hyp3_source",
+                required=False)
 
         checks = [
             _check("agent_python", sys.version_info >= (3, 11),

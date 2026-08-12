@@ -93,6 +93,32 @@ def _run(runner: Runner, argv: list[str], timeout: float) -> tuple[int | None, s
     return cp.returncode, _decode(cp.stdout).strip(), _decode(cp.stderr).strip(), None
 
 
+#: probe_wsl_engines_cached 的模块级缓存:{distro: (时间戳, 结果)}。
+#: WSL 引擎探测实测约 20s(VM 启动 + conda python 冷启动 + 逐引擎查版本),
+#: 向导/环境面板每次都付一遍不可接受(2026-08-12 实测:15s 超时下向导必失败)
+_PROBE_CACHE: dict[str, tuple[float, dict]] = {}
+_PROBE_CACHE_TTL = 300.0
+
+
+def probe_wsl_engines_cached(distro: str = "insar", runner: Runner | None = None,
+                             timeout: float = 60.0, ttl: float = _PROBE_CACHE_TTL,
+                             force: bool = False) -> dict:
+    """带 TTL 缓存的 probe_wsl_engines:首次付全价(约 20s),窗口内秒回。
+
+    只缓存 ok=True 的结果:失败(未装 WSL/超时)不缓存,下次调用重试——
+    否则一次冷启动超时会让 5 分钟内的所有探测都错报"不可达"。
+    """
+    import time as _time
+
+    hit = _PROBE_CACHE.get(distro)
+    if not force and hit and _time.monotonic() - hit[0] < ttl:
+        return hit[1]
+    result = probe_wsl_engines(distro=distro, runner=runner, timeout=timeout)
+    if result.get("ok"):
+        _PROBE_CACHE[distro] = (_time.monotonic(), result)
+    return result
+
+
 def probe_wsl_engines(distro: str = "insar", runner: Runner | None = None,
                       timeout: float = 60.0) -> dict:
     """探测 WSL 内引擎(topsApp.py/smallbaselineApp.py/snaphu 的存在性与版本、conda env 路径)。

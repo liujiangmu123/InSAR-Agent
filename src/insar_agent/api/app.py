@@ -318,9 +318,10 @@ def create_app(home: Path | None = None) -> FastAPI:
         # WSL 引擎环境探测:发行版可达时并入(面板显示带 (wsl) 后缀的引擎)。
         # 纯查询、失败静默 —— 没装 WSL 的机器该端点行为不变。
         try:
-            from insar_agent.runtime.wsl_probe import merge_wsl_probe, probe_wsl_engines
+            from insar_agent.runtime.wsl_probe import (merge_wsl_probe,
+                                                       probe_wsl_engines_cached)
 
-            wsl_result = probe_wsl_engines(timeout=30.0)
+            wsl_result = probe_wsl_engines_cached(timeout=30.0)  # TTL 缓存,与向导共享
             if wsl_result.get("ok"):
                 merge_wsl_probe(probe, wsl_result)
         except Exception:
