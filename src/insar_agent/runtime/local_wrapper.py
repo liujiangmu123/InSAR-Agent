@@ -62,13 +62,14 @@ def main(job_dir_arg: str) -> int:
     env = dict(os.environ)
     env.update(extra_env)
 
-    (job / "job.pid").write_text(str(os.getpid()), encoding="utf-8")
-    (job / "job.token").write_text(uuid.uuid4().hex, encoding="utf-8")
+    # 心跳先于 pid 落盘:判活逻辑(jobs.py state)见 pid 无 hb 即判 orphaned,
+    # 若先写 pid,「pid 已写、hb 未建」的间隙(杀软实时扫描下 token 写入可达
+    # 秒级)会被宿主的连续两次轮询同时命中而误判孤儿 —— 全量测试下
+    # test_run_script_export 等用例的偶发失败即源于此。hb 先行则该窗口不存在:
+    # hb 在而 pid 未写时 state=unknown,由 startup_grace 兜底,语义不变。
     # 心跳走独立守护线程,且先于子进程 spawn:hb 表达的是 wrapper 存活,
-    # 不是子进程存活,也不能被 Popen 阻塞(杀软实时扫描下新进程创建可达秒级)
-    # 拖停 —— 否则判活逻辑(jobs.py state:无 hb / hb 超龄 → orphaned)
-    # 会把慢启动误判为孤儿。wrapper 被 kill -9 时线程随进程死,hb 停更,
-    # 孤儿判定语义不变
+    # 不是子进程存活,也不能被 Popen 阻塞。wrapper 被 kill -9 时线程随进程死,
+    # hb 停更,孤儿判定语义不变
     hb = job / "job.hb"
     hb.touch()
 
@@ -81,6 +82,9 @@ def main(job_dir_arg: str) -> int:
             time.sleep(POLL)
 
     threading.Thread(target=_beat, daemon=True).start()
+
+    (job / "job.pid").write_text(str(os.getpid()), encoding="utf-8")
+    (job / "job.token").write_text(uuid.uuid4().hex, encoding="utf-8")
 
     kwargs: dict = {}
     if sys.platform == "win32":

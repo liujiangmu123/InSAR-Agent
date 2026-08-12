@@ -28,7 +28,8 @@ def export_run_script(store: Store, run_id: str, workspace: Path) -> str:
         lines.append(f"# ── 第 {step.step_id} 步 · {step.name} · method={step.method} "
                      f"· state={step.state} ──")
         if step.state == "skipped":
-            lines.append("# (人工跳过)")
+            # skipped 兼有两种来源(云端 HyP3 已完成 / 人工跳过),store 未区分,如实并述
+            lines.append("# (跳过:云端(HyP3)已完成或人工跳过 —— 本地无等价命令)")
             lines.append("")
             continue
         cmds = store.commands_of(run_id, step.step_id)

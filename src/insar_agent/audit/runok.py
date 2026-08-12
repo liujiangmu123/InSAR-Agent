@@ -58,20 +58,58 @@ def _read_metric(metrics: dict[str, float], artifacts: dict[str, Path], name: st
     return None
 
 
-def _nan_fraction(path: Path) -> float | None:
-    """栅格 NaN 占比。仅支持 .npy(numpy 可选依赖);其余格式返回 None(无法判定)。"""
-    if path.suffix != ".npy":
-        return None
-    try:
-        import numpy as np
+_H5_SUFFIXES = (".h5", ".he5", ".hdf5")
 
-        arr = np.load(path, mmap_mode="r")
-        total = arr.size
-        if total == 0:
-            return 1.0
-        return float(np.isnan(arr).sum()) / float(total)
-    except Exception:
-        return None
+
+def _nan_fraction(path: Path) -> float | None:
+    """栅格 NaN 占比。支持 .npy(numpy)与 HDF5(h5py,均为可选依赖);
+    其余格式或依赖缺失返回 None(无法判定,由调用方降级为 warn)。
+
+    HDF5 多数据集探测:遍历全部浮点数据集,取元素数最大者为主数据
+    (同大小按名字典序取首,保证判定确定性)—— MintPy timeseries.h5
+    (timeseries/date/bperp)与 velocity.h5(velocity/velocityStd)均由此命中主栅格。
+    """
+    if path.suffix == ".npy":
+        try:
+            import numpy as np
+
+            arr = np.load(path, mmap_mode="r")
+            total = arr.size
+            if total == 0:
+                return 1.0
+            return float(np.isnan(arr).sum()) / float(total)
+        except Exception:
+            return None
+    if path.suffix in _H5_SUFFIXES:
+        try:
+            import h5py
+            import numpy as np
+
+            with h5py.File(path, "r") as f:
+                candidates: list[tuple[int, str]] = []
+
+                def _collect(name: str, obj) -> None:
+                    if isinstance(obj, h5py.Dataset) and obj.dtype.kind == "f":
+                        candidates.append((int(obj.size), name))
+
+                f.visititems(_collect)
+                if not candidates:
+                    return None  # 无浮点数据集:无法判定
+                candidates.sort(key=lambda t: (-t[0], t[1]))
+                total, main = candidates[0]
+                if total == 0:
+                    return 1.0
+                ds = f[main]
+                if ds.ndim == 0:
+                    return float(np.isnan(ds[()]))
+                # 按首轴分片统计,避免整块载入大栅格
+                nan_count = 0
+                for i in range(ds.shape[0]):
+                    nan_count += int(np.isnan(ds[i]).sum())
+                return float(nan_count) / float(total)
+        except Exception:
+            return None
+    return None
 
 
 def _eval_check(
