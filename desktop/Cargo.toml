@@ -17,6 +17,11 @@ tauri-plugin-single-instance = "2"
 
 # —— 桌面 JS 桥(src/commands.rs)——
 # rfd:原生目录选择对话框(异步 API 在独立线程弹窗,不占事件循环)
-# serde_json:app_info 返回结构化 JSON
 rfd = "0.15"
+
+# —— 窗口体验(window_state.rs / shortcuts.rs)——
+# serde/serde_json:窗口状态 window.json 序列化;app_info 的结构化 JSON
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 全局快捷键(Ctrl+Shift+I 显示/隐藏主窗)
+tauri-plugin-global-shortcut = "2"
