@@ -34,7 +34,12 @@ from insar_agent.registry.capabilities import PIPELINE, REGISTRY
 from insar_agent.report.methods import methods_markdown
 from insar_agent.report.script import export_run_script
 
-PROTOTYPE_DIR = Path(__file__).resolve().parents[3] / "prototype"
+# INSAR_UI_DIR:静态 UI 目录的唯一环境变量覆盖点(桌面冻结版由
+# desktop/backend-bundle/entry.py 在 import 本模块前设置;源码运行不受影响,
+# 缺省仍按 __file__ 回溯源码树 src/../prototype)。
+_UI_DIR_OVERRIDE = os.environ.get("INSAR_UI_DIR", "")
+PROTOTYPE_DIR = (Path(_UI_DIR_OVERRIDE) if _UI_DIR_OVERRIDE
+                 else Path(__file__).resolve().parents[3] / "prototype")
 
 
 class TurnBody(BaseModel):
