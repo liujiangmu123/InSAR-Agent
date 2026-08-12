@@ -172,6 +172,16 @@ def create_app(home: Path | None = None) -> FastAPI:
     def env(session: str):
         d = driver_of(session)
         probe = d.probe(refresh=True)
+        # WSL 引擎环境探测:发行版可达时并入(面板显示带 (wsl) 后缀的引擎)。
+        # 纯查询、失败静默 —— 没装 WSL 的机器该端点行为不变。
+        try:
+            from insar_agent.runtime.wsl_probe import merge_wsl_probe, probe_wsl_engines
+
+            wsl_result = probe_wsl_engines(timeout=30.0)
+            if wsl_result.get("ok"):
+                merge_wsl_probe(probe, wsl_result)
+        except Exception:
+            pass
         return {
             "probe": probe.to_dict(),
             "thresholds": [{"key": k, "value": t.value, "source": t.source,
