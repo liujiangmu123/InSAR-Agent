@@ -103,6 +103,7 @@ function follow() {
 
 function push(node) {
   inner().appendChild(node);
+  probeRun = null;   // 顶层出现任何新条目都打断探查段的「连续」性（见下方聚合组）
   follow();
   return node;
 }
@@ -116,6 +117,7 @@ export function clear() {
   host.replaceChildren(h('div', { class: 'stream-inner' }));
   autoScroll = true;
   lastFailure = null;
+  probeRun = null;
 }
 
 /* ============================================================
@@ -123,6 +125,7 @@ export function clear() {
    ============================================================ */
 export function renderHero(onPick, onDemoEvents = null) {
   lastFailure = null;   // 回到空态即换会话/重置，旧失败上下文不再有效
+  probeRun = null;
   // 第一条是唯一有真实数据的场景，标 ready；另两条明确标注数据待获取，
   // 避免演示时让人误以为所有场景都能跑（诚实性要求，见 AGENT-DESIGN §0.5.5）
   const prompts = [
@@ -190,6 +193,92 @@ export function typingIndicator() {
 }
 
 /* ============================================================
+   只读工具聚合折叠（Cursor 工作组模式，RESEARCH §9 机制 #1）
+   连续的探查类工具卡（verb 非 [NN/MM] 执行步骤，对应 id 不以
+   s+数字开头的 probe/inspect 类事件）聚合为一张折叠组卡
+   「探查 · N 个工具」；执行步骤卡（s1–s11）永远顶层内联。
+   规则：
+     · 单张孤立探查卡保持普通卡，出现第二张连续探查卡才建组并迁入首张；
+     · 顶层出现任何其他条目（消息/note/执行卡…）即打断连续段（push()）；
+     · 组内任一 exit≠0 → 整组默认展开并标红（成功折叠/失败展开的组级版本）。
+   纯渲染层改动：consume() 分发与事件契约不变。
+   ============================================================ */
+let probeRun = null;   // 当前连续探查段 { first, group }
+
+/** verb 形如 [08/11] → 步骤号 8；探查类（probe/inspect 等）→ null。 */
+function stepNoOf(verb) {
+  const m = /^\[(\d+)\/\d+\]$/.exec(String(verb).trim());
+  return m ? parseInt(m[1], 10) : null;
+}
+
+function makeProbeGroup() {
+  const dot = h('span', { class: 'dot' });
+  const ttl = h('span', { class: 'ttl' }, '探查 · 0 个工具');
+  const stat = h('span', { class: 'stat' }, '运行中…');
+  const body = h('div', { class: 'grp-body' });
+  const el = h('details', { class: 'toolgroup turn rise is-run', 'aria-label': '探查工具组' },
+    h('summary', null,
+      h('span', { class: 'cv' }, icon('chevron')),
+      dot, ttl, h('span', { class: 'grow' }), stat),
+    body);
+  const g = {
+    el, body, total: 0, ended: 0, failed: 0, canceled: 0,
+    add(card) {
+      g.total += 1;
+      body.appendChild(card);
+      card._probeGroup = g;
+      g.paint();
+    },
+    memberEnd(exit) {
+      g.ended += 1;
+      if (exit !== 0) {
+        g.failed += 1;
+        el.open = true;                 // 失败组默认展开，供排查
+        el.classList.add('is-bad');
+      }
+      g.paint();
+    },
+    memberCancel() {
+      g.ended += 1;
+      g.canceled += 1;
+      g.paint();
+    },
+    paint() {
+      ttl.textContent = `探查 · ${g.total} 个工具`;
+      const running = g.ended < g.total;
+      el.classList.toggle('is-run', running && !g.failed);
+      el.classList.toggle('is-ok', !running && !g.failed && !g.canceled);
+      el.classList.toggle('is-warn', !running && !g.failed && g.canceled > 0);
+      stat.textContent = g.failed ? `${g.failed} 个失败`
+        : running ? '运行中…'
+        : g.canceled ? '已取消' : '完成';
+      stat.classList.toggle('is-bad', g.failed > 0);
+    },
+  };
+  return g;
+}
+
+/** 探查卡进流：维持「连续段」语义（建组、迁移首张、追加成员）。 */
+function addProbeCard(el) {
+  if (probeRun?.group) {                       // 段内已有组 → 直接追加
+    probeRun.group.add(el);
+    follow();
+    return;
+  }
+  if (probeRun?.first?.isConnected) {          // 第二张连续探查卡 → 建组并迁入首张
+    const g = makeProbeGroup();
+    inner().insertBefore(g.el, probeRun.first);
+    g.add(probeRun.first);
+    g.add(el);
+    probeRun.group = g;
+    follow();
+    return;
+  }
+  push(el);                                    // 首张：普通卡入流，登记段起点
+  probeRun = { first: el, group: null };
+}
+
+/* ============================================================
    工具调用条目 —— 最核心的组件
    ============================================================ */
 export function toolCall({ cmd, verb = '', label = '', open = false, determinate = true }) {
@@ -214,7 +303,10 @@ export function toolCall({ cmd, verb = '', label = '', open = false, determinate
     prog, out);
 
   out.appendChild(caret);
-  push(el);
+  const stepNo = stepNoOf(verb);
+  // 执行步骤卡（s1–s11）永远顶层内联；探查类进聚合组（任务 1）
+  if (stepNo !== null) push(el);
+  else addProbeCard(el);
 
   const t0 = Date.now();
   const tick = setInterval(() => {
@@ -249,11 +341,10 @@ export function toolCall({ cmd, verb = '', label = '', open = false, determinate
       clock.textContent = mmss((Date.now() - t0) / 1000);
       el.classList.remove('is-run');
       el.classList.add(exit === 0 ? 'is-ok' : 'is-bad');
+      el._probeGroup?.memberEnd(exit);   // 组内失败 → 整组展开标红
       if (exit !== 0) {
-        // verb 形如 [08/11] → 步骤号 8；探测类工具（probe/inspect）不匹配 → null
-        const m = /^\[(\d+)\/\d+\]$/.exec(verb.trim());
         lastFailure = {
-          stepNo: m ? parseInt(m[1], 10) : null,
+          stepNo,                        // 探查类（verb 非 [NN/MM]）为 null
           stepName: label || '', exit,
           logTail: [...logTail], el, at: Date.now(),
         };
@@ -267,7 +358,7 @@ export function toolCall({ cmd, verb = '', label = '', open = false, determinate
         el.appendChild(h('div', { class: 'arts' },
           ...artifacts.map((a) => h('button', {
             class: `art${a.stale ? ' is-stale' : ''}`, type: 'button',
-            onclick: () => onArtifact && onArtifact(a.path),
+            onclick: () => { onArtifact && onArtifact(a.path); jumpArtifact(a.path, stepNo); },
             title: `${a.path} · ${a.hash || ''}`,
           }, icon('file'), a.path.split('/').pop(),
              a.hash ? h('span', { class: 'h' }, a.hash) : null))));
@@ -282,6 +373,7 @@ export function toolCall({ cmd, verb = '', label = '', open = false, determinate
       caret.remove();
       el.classList.remove('is-run');
       el.classList.add('is-warn');
+      el._probeGroup?.memberCancel();
       codeTag.classList.remove('hidden');
       codeTag.textContent = 'SIGTERM';
       peek.textContent = reason;
@@ -289,6 +381,29 @@ export function toolCall({ cmd, verb = '', label = '', open = false, determinate
     },
   };
   return api;
+}
+
+/* ============================================================
+   产物 chip 跳转（任务 4 最小版，RESEARCH §8 问题 6）：
+   tool.end 的产物徽章可点 —— 图像类切影像面板，其余切文件面板。
+   ============================================================ */
+
+/** 产物 → 目标面板：.png/.jpg 归影像，其余归文件（供校验脚本断言）。 */
+export function artifactTab(path) {
+  return /\.(png|jpe?g)$/i.test(String(path)) ? 'images' : 'files';
+}
+
+/** 仅真实应用页（存在 #dockTabs）动态加载 dock.js 并切面板；
+    静态演示页 / node 校验环境无 dock，保持 onArtifact 回退即可。 */
+function jumpArtifact(path, stepNo) {
+  if (!document.getElementById('dockTabs')) return;
+  import('./dock.js').then((Dock) => {
+    try {
+      // 并行分支若导出了 selectStepFile 则透传步骤号（feature-detect）
+      if (typeof Dock.selectStepFile === 'function' && stepNo !== null) Dock.selectStepFile(stepNo);
+      Dock.setTab(artifactTab(path));
+    } catch { /* dock 未挂载：保持 onArtifact 的既有跳转 */ }
+  }).catch(() => {});
 }
 
 /* ============================================================
@@ -342,11 +457,25 @@ export function planPanel(items, { open = true, title = '执行计划' } = {}) {
      · action.reason：点击后先出可选理由输入框，理由随 run(reason) 回传。
    ============================================================ */
 export function askApproval({ title, rows, danger = false, actions, family = null }) {
-  // 同指纹族自动通过：不渲染卡片，留一条 note 说明 + 直接执行主操作
+  // 同指纹族自动通过：不渲染卡片，留一条 note 说明 + 直接执行主操作。
+  // 「不再询问」可撤销（任务 3，RESEARCH §9 机制 #5）：note 带「撤销该记忆」
+  // 链接，点击清除 S.autoApprove 里的该指纹族并 toast 确认 ——
+  // 一次勾选不再是永久失控，下次同类操作会重新弹审批卡。
   if (family && S.autoApprove.has(family)) {
+    const revoke = h('button', {
+      class: 'undo-link', type: 'button',
+      'aria-label': `撤销「同类操作不再询问」记忆（指纹族 ${family}）`,
+      onclick: () => {
+        if (!S.autoApprove.has(family)) return;
+        S.autoApprove.delete(family);
+        revoke.textContent = '已撤销';
+        revoke.setAttribute('disabled', '');
+        toast(`已撤销记忆：指纹族 ${family} 的同类操作将重新询问`);
+      },
+    }, '撤销该记忆');
     note('info', h('span', null,
       h('b', null, '已自动通过：'), `${title} —— 你在本会话勾选过「同类操作不再询问」（指纹族 `,
-      h('code', null, family), '），此类审批自动通过。'));
+      h('code', null, family), '），此类审批自动通过。', txt(' '), revoke));
     const primary = actions[0];
     primary?.run && primary.run();
     return null;
