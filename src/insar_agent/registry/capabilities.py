@@ -111,7 +111,14 @@ PIPELINE: tuple[Capability, ...] = (
             "threads": Param(8, kind="resource", type="int", min=1, max=32,
                              hint="线程数 1-32(本机 24 核,留 4 核给系统)"),
         },
-        artifacts=(ArtifactSpec("coreg", ("data/coreg",), kind="RSLC", layout="isce2"),),
+        artifacts=(
+            # 首候选 data/coreg 不变(tops/simulate 兼容);条带链配准段(startup→
+            # fine_resample)产物是 coregisteredSlc/(run 脚本 cd isce2 后执行,
+            # 2026-08 Baja 手工链工作区实测布局 —— 预检发现原声明缺此候选,
+            # 真实 stripmap run 会在产物发现阶段 contract_broken)
+            ArtifactSpec("coreg", ("data/coreg", "isce2/coregisteredSlc"),
+                         kind="RSLC", layout="isce2"),
+        ),
         inputs=("slc", "dem"),
         run_ok=(RunOkCheck("exit_code", equals=0), RunOkCheck("artifact_exists", id="coreg"),
                 RunOkCheck("log_absent", pattern=r"ERROR|Segmentation fault")),

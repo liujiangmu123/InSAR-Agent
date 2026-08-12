@@ -32,7 +32,8 @@ def resolve_builder(cap: Capability, method_id: str, *, simulated: bool):
         return simulate.build
 
     # 方法级路由(自建纯 Python 实现)
-    if method_id == "local_import":
+    # dem_local:本地/WSL DEM 核验登记(Baja 预检发现真实 run 里 ToolMissing 的缺口)
+    if method_id in ("local_import", "dem_local"):
         from insar_agent.engines import localdata
         return localdata.build
     if method_id == "figure_journal":

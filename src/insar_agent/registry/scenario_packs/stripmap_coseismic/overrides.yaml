@@ -1,11 +1,39 @@
 # 机器读:步骤覆写(与 SKILL.md 正文的领域知识对应)。
 # 3-6 步全覆写为 stripmapApp 分段方法(ALOS raw 条带链,pickle 链分段见 SKILL.md);
 # 无 cloud_completed:全链本机(WSL 引擎)执行,无云端已完成步骤。
+#
+# 路径参数(science 输入,进指纹)固化为 2026-08-12 手工验证链的 WSL 绝对路径
+# (docs/VALIDATION-isce2-wsl.md;与 /home/insar/work/baja/stripmapApp.xml 原件
+# 逐字段一致):数据已装配在 WSL 工作区,代理作业同样在 WSL 内跑,引擎按绝对
+# 路径直接读,零拷贝。换数据时只覆写这些参数。
 step_overrides:
+  1:
+    # local_import 的 WSL 工作区模式:POSIX 绝对路径 → 只读核验 + 清单登记
+    params:
+      source: /home/insar/work/baja
+      scenes: 2
+      platform: ALOS-1 PALSAR
+      dates: 2010-04-04 El Mayor-Cucapah 震前/震后各一景
+  2:
+    # 本地 DEM(已 gdal_translate -of ISCE + fixImageXml.py -f),不走在线 DEM 服务
+    method: dem_local
+    params:
+      dem: /home/insar/work/baja/dem/dem.wgs84
   3:
     method: isce2_stripmap_xcorr
+    params:
+      reference_image: /home/insar/work/baja/raw/IMG-HH-ALPSRP207600640-H1.0__A
+      reference_leader: /home/insar/work/baja/raw/LED-ALPSRP207600640-H1.0__A
+      secondary_image: /home/insar/work/baja/raw/IMG-HH-ALPSRP227730640-H1.0__A
+      secondary_leader: /home/insar/work/baja/raw/LED-ALPSRP227730640-H1.0__A
+      # FBD 从影像配 FBS 主影像:必须 dual2single(实测 XML 形态)
+      resample_flag: dual2single
+      dem_path: /home/insar/work/baja/dem/dem.wgs84
   4:
     method: isce2_stripmap_ifg
+    # 单干涉对(磁盘/预算公式按 pairs 估算)
+    params:
+      pairs: 1
   5:
     method: isce2_stripmap_filter
   6:

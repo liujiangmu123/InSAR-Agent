@@ -154,7 +154,9 @@ def test_stripmap_commandplan_files_argv_env(workspace):
     assert set(plan.files) == {"isce2/stripmapApp_s03.xml", "isce2/run_s03.sh"}
     script = plan.files["isce2/run_s03.sh"]
     assert "cd isce2" in script
-    assert "stripmapApp.py stripmapApp_s03.xml --start=startup --end=fine_resample" in script
+    # --steps 必须显式给出(ISCE2 只在步进模式解析 --start/--end);nice 对齐手工链
+    assert ("nice -n 10 stripmapApp.py stripmapApp_s03.xml "
+            "--steps --start=startup --end=fine_resample") in script
     assert plan.shell_line == "bash isce2/run_s03.sh"
 
 
