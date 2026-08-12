@@ -93,6 +93,11 @@ class LLMProvider:
             raise BrainTruncated("输出被 token 上限截断,整体拒绝")
         content = (choice.get("message") or {}).get("content") or ""
         try:
-            return json.loads(content)
+            parsed = json.loads(content)
         except json.JSONDecodeError as exc:
             raise BrainUnavailable(f"响应不是合法 JSON:{content[:200]}") from exc
+        if not isinstance(parsed, dict):
+            # 路由无视 response_format 返回数组/标量时,原样透传会让 facade 在
+            # data.get(...) 上 AttributeError 炸穿降级路径 —— 契约是 dict,这里拒绝
+            raise BrainUnavailable(f"响应 JSON 顶层不是对象:{content[:200]}")
+        return parsed
