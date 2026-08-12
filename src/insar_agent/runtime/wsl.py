@@ -8,8 +8,10 @@
 路径纪律(§4.9):
   - LLM 只见逻辑句柄;cmd.sh 里只出现 WSL 路径;宿主访问统一走 host_path()。
   - 宿主侧只读小文件(job.log/job.rc/json);遍历目录、读栅格必须在 WSL 内做。
+  - 作业契约目录在 Linux fs(<root>/.jobs/...,§4.8 9p 红线);Windows 工作区
+    只作为输入源经 /mnt 映射进 cmd.sh 的 cwd(纪律上只读,§4.9 规则 4)。
 
-本机 WSL 尚未安装(§0.5.1),本模块的 runner 可注入,单测用假 runner 验证命令构造。
+runner 可注入,单测用假 runner 验证命令构造;生产路由见 runtime/backend_select.py。
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ import re
 import subprocess
 import sys
 from importlib import resources
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
 from insar_agent.runtime.jobs import CommandPlan, JobState, shell_quote
@@ -62,16 +64,49 @@ class WslPaths:
         wsl = self.wsl_path(task_id, *parts)
         return Path(rf"\\wsl.localhost\{self.distro}") / str(wsl).lstrip("/")
 
+    def host_root(self, *parts: str) -> Path:
+        """root(或其下子路径)的宿主视图,不经过 task_id 句柄校验 —— 只给
+        作业契约目录(.jobs/...)这类基础设施路径用;同样受 §4.9 小文件红线约束。"""
+        wsl = self.root.joinpath(*parts) if parts else self.root
+        return Path(rf"\\wsl.localhost\{self.distro}") / str(wsl).lstrip("/")
+
+    @staticmethod
+    def to_wsl(path: str | Path) -> PurePosixPath:
+        """宿主路径 → WSL 侧路径(§4.9 三坐标系换算;cmd.sh 里只准出现 WSL 路径)。
+
+        - 已是 POSIX 绝对路径:原样返回(Linux fs 工作区)
+        - \\\\wsl.localhost\\<distro>\\home\\... / \\\\wsl$\\... → /home/...
+        - 盘符路径 E:\\ws → /mnt/e/ws(Windows 工作区经 9p 挂载;纪律上只读,
+          §4.9 规则 4:中间产物应写 Linux fs)
+        其余形态显式拒绝,绝不猜。
+        """
+        s = str(path)
+        if s.startswith("/"):
+            return PurePosixPath(s)
+        p = PureWindowsPath(s)
+        drive = p.drive  # 'E:' 或 '\\\\wsl.localhost\\insar'
+        if drive.startswith("\\\\"):
+            host = drive[2:].split("\\", 1)[0].lower()
+            if host in ("wsl.localhost", "wsl$"):
+                return PurePosixPath("/", *p.parts[1:])
+            raise ValueError(f"无法映射到 WSL 的 UNC 路径:{s}")
+        if len(drive) == 2 and drive[1] == ":" and p.root:
+            return PurePosixPath("/mnt", drive[0].lower(), *p.parts[1:])
+        raise ValueError(f"无法映射到 WSL 的路径(需要绝对路径):{s}")
+
 
 class WslJobBackend:
     """作业目录在 WSL 的 Linux 文件系统上;宿主通过 \\\\wsl.localhost 读小文件。"""
 
     def __init__(self, paths: WslPaths | None = None, runner: Runner | None = None,
-                 keepalive: bool = True):
+                 keepalive: bool = True, user: str = "root"):
         self.paths = paths or WslPaths()
         self.runner = runner or _default_runner
         self._keepalive_proc: subprocess.Popen | None = None
         self.keepalive = keepalive
+        # 实测教训(docs/VALIDATION-isce2-wsl.md):发行版名 ≠ 发行版内用户名
+        # (distro insar 的默认用户是 ubuntu/uid 1000),作业统一以 root 跑
+        self.user = user
 
     # -- WSL 生命周期(§4.8:空闲 8 秒回收 VM,run 期间必须保活) --
 
@@ -89,19 +124,40 @@ class WslJobBackend:
         self._keepalive_proc = None
 
     def _wsl(self, script: str, timeout: float = 30.0) -> subprocess.CompletedProcess:
+        # bash -l 登录 shell:加载 /etc/profile.d/insar.sh(PATH/PROJ_DATA/GDAL_DATA,
+        # scripts/wsl_setup.sh 固化;实测缺 PROJ_DATA 时 geocode 直接失败)
         return self.runner(
-            ["wsl.exe", "-d", self.paths.distro, "--exec", "bash", "-lc", script], timeout)
+            ["wsl.exe", "-d", self.paths.distro, "-u", self.user,
+             "--exec", "bash", "-lc", script], timeout)
 
     # -- 作业目录契约 --
 
-    def prepare(self, job_dir: Path, plan: CommandPlan) -> None:
-        """job_dir 传 WSL 侧 POSIX 路径的宿主映射;文件经 host_path 写入。"""
+    def job_root(self, workspace: Path) -> Path:
+        """作业契约目录根(宿主视图)。刻意无视 workspace:job.log/job.hb 这类
+        高频小写入必须落 Linux fs(§4.8 9p 红线),不能跟着 Windows 工作区走。"""
+        del workspace  # 签名与 executor 的调用点对齐,本后端不使用
+        return self.paths.host_root(".jobs")
+
+    def prepare(self, job_dir: Path, plan: CommandPlan, *,
+                wsl_job_dir: str | None = None) -> None:
+        """job_dir 传 WSL 侧 POSIX 路径的宿主映射;目录先在 WSL 内建好
+        (顺带拉起 VM),契约小文件经 9p 写入。"""
+        posix = wsl_job_dir or self._to_posix(job_dir)
+        self.ensure_keepalive()
+        made = self._wsl(f"mkdir -p {shell_quote(posix)}")
+        if made.returncode != 0:
+            raise RuntimeError(
+                f"WSL 侧创建作业目录失败(rc={made.returncode}):"
+                f"{(made.stderr or made.stdout or '').strip()[:300]}")
         job_dir.mkdir(parents=True, exist_ok=True)
+        # cwd 换算成 WSL 坐标系(Windows 工作区 → /mnt 只读输入,§4.9);
+        # 保留原始宿主路径为注释,cmd.sh 仍可 diff 可复现
+        cwd = str(self.paths.to_wsl(plan.cwd))
         line = plan.shell_line or " ".join(shell_quote(a) for a in plan.argv)
         env_lines = "\n".join(f"export {k}={shell_quote(v)}" for k, v in plan.env.items())
         (job_dir / "cmd.sh").write_text(
-            f"#!/usr/bin/env bash\nset -uo pipefail\ncd {shell_quote(plan.cwd)}\n"
-            f"{env_lines}\n{line}\n",
+            f"#!/usr/bin/env bash\nset -uo pipefail\n# host cwd: {plan.cwd}\n"
+            f"cd {shell_quote(cwd)}\n{env_lines}\n{line}\n",
             encoding="utf-8", newline="\n")
         wrapper = (resources.files("insar_agent.runtime") / "wsl_wrapper.sh").read_text("utf-8")
         (job_dir / "wrapper.sh").write_text(wrapper, encoding="utf-8", newline="\n")
@@ -109,9 +165,16 @@ class WslJobBackend:
     def launch(self, job_dir: Path, *, wsl_job_dir: str | None = None) -> None:
         self.ensure_keepalive()
         posix = wsl_job_dir or self._to_posix(job_dir)
-        # nohup + & :wrapper 独立于本次 wsl.exe 调用存活
-        self._wsl(f"nohup bash {shell_quote(posix + '/wrapper.sh')} {shell_quote(posix)} "
-                  f">/dev/null 2>&1 & disown", timeout=15.0)
+        # 2026-08-12 实测:nohup+&+disown 的后台进程在 wsl.exe 退出时被 WSL
+        # 会话回收连坐杀掉,作业根本起不来;setsid --fork 把 wrapper 派生进
+        # 独立会话才真正脱离本次调用存活(VM 空闲回收由 keepalive/轮询兜住,§4.8)
+        started = self._wsl(
+            f"setsid --fork bash {shell_quote(posix + '/wrapper.sh')} {shell_quote(posix)} "
+            f">/dev/null 2>&1 </dev/null", timeout=15.0)
+        if started.returncode != 0:
+            raise RuntimeError(
+                f"WSL 侧启动 wrapper 失败(rc={started.returncode}):"
+                f"{(started.stderr or started.stdout or '').strip()[:300]}")
 
     def state(self, job_dir: Path, *, wsl_job_dir: str | None = None) -> JobState:
         rc = job_dir / "job.rc"
@@ -160,10 +223,21 @@ class WslJobBackend:
 
     @staticmethod
     def _to_posix(host_job_dir: Path) -> str:
-        r"""\\wsl.localhost\Ubuntu\home\insar\... → /home/insar/..."""
+        r"""\\wsl.localhost\<distro>\home\insar\... → /home/insar/...
+
+        作业目录必须在 Linux fs(§4.8):盘符路径进到这里说明接线有错,显式拒绝。
+        Windows 下 UNC 前缀整体是 parts[0] 锚(如 '\\wsl.localhost\insar\'),
+        旧实现按 POSIX 拆分假设逐段找 'wsl.localhost',在宿主上永远匹配不到。
+        """
+        p = PureWindowsPath(str(host_job_dir))
+        if p.drive.startswith("\\\\"):
+            host = p.drive[2:].split("\\", 1)[0].lower()
+            if host in ("wsl.localhost", "wsl$"):
+                return "/" + "/".join(p.parts[1:])
+        # POSIX 形态字符串(如 //wsl.localhost/<distro>/home/...)的兼容拆分
         parts = host_job_dir.parts
-        for i, p in enumerate(parts):
-            if p.lower().startswith("wsl.localhost"):
+        for i, q in enumerate(parts):
+            if q.lower().startswith(("wsl.localhost", "wsl$")):
                 return "/" + "/".join(parts[i + 2:])
         raise ValueError(f"not a wsl.localhost path: {host_job_dir}")
 

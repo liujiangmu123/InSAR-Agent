@@ -64,3 +64,29 @@ wsl -d insar -u root -- bash /home/insar/work/baja/.job/wrapper.sh /home/insar/w
 # 轮询
 wsl -d insar -u root -- bash -c "tr -d '\r' < /mnt/e/wsl/baja_poll.sh | bash"
 ```
+
+## 接线说明(2026-08-12:WslJobBackend 进入生产路径)
+
+本次验证后,WSL 后端已接进执行链(工厂在 `runtime/backend_select.py`):
+
+- **路由**:driver 每步 launch 前按方法引擎选择 —— `isce2`/`snaphu` 且目标发行版
+  可达(`INSAR_WSL_DISTRO`,默认 `insar`,用 `wsl.exe -l -q` 探测)时走
+  `WslJobBackend`;mintpy/qa/figures/localdata 与模拟运行一律 `LocalJobBackend`;
+  `INSAR_JOB_BACKEND=local|wsl` 可显式强制(强制 wsl 时不探测、不静默回退)。
+  无 WSL 的机器上所有分支落回本地后端,行为与接线前完全一致。
+- **作业目录**:`/home/insar/work/.jobs/<run_id>/s<NN>/a<N>`(Linux fs,§4.8 9p
+  红线);目录本体由 WSL 内 `mkdir -p` 创建(顺带拉起 VM),宿主只经
+  `\\wsl.localhost\<distro>` 读写 cmd.sh/job.log/job.rc 等契约小文件。
+- **workspace 映射**:cmd.sh 的 cwd 由 `WslPaths.to_wsl` 从 `E:\...` 换算成
+  `/mnt/e/...`(原始宿主路径保留为注释,可 diff 可复现);Windows 工作区按 §4.9
+  规则 4 视为只读输入源。当前最小实现中引擎产物仍写回 /mnt 工作区,宿主侧的
+  产物发现/指纹逻辑保持不变 —— 重型真实链应迁移 Linux 工作区 + 指纹在 WSL 内算,
+  列为后续工作。
+- **身份与环境**:作业以 root 执行(教训 3:发行版用户名 ≠ 发行版名);所有命令经
+  `bash -lc` 登录 shell 进入,加载 `/etc/profile.d/insar.sh`(PROJ_DATA 等,教训 1)。
+- **新教训:后台派生必须 `setsid --fork`**。`nohup … & disown` 的后台进程会在本次
+  `wsl.exe` 调用退出时被 WSL 会话回收连坐杀掉,作业根本起不来(这正是上文复跑指引
+  把 wsl.exe 挂在宿主后台的原因);`setsid --fork` 把 wrapper 派生进独立会话后可跨
+  wsl.exe 调用存活,实测 3 秒作业跨多次调用完整收尾。已固化进
+  `WslJobBackend.launch`,`tests/test_wsl_backend.py` 含真实 WSL 冒烟用例
+  (echo 作业往返,无 WSL 自动跳过)。
