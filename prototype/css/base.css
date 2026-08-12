@@ -1,6 +1,38 @@
 /* ============================================================
    基础重置 + 布局骨架 + 通用原子件
    ============================================================ */
+
+/* ============================================================
+   响应式断点清单（全项目唯一事实源 —— 改断点先改这里）
+
+   --bp-dock-drawer   1240px   应用壳「抽屉档」:
+       sider / dock 变 fixed 浮层,dock 收起时右缘出现纵向把手,
+       抽屉支持左缘滑动关闭。
+       生效处:本文件 @media、dock.css @media;
+       app.js 的 NARROW 直接读取下方变量,JS 无第二份硬编码。
+
+   --bp-compact        480px   应用壳「紧凑档」(手机宽度):
+       顶栏副标题/分隔符隐藏、运行按钮图标化、输入区快捷键提示行
+       隐藏、dock 抽屉近全宽。
+       生效处:本文件 @media、dock.css @media。
+
+   --bp-setup-narrow   560px   setup 环境向导窄布局:
+       步骤条横向滚动、检查项全宽折行、命令块横向滚动。
+       向导是居中对话框,断点跟随对话框适宜宽度,略宽于紧凑档。
+       生效处:setup.css @media。
+
+   注意:CSS 的 @media 条件不能引用 var(),各文件 @media 里的数值是
+   这份清单的手工镜像(均已用变量名注释标注);JS 侧读下方变量。
+   动效降级(prefers-reduced-motion)统一在 tokens.css,不属于宽度档。
+   历史遗留:prototype/v2-backup/index.v2.html 内有一处 1100px,
+   属备份文件,不参与加载,不在清单内。
+   ============================================================ */
+:root {
+  --bp-dock-drawer: 1240px;
+  --bp-compact: 480px;
+  --bp-setup-narrow: 560px;
+}
+
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body { height: 100%; }
@@ -255,7 +287,7 @@ html { scrollbar-color: var(--border-strong) transparent; }
   animation: riseIn .22s ease-out; max-width: 70vw;
 }
 
-/* ---- 响应式 ----
+/* ---- 响应式:抽屉档（--bp-dock-drawer,清单见文件头） ----
    窄屏不用 display:none 硬隐藏侧栏 —— 那样会让 rail 上的开关变成死控件。
    改为浮层：可见性始终由 JS 的 [hidden] 决定，窄屏只改变定位方式。 */
 @media (max-width: 1240px) {
@@ -271,3 +303,22 @@ html { scrollbar-color: var(--border-strong) transparent; }
 }
 .scrim[hidden] { display: none }
 @media (min-width: 1241px) { .scrim { display: none } }
+
+/* ---- 响应式:紧凑档（--bp-compact,清单见文件头） ----
+   手机宽度下装饰性文字让位给状态与操作;composer 的按钮本就是纯图标,
+   这里只需要收掉快捷键提示行(触屏场景下是无效信息)与多余留白。 */
+@media (max-width: 480px) {
+  .topbar { padding: 0 10px; gap: 6px; }
+  /* 副标题与品牌分隔符隐藏;标题、DEMO 标记、状态徽标、预算条保留 */
+  .topbar .st, .topbar .tt .sl { display: none; }
+  /* 顶栏运行按钮只留图标;文案按 sr-only 方式隐藏,无障碍名保持完整 */
+  .topbar .btn .lbl {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .topbar .btn { padding: 6px 9px; }
+  /* 输入区:压缩左右留白;.main 前缀用于压过 stream.css 的同名规则 */
+  .main .composer { padding: 8px 10px 10px; }
+  .composer .cmeta { display: none; }
+}

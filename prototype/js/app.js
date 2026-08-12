@@ -223,7 +223,10 @@ function paintTheme() {
   b.title = b.getAttribute('aria-label');
 }
 
-const NARROW = 1240;
+/* 断点唯一事实源:base.css :root 的 --bp-dock-drawer(清单见 base.css 文件头)。
+   JS 不再手写第二份 1240;CSS 变量意外读不到时才回退。 */
+const NARROW = parseInt(getComputedStyle(document.documentElement)
+  .getPropertyValue('--bp-dock-drawer'), 10) || 1240;
 const isNarrow = () => window.innerWidth <= NARROW;
 let lastNarrow = null;
 
@@ -244,9 +247,11 @@ function applyResponsive() {
 function paintShell() {
   el.sider.hidden = !S.siderOpen;
   el.dock.hidden = !S.dockOpen;
+  if (S.dockOpen) el.dock.style.transform = '';   // 清掉 swipe 拖拽的残留位移
   $('#railSessions').setAttribute('aria-pressed', String(S.siderOpen));
   $('#railDock').setAttribute('aria-pressed', String(S.dockOpen));
   el.scrim.hidden = !(isNarrow() && (S.siderOpen || S.dockOpen));
+  paintDockHandle();
   if (S.dockOpen) Dock.refresh();
 }
 
@@ -266,6 +271,112 @@ function closeOverlays() {
   if (!isNarrow()) return;
   S.siderOpen = false; S.dockOpen = false;
   paintShell();
+}
+
+/* ============================================================
+   窄屏 dock 抽屉化（≤ --bp-dock-drawer）:
+   收起时右缘留一个纵向把手(当前面板名 + 待处理徽标),点击滑出;
+   滑出后点遮罩收回(scrim 逻辑沿用上方 closeOverlays)。
+   把手与滑动热区在首次 paintShell 时惰性创建,不改 boot 流程;
+   样式全部在 dock.css 的 @media 段。
+   ============================================================ */
+let dockHandleEl = null;
+
+/** 面板中文名直接读 dock 标签按钮的文本节点,避免在这里维护第二份标签表。 */
+function dockTabLabel() {
+  const btn = document.getElementById(`tab-${S.dockTab}`);
+  const t = btn && [...btn.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+  return (t?.nodeValue || '面板').trim();
+}
+
+function ensureDockHandle() {
+  if (dockHandleEl) return;
+  dockHandleEl = h('button', {
+    class: 'dock-handle', id: 'dockHandle', type: 'button', hidden: true,
+    onclick: () => { if (!S.dockOpen) toggleDock(); },
+  },
+    h('span', { class: 'n', hidden: true }),
+    h('span', { class: 'lbl' }),
+    icon('chevron'));
+  document.body.appendChild(dockHandleEl);
+  wireDockSwipe();
+  // 步骤状态一变(失效/失败/续跑),徽标数跟着走
+  St.on('steps', paintDockHandle);
+}
+
+/** 把手只在窄屏且 dock 收起时可见;徽标 = 失效 + 待续跑(失败/中断)步数。 */
+function paintDockHandle() {
+  ensureDockHandle();
+  const show = isNarrow() && !S.dockOpen;
+  dockHandleEl.hidden = !show;
+  if (!show) return;
+  const { stale, resume } = St.workSummary();
+  const n = stale.length + resume.length;
+  const label = dockTabLabel();
+  const badge = dockHandleEl.querySelector('.n');
+  badge.hidden = !n;
+  badge.textContent = String(n);
+  dockHandleEl.querySelector('.lbl').textContent = label;
+  dockHandleEl.setAttribute('aria-label',
+    `打开右侧面板：${label}${n ? `（${n} 个步骤待处理）` : ''}`);
+  dockHandleEl.title = dockHandleEl.getAttribute('aria-label');
+}
+
+/**
+ * 抽屉滑动关闭（触屏基础,pointer events,零依赖）:
+ * 热区只有抽屉左缘一条(.dock-swipe,宽屏 display:none) ——
+ * 面板内部的纵向滚动、命令块/文件树的横向滚动完全不受影响。
+ * 手势:按住热区向右拖,抽屉跟手平移;松手时超过 1/3 宽度或速度
+ * 够快则收起,否则弹回;pointercancel(系统抢占)一律弹回。
+ */
+function wireDockSwipe() {
+  const zone = h('div', { class: 'dock-swipe', 'aria-hidden': 'true' });
+  el.dock.appendChild(zone);   // dock.js 只重绘各 pane 内容,不动 .dock 的直接子级
+  let startX = 0, startT = 0, dx = 0;
+
+  const onMove = (e) => {
+    dx = Math.max(0, e.clientX - startX);
+    el.dock.style.transform = dx ? `translateX(${dx}px)` : '';
+  };
+  const onEnd = (e) => {
+    zone.removeEventListener('pointermove', onMove);
+    zone.removeEventListener('pointerup', onEnd);
+    zone.removeEventListener('pointercancel', onEnd);
+    const w = el.dock.offsetWidth || 1;
+    const fast = dx > 32 && dx / Math.max(1, performance.now() - startT) > 0.55;
+    if (e.type === 'pointerup' && (dx > w / 3 || fast)) {
+      el.dock.style.transform = '';
+      S.dockOpen = false;
+      paintShell();
+    } else if (e.type === 'pointerup' && dx < 8) {
+      // 点按穿透:热区盖住抽屉左缘一条,几乎没位移的按压视为点按,
+      // 转发给热区之下最近的可点目标,避免形成 24px 的点击死区。
+      // 命中点可能落在按钮内的 svg 上(SVG 元素没有 click()),故用 closest。
+      zone.style.pointerEvents = 'none';
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      zone.style.pointerEvents = '';
+      const target = under?.closest('button, a, input, textarea, select, summary, label');
+      if (target && el.dock.contains(target)) {
+        if (target.matches('input, textarea, select')) target.focus();
+        target.click();
+      }
+      el.dock.style.transform = '';
+    } else if (dx > 0) {
+      el.dock.classList.add('snap-back');
+      el.dock.style.transform = '';
+      setTimeout(() => el.dock.classList.remove('snap-back'), 220);
+    }
+    dx = 0;
+  };
+  zone.addEventListener('pointerdown', (e) => {
+    if (!isNarrow() || !S.dockOpen) return;
+    startX = e.clientX; startT = performance.now(); dx = 0;
+    el.dock.classList.remove('snap-back');
+    zone.setPointerCapture(e.pointerId);
+    zone.addEventListener('pointermove', onMove);
+    zone.addEventListener('pointerup', onEnd);
+    zone.addEventListener('pointercancel', onEnd);
+  });
 }
 
 /** 拖拽调整 Dock 宽度。 */

@@ -513,3 +513,72 @@ body.resizing { cursor: col-resize; user-select: none }
 }
 .ghost-btn:hover { background: rgba(255, 255, 255, .22) }
 .ghost-btn svg { width: 13px; height: 13px }
+
+/* ============================================================
+   响应式（断点清单见 base.css 文件头）
+   ≤1240px 时 dock 的 fixed 定位在 base.css;这里管抽屉化的其余部分:
+   宽度上限、滑入动画、右缘把手、滑动关闭热区。
+   把手与热区的 DOM 由 app.js 的窄屏抽屉段创建。
+   ============================================================ */
+
+/* 宽屏下滑动热区不参与布局(它只在窄屏有意义,避免成为空的 flex 子项) */
+@media (min-width: 1241px) {
+  .dock-swipe { display: none }
+}
+
+/* ---- 抽屉档（--bp-dock-drawer） ---- */
+@media (max-width: 1240px) {
+  /* 浮层宽度永不超过视口:400px 默认宽在 375px 屏上会盖住整屏无路可退 */
+  .dock { max-width: calc(100vw - var(--rail)) }
+
+  /* 打开时从右侧滑入;reduced-motion 的全局降级见 tokens.css */
+  .dock:not([hidden]) { animation: dockSlideIn .2s ease-out }
+  @keyframes dockSlideIn {
+    from { transform: translateX(48px); opacity: .5 }
+    to { transform: none; opacity: 1 }
+  }
+  /* swipe 未过阈值弹回原位时的过渡(拖拽跟手阶段是内联 transform,无过渡) */
+  .dock.snap-back { transition: transform .18s ease-out }
+
+  /* 滑动关闭热区:抽屉左缘一条(避开 .grip 的 -3px~4px 拖宽区),
+     touch-action:none 才能持续收到水平 pointermove 而不被滚动抢占 */
+  .dock-swipe {
+    position: absolute; left: 4px; top: 0; bottom: 0; width: 24px;
+    z-index: 6; touch-action: none;
+  }
+
+  /* 右缘纵向把手:dock 收起时的可见入口(可见性由 app.js 的 [hidden] 控制)。
+     z-index 低于 scrim(55):sider 浮层打开时把手退到遮罩之后。 */
+  .dock-handle {
+    position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+    z-index: 50;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 10px 5px 12px;
+    border: 1px solid var(--border); border-right: none;
+    border-radius: var(--r) 0 0 var(--r);
+    background: var(--surface); color: var(--text-2);
+    box-shadow: var(--sh-2);
+    transition: background .12s, color .12s;
+  }
+  .dock-handle:hover { background: var(--bg-hover); color: var(--text) }
+  .dock-handle .lbl {
+    writing-mode: vertical-rl; letter-spacing: .14em;
+    font-size: var(--fs-xs); font-weight: 600; white-space: nowrap;
+  }
+  /* chevron 旋转后朝左,示意抽屉从右滑出 */
+  .dock-handle svg { width: 13px; height: 13px; transform: rotate(180deg) }
+  .dock-handle .n {
+    min-width: 17px; height: 17px; padding: 0 4px;
+    border-radius: var(--r-pill);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700;
+    background: var(--stale); color: #fff;
+  }
+}
+
+/* ---- 紧凑档（--bp-compact） ---- */
+@media (max-width: 480px) {
+  /* 抽屉近全宽,只留 rail 一条可见,保留空间感与逃生路径 */
+  .dock { width: calc(100vw - var(--rail)) }
+  .dock-tabs button { padding: 7px 7px }
+}
