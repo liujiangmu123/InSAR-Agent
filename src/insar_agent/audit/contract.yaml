@@ -4,9 +4,16 @@
 #      后两者必须填 ref。
 #   2. status: PENDING 的阈值不参与硬 gate,只产出 warning。
 #   3. CI 守护测试:tests/test_provenance.py::test_contract_discipline(纪律)
-#      + tests/test_audit_deep.py(加载报错/PENDING 行为全枝)。
+#      + tests/test_audit_deep.py(加载报错/PENDING 行为全枝)
+#      + tests/test_contract_refs.py(文献 ref 落地后的台账状态守护)。
 #
-# 当前诚实盘点(§4.13):只有 3 个 A 级来源,其余全部 PENDING 待标定/待查证。
+# 2026-08-12 文献调研落地(reference/RESEARCH-insar-params-2026-08-12.md 映射表 a):
+#   - min_coherence / max_temporal_baseline 升级 literature 并解除 PENDING;
+#   - corr_threshold / unwrap_coverage / nan_fraction_below 维持 PENDING,
+#     但 ref 从「待查/待定」升级为「有文献参照系的待标定」;
+#   - unwrap_coverage 不转 OK 的执行层原因:该指标当前仅由第 11 步 qa.json 产出,
+#     第 6 步 gate 评估时必然缺失 —— OK 状态会把「指标缺失」变成硬拦停(runok.py
+#     metric_min 语义),在指标产出点前移之前不得解除。
 
 schema_version: "1.0"
 
@@ -14,47 +21,47 @@ thresholds:
   esd_coherence_threshold:
     value: 0.85
     source: upstream_default
-    ref: "ISCE2 topsApp 默认值"
+    ref: "isce2 applications/topsApp.py:ESD_COHERENCE_THRESHOLD = Application.Parameter(default=0.85)(github.com/isce-framework/isce2)"
     status: OK
 
   stepFuncDate:
     value: "20190706T0320"
     source: upstream_default
-    ref: "实测配置 RidgecrestSenDT71.txt(Ridgecrest 同震日)"
+    ref: "实测配置 RidgecrestSenDT71.txt(Ridgecrest 同震日);与 USGS 主震时刻 2019-07-06 03:19:53 UTC 一致(取整到分钟 T0320)"
     status: OK
 
   weightFunc:
     value: "no"
     source: upstream_default
-    ref: "实测配置 RidgecrestSenDT71.txt(MintPy 默认 var,此处有意覆盖)"
+    ref: "实测配置 RidgecrestSenDT71.txt(MintPy 默认 var,此处有意覆盖);MintPy smallbaselineApp.cfg §5 官方注释:SBAS (Berardino et al., 2002) = minNormVelocity (yes) + weightFunc (no) —— 即经典 SBAS 均权配置,覆盖有明确语义而非任意值"
     status: OK
 
   corr_threshold:
     value: 0.85
     source: local_calibration
-    ref: "experiments/PENDING-crossval-calibration.md(待标定:PS/SBAS 一致性无先例可循)"
+    ref: "无文献先例(PS/SBAS 互检惯例用一对一速度差 std 表述而非相关系数):参照系为 Terrafirma 多处理器互检速度差 std 0.5-0.7 mm/yr 与 Glasgow S1 四方法互检 1.1 mm/yr(RSE 256:112306, 2021)、SBAS 速度精度 ~1 mm/yr(Casu et al. 2006, RSE 102:195-210);待 experiments/PENDING-crossval-calibration.md 标定,标定时须同时报告相关系数与速度差 std"
     status: PENDING
 
   min_coherence:
     value: 0.25
-    source: local_calibration
-    ref: "待查 SNAPHU 文档(MintPy 无此单一默认)"
-    status: PENDING
+    source: literature
+    ref: "Berardino et al. (2002, IEEE TGRS 40(11):2375-2383, §V: 'the coherence threshold has been fixed to 0.25');同值为 GIAnT 惯例(Agram & Simons 2015,转引 Yunjun et al. 2019, Computers & Geosciences 133:104331 §6.5);解缠有效掩膜下界参照 ASF HyP3 InSAR Product Guide(coherence<0.1 不参与解缠)"
+    status: OK
 
   unwrap_coverage:
     value: 0.70
-    source: literature
-    ref: "待查文献"
+    source: local_calibration
+    ref: "本项目从严的工程门,文献参照系:LiCSBAS 图级剔除线 unw_cov_thre=0.3(batch_LiCSBAS.sh 默认;Morishita et al. 2020, Remote Sens. 12(3):424 §2.4.1)是社区下限惯例;0.70 高于下限属主动加严,待 1 次实测标定后转 OK(若 warning 频繁可回退 0.3-0.5)"
     status: PENDING
 
   nan_fraction_below:
     value: 0.50
     source: local_calibration
-    ref: "待定"
+    ref: "工程门,逻辑参照 LiCSBAS 覆盖率门的镜像:unw_cov_thre=0.3 ⇔ 有效像元 ≥0.3 ⇔ NaN ≤0.7(Morishita et al. 2020 §2.4.1);本项目对成品栅格取 NaN ≤0.5 从严,待实测标定"
     status: PENDING
 
   max_temporal_baseline:
     value: 120
-    source: local_calibration
-    ref: "S1 12 天重访,需按去相干特性标定"
-    status: PENDING
+    source: literature
+    ref: "Yunjun et al. (2019, Computers & Geosciences 133:104331, §6.3):推荐宽松阈值+冗余网络,MintPy tempBaseMax 默认不限(smallbaselineApp.cfg §2);同数据源对照:ASF HyP3+MintPy Ridgecrest 教程取 24 天(hyp3_insar_stack_for_ts_analysis.ipynb)、GMTSAR S1 教程 50 天;120 天属宽松侧,由数据驱动修剪兜底;跨冻融季场景须收紧(见 permafrost 场景包)"
+    status: OK
