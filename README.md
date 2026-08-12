@@ -41,6 +41,7 @@
 python -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"        # 跑测试足够;真实 qa/出图另加 raster:".[dev,raster]"
 .venv\Scripts\python -m pytest tests/ -q     # 215 项测试(2026-08-12 全绿)
+.venv\Scripts\python scripts\test_js.py      # 前端 state.js 单测(node --test,零 npm 依赖)
 .venv\Scripts\python -m insar_agent.api.app  # http://127.0.0.1:8873(UI + API)
 
 # 备选:不安装也能跑(tests/conftest.py 把 src 插入 sys.path;需全局 pytest)
