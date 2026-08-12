@@ -244,11 +244,32 @@
   50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent) }
 }
 
-/* ---------- 窄屏 ---------- */
+/* ---------- 窄屏（--bp-setup-narrow,断点清单见 base.css 文件头） ---------- */
 @media (max-width: 560px) {
   .setup-scrim { padding: 10px; }
-  .setup-steps { flex-wrap: wrap; }
-  .setup-step { white-space: normal; }
+  .setup-hd { padding: 14px 16px 10px; }
+  .setup-body { padding: 12px 16px 4px; }
+
+  /* 步骤条:横向滚动代替折行 —— 折行会把步骤挤成两层,进度语义混乱 */
+  .setup-steps {
+    flex-wrap: nowrap; overflow-x: auto;
+    padding: 0 16px 10px;
+    scrollbar-width: none;
+  }
+  .setup-steps::-webkit-scrollbar { display: none; }
+  .setup-steps li { flex: 0 0 auto; }
   .setup-step .nm { font-size: var(--fs-xs); }
-  .setup-ft { flex-wrap: wrap; }
+
+  /* 检查项:正文占满整行,结果 pill 折到下一行并与正文左对齐
+     (状态点 20px + 间距 10px = 30px 缩进) */
+  .setup-check { flex-wrap: wrap; }
+  .setup-check .bd { flex: 1 1 calc(100% - 60px); }
+  .setup-check .pill { margin-left: 30px; margin-top: 0; }
+
+  /* 命令块:保持单行 + 横向滚动,折行会把长命令搅成一团无法逐段核对 */
+  .setup-cmd .code { white-space: pre; word-break: normal; }
+
+  /* 底部操作行允许换行,按钮不被挤出卡片 */
+  .setup-ft { flex-wrap: wrap; padding: 10px 16px; }
+  .setup-acts { flex-wrap: wrap; }
 }
