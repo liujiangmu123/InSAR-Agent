@@ -99,21 +99,21 @@ body.resizing { cursor: col-resize; user-select: none }
   border-radius: var(--r-pill); flex-shrink: 0;
 }
 .pstep.d { border-left-color: var(--ok) }
-.pstep.d .no { background: var(--ok); color: #fff }
+.pstep.d .no { background: var(--ok); color: var(--text-inv) }
 .pstep.d .fl { background: var(--ok-weak); color: var(--ok-text) }
 .pstep.r { border-left-color: var(--accent); background: var(--accent-weak) }
-.pstep.r .no { background: var(--accent); color: #fff; animation: pulseRing 1.4s infinite }
+.pstep.r .no { background: var(--accent); color: var(--text-inv); animation: pulseRing 1.4s infinite }
 .pstep.r .fl { background: var(--surface); color: var(--accent-text) }
 .pstep.s { border-left-color: var(--stale); background: var(--stale-weak) }
-.pstep.s .no { background: var(--stale); color: #fff }
+.pstep.s .no { background: var(--stale); color: var(--text-inv) }
 .pstep.s .fl { background: var(--surface); color: var(--stale-text) }
 .pstep.f { border-left-color: var(--bad); background: var(--bad-weak) }
-.pstep.f .no { background: var(--bad); color: #fff }
+.pstep.f .no { background: var(--bad); color: var(--text-inv) }
 .pstep.f .fl { background: var(--surface); color: var(--bad-text) }
 /* §7.8 四态：interrupted（已取消·可续跑）/ orphaned（WSL 已停止·计算未完成）
    同为橙色 —— 环境/取消事件、可从断点续跑，与 failed 红色（计算问题）区分 */
 .pstep.i, .pstep.o { border-left-color: var(--stale); background: var(--stale-weak) }
-.pstep.i .no, .pstep.o .no { background: var(--stale); color: #fff }
+.pstep.i .no, .pstep.o .no { background: var(--stale); color: var(--text-inv) }
 .pstep.i .fl, .pstep.o .fl { background: var(--surface); color: var(--stale-text) }
 .pstep.flash { animation: staleWash .7s ease-out }
 
@@ -572,7 +572,7 @@ body.resizing { cursor: col-resize; user-select: none }
     border-radius: var(--r-pill);
     display: flex; align-items: center; justify-content: center;
     font-size: 10px; font-weight: 700;
-    background: var(--stale); color: #fff;
+    background: var(--stale); color: var(--text-inv);
   }
 }
 

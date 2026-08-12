@@ -48,7 +48,7 @@
 /* 用户气泡：右对齐 */
 .u-msg { align-self: flex-end; max-width: 84%; }
 .u-msg .body {
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--text-inv);
   padding: 9px 14px; border-radius: 14px 14px 4px 14px;
   white-space: pre-wrap; word-break: break-word;
 }
@@ -248,10 +248,10 @@
   background: var(--bg-mute); color: var(--text-3);
 }
 .plan li .mk svg { width: 10px; height: 10px }
-.plan li.d .mk { background: var(--ok); color: #fff }
-.plan li.r .mk { background: var(--accent); color: #fff; animation: pulseRing 1.4s infinite }
-.plan li.f .mk { background: var(--bad); color: #fff }
-.plan li.s .mk { background: var(--stale); color: #fff }
+.plan li.d .mk { background: var(--ok); color: var(--text-inv) }
+.plan li.r .mk { background: var(--accent); color: var(--text-inv); animation: pulseRing 1.4s infinite }
+.plan li.f .mk { background: var(--bad); color: var(--text-inv) }
+.plan li.s .mk { background: var(--stale); color: var(--text-inv) }
 .plan li .tx { flex: 1; min-width: 0 }
 .plan li.d .tx { color: var(--text-2) }
 .plan li.p .tx { color: var(--text-3) }
@@ -439,10 +439,10 @@ table.grid td.mono { font-family: var(--mono); font-size: 11.5px }
 .cbtn[hidden] { display: none }
 .cbtn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-2) }
 .cbtn svg { width: 16px; height: 16px }
-.cbtn.send { background: var(--accent); color: #fff; width: 33px; height: 33px }
+.cbtn.send { background: var(--accent); color: var(--text-inv); width: 33px; height: 33px }
 .cbtn.send:hover:not(:disabled) { background: var(--accent-hover) }
 .cbtn.send:disabled { opacity: .35 }
-.cbtn.stop { background: var(--bad); color: #fff; width: 33px; height: 33px }
+.cbtn.stop { background: var(--bad); color: var(--text-inv); width: 33px; height: 33px }
 .cbtn.stop:hover { filter: brightness(.92) }
 .cmeta {
   display: flex; align-items: center; gap: var(--sp-3);
@@ -559,7 +559,7 @@ table.grid td.mono { font-family: var(--mono); font-size: 11.5px }
 .gate .cls, .fail .cls {
   margin-left: auto; font-size: 10px; font-weight: 700;
   padding: 1px 7px; border-radius: var(--r-pill);
-  background: var(--bad); color: #fff; letter-spacing: .03em;
+  background: var(--bad); color: var(--text-inv); letter-spacing: .03em;
 }
 .gate .bd {
   padding: 2px 12px 9px; font-size: var(--fs-sm); color: var(--text-2);
@@ -640,7 +640,7 @@ table.grid td.mono { font-family: var(--mono); font-size: 11.5px }
 .stepfail .cls {
   margin-left: auto; font-size: 10px; font-weight: 700;
   padding: 1px 7px; border-radius: var(--r-pill);
-  background: var(--bad); color: #fff; letter-spacing: .03em;
+  background: var(--bad); color: var(--text-inv); letter-spacing: .03em;
 }
 .stepfail .bd {
   padding: 2px 12px 9px; font-size: var(--fs-sm); color: var(--text-2);
