@@ -104,7 +104,10 @@ class Brain:
             except BrainUnavailable:
                 break
             choice = data.get("choice")
-            if isinstance(choice, int) and 0 <= choice < len(ok_methods):
+            # bool 是 int 子类:LLM 返回 {"choice": true} 若不拦会被当索引 1 静默接受,
+            # 那不是候选序号而是幻觉输出 —— 一律按越界处理(重问→降级)
+            if (isinstance(choice, int) and not isinstance(choice, bool)
+                    and 0 <= choice < len(ok_methods)):
                 return SelectResult(ok_methods[choice].method.id,
                                     str(data.get("reason", ""))[:200], "llm")
             user += f"\n(上次输出 choice={choice!r} 越界,候选序号 0-{len(ok_methods) - 1})"

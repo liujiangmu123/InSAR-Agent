@@ -57,8 +57,22 @@ def _plan_methods(registry: dict[int, Capability], probe: ProbeResult, *,
             prefer = ov.get("method")
             params.update(ov.get("params", {}))
         if sid in overrides:
-            prefer = overrides[sid].get("method", prefer)
-            params.update(overrides[sid].get("params", {}))
+            # 外部覆写(next_run 干预队列直通此处,不经 apply_change)必须过 registry 校验:
+            # 幻觉方法名若只是静默回退 recommend,用户会误以为覆写已生效;
+            # 幻觉/越界参数若直接 update 进计划,会进指纹并流向引擎 —— 都记 problems 拒绝带病上路
+            ov_method = overrides[sid].get("method")
+            if ov_method is not None and cap.method(ov_method) is None:
+                problems.append(f"第 {sid} 步({cap.name})覆写方法未知:{ov_method}"
+                                f"(候选:{[m.id for m in cap.methods]})")
+                ov_method = None
+            prefer = ov_method or prefer
+            patch = overrides[sid].get("params") or {}
+            if patch:
+                errors = cap.validate_params(patch)
+                if errors:
+                    problems.append(f"第 {sid} 步({cap.name})覆写参数校验失败:{errors}")
+                else:
+                    params.update(patch)
 
         if sid in cloud_done:
             # 云端已完成:不做可行性检查(本机缺 ISCE2/SNAPHU 不阻塞 HyP3 路线)
@@ -127,6 +141,24 @@ def fork_run(store: Store, parent_run_id: str, *, registry: dict[int, Capability
     parent_steps = {s.step_id: s for s in store.load_steps(parent_run_id)}
     tool_versions = probe.tool_versions()
 
+    # changes 先整体校验再落库(触发场景:API /fork 直接透传外部 changes —— LLM/用户
+    # 幻觉的方法名此前不经校验直接进 store;且原先边落库边校验,参数失败会留下半成品 run):
+    #   - 步骤号必须存在于父 run(静默忽略会让调用方误以为变更已生效)
+    #   - 方法名必须在候选集内(「只选不造」,与 stale.apply_change 同款校验)
+    #   - 参数走 registry 声明校验(未声明的参数名即幻觉参数,拒绝)
+    for sid, change in changes.items():
+        cap = registry.get(sid)
+        if cap is None or sid not in parent_steps:
+            raise ValueError(f"变更指向不存在的步骤 {sid}")
+        new_method = change.get("method")
+        if new_method is not None and cap.method(new_method) is None:
+            raise ValueError(f"未知方法 {new_method}(候选:{[m.id for m in cap.methods]})")
+        patch = change.get("params")
+        if patch:
+            errors = cap.validate_params(patch)
+            if errors:
+                raise ValueError(f"参数校验失败:{errors}")
+
     run_id = new_run_id("fork")
     store.create_run(run_id, parent["session_id"], workspace=parent["workspace"],
                      intent={"forked_from": parent_run_id, "changes": changes},
@@ -140,11 +172,7 @@ def fork_run(store: Store, parent_run_id: str, *, registry: dict[int, Capability
         old = parent_steps[sid]
         method = changes.get(sid, {}).get("method", old.method)
         params = dict(old.params)
-        params.update(changes.get(sid, {}).get("params", {}))
-        if params_patch := changes.get(sid, {}).get("params"):
-            errors = cap.validate_params(params_patch)
-            if errors:
-                raise ValueError(f"参数校验失败:{errors}")
+        params.update(changes.get(sid, {}).get("params", {}))  # 已在前置校验通过
         upstream = [evals[d] for d in cap.deps if d in evals]
         hashes = compute_step_hashes(cap, method, params, upstream, tool_versions)
         evals[sid] = hashes["eval_hash"]
