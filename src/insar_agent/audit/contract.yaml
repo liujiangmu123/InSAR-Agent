@@ -3,8 +3,8 @@
 #   1. 每个阈值必须带 source:upstream_default | literature | local_calibration
 #      后两者必须填 ref。
 #   2. status: PENDING 的阈值不参与硬 gate,只产出 warning。
-#   3. CI 守护测试:tests/test_runok_ladder.py::test_contract_discipline
-#      检查无 source 缺失、无 PENDING 被用作 on_fail=stop 的硬判定。
+#   3. CI 守护测试:tests/test_provenance.py::test_contract_discipline(纪律)
+#      + tests/test_audit_deep.py(加载报错/PENDING 行为全枝)。
 #
 # 当前诚实盘点(§4.13):只有 3 个 A 级来源,其余全部 PENDING 待标定/待查证。
 
