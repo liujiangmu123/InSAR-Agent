@@ -189,6 +189,7 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(version_router)             # 版本信息与更新检查(/api/version*)
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
     app.include_router(create_artifacts_router(store))  # 产物清单(/api/artifacts,文件面板数据源)
+    from insar_agent.api.data_router import create_data_router; app.include_router(create_data_router(store))  # 点位时序数据
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
