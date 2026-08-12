@@ -36,8 +36,9 @@ from insar_agent.planner.plan import PlanResult, make_plan
 from insar_agent.registry.capabilities import REGISTRY, topo_order
 from insar_agent.registry.model import Capability
 from insar_agent.report.script import write_run_script
+from insar_agent.runtime.backend_select import backend_for_step
 from insar_agent.runtime.executor import ExecContext, execute_step
-from insar_agent.runtime.jobs import LocalJobBackend
+from insar_agent.runtime.jobs import JobBackend, LocalJobBackend
 from insar_agent.runtime.probe import ProbeResult, probe_environment
 from insar_agent.runtime.stream import CancelToken
 
@@ -69,7 +70,9 @@ class Driver:
         self.registry = registry or REGISTRY
         self.contract = load_contract()
         self.brain = brain or Brain(None)
-        self.backend = backend or LocalJobBackend()
+        # 显式注入(测试/运维)则整个 run 固定用它;None = 每步按方法引擎选择
+        # (isce2/snaphu 且 WSL 可达 → WslJobBackend,见 runtime/backend_select)
+        self.backend = backend
         self.allow_simulated = allow_simulated
         self.bus = EventBus()
         self._probe = probe
@@ -102,9 +105,16 @@ class Driver:
         self.store.request_cancel(run_id)
         self.token_for(run_id).cancel()
 
-    def _exec_ctx(self) -> ExecContext:
+    def _backend_for(self, run: dict, cap: Capability, method_id: str) -> JobBackend:
+        m = cap.method(method_id)
+        return backend_for_step(engine=m.engine if m else "-",
+                                simulated=bool(run.get("simulated")),
+                                override=self.backend)
+
+    def _exec_ctx(self, backend: JobBackend | None = None) -> ExecContext:
         return ExecContext(
-            store=self.store, backend=self.backend, workspace=self.workspace,
+            store=self.store, backend=backend or self.backend or LocalJobBackend(),
+            workspace=self.workspace,
             registry=self.registry, builder=default_builder, contract=self.contract,
             emit=self._emit, poll=self._poll, startup_grace=self._startup_grace,
             idle_timeout_override=self._idle_override,
@@ -291,7 +301,9 @@ class Driver:
                 f"{cap.name} --method {step.method}", cap.name, open_=True))
 
             # 执行 + 并行动作轮询(KILL 即时响应,§1.7)
-            exec_task = asyncio.create_task(execute_step(self._exec_ctx(), run_id, sid, token))
+            backend = self._backend_for(run, cap, step.method)
+            exec_task = asyncio.create_task(
+                execute_step(self._exec_ctx(backend), run_id, sid, token))
             while not exec_task.done():
                 await asyncio.sleep(min(self._poll, 0.2))
                 for action in store.due_actions("steer"):

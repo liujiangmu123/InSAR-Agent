@@ -77,7 +77,11 @@ class StepResult:
 
 
 def _job_dir(ctx: ExecContext, run_id: str, step_id: int, attempt: int) -> Path:
-    return ctx.workspace / ".jobs" / run_id / f"s{step_id:02d}" / f"a{attempt}"
+    # 后端可宣告自己的作业目录根(WslJobBackend → \\wsl.localhost 下的 Linux fs,
+    # §4.8 9p 红线);未宣告的维持工作区 .jobs 原布局
+    job_root = getattr(ctx.backend, "job_root", None)
+    root = job_root(ctx.workspace) if callable(job_root) else ctx.workspace / ".jobs"
+    return root / run_id / f"s{step_id:02d}" / f"a{attempt}"
 
 
 async def execute_step(
