@@ -15,6 +15,8 @@
   3. 事件流不变量:干净全链的精确断言 + 所有用例复用同一检查器
   4. 失效传播:done 后 fork,science 改动在 3 个不同步位 + presentation 只重跑本步
   5. 随机化冒烟:seed=0 的 20 步随机干预序列,终态库自洽
+  6. 语义升级(2026-08-12 决策,正反例):末步 steer 收尾前消费(决策一)、
+     done run 重入防空转(决策二)、done-带待重跑的收尾明示(决策三)
 
 提速手段(纪律:单用例秒级,矩阵合计 <150s):注册表缩减为真实流水线的前 6 步
 (1→2→3→4→5→6,含 3 依赖 (1,2) 的汇聚边),全部 simulated 引擎,轮询 0.03s。
@@ -147,6 +149,9 @@ def assert_event_invariants(events: list[dict], *, terminal: str | None = None) 
     - overall 单调不减
     - 终态事件恰一次:result 与 report 成对且至多一次;terminal="done" 时恰一次,
       非正常终态(paused/interrupted/failed)时零次且必须有 warn/bad note 解释
+    - 语义升级(2026-08-12 决策三):done 回合的 report 之后允许(且仅允许)
+      提示 note 收尾 ——「done 但有待重跑步骤」时 driver 在 report 后补一条
+      待重跑提示;无待重跑时 report 仍是最后一个事件
     返回 {pairs, overall_max, n_result} 供用例做进一步断言。
     """
     open_step: int | None = None
@@ -190,7 +195,11 @@ def assert_event_invariants(events: list[dict], *, terminal: str | None = None) 
         f"终态事件必须成对且至多一次:result={n_result} report={n_report}"
     if terminal == "done":
         assert n_result == 1, "run 完成的回合必须恰有一次 result/report"
-        assert events and events[-1]["t"] == "report"
+        # 决策三(2026-08-12):report 后只允许提示 note(待重跑步骤明示),
+        # 其余事件仍必须出现在 report 之前 —— 原断言是 events[-1] 恰为 report
+        i_report = next(i for i, e in enumerate(events) if e["t"] == "report")
+        assert all(e["t"] == "note" for e in events[i_report + 1:]), \
+            "report 之后只允许提示 note(待重跑明示),不得再有其他事件"
     elif terminal in ("paused", "interrupted", "failed"):
         assert n_result == 0, f"{terminal} 回合不应发 result/report"
         assert any(e["t"] == "note" and e.get("tone") in ("warn", "bad") for e in events), \
@@ -842,3 +851,231 @@ def test_random_intervention_sequence_smoke(store, workspace):
         assert_store_consistent(store)
     except AssertionError:
         raise AssertionError(f"随机序列(seed=0)终态不自洽,操作轨迹:{trail}")
+
+
+# ===========================================================================
+# 6. 语义升级(2026-08-12 决策):每项正反例
+#    决策一:末步执行期间排队的 steer 在收尾前有最后一次消费点,不许静默遗留
+#            (可应用的应用并标脏;KILL/PAUSE/PLAY 已无作用对象 → 消费 + note)
+#    决策二:done 且无待跑步骤的 run 重入 → 不空转收尾(不重写 provenance/
+#            run.sh、不重发 result/report),一条 note 即返回;排队干预先消费
+#            (不吞),造出待跑步骤则本回合直接重跑;显式 step_ids 仍允许执行
+#    决策三:回合以 done 收尾但存在 stale/pending 步骤 → 维持 status=done
+#            (不引入新状态),result 前 note 列出待重跑步骤、report 后再补
+#            一条提示;provenance 照常导出
+# ===========================================================================
+
+def test_steer_during_last_step_consumed_before_finale(store, workspace):
+    """决策一正例:最后一步(第 6 步)执行期间排队的 SET_PARAMS 已无步间检查点
+    可消费 —— 旧语义静默遗留到该 run 的下一次 execute;新语义在收尾前的最后
+    消费点应用(标脏第 6 步),note 明示待重跑,续跑恰好只重跑第 6 步。"""
+    driver = make_driver(store, workspace)
+    run_id = plan_run(driver, "s1")
+
+    fired: dict = {}
+    events = asyncio.run(drive(
+        driver.execute("s1"),
+        on_event=lambda e: (e["t"] == "step.start" and e["stepId"] == 6 and push_once(
+            fired, "steer", lambda: store.push_action(
+                scope="step", target="6", action="SET_PARAMS",
+                payload={"params": {"min_coherence": 0.4}},
+                deliver_as="steer", run_id=run_id)))))
+    assert_event_invariants(events, terminal="done")
+    # 核心:动作在本回合被消费(旧语义:悬挂到下一次 execute 才生效)
+    assert not store.due_actions("steer", run_id=run_id)
+    # 干预事件出现在最后一步 step.end 之后(收尾消费点)
+    idx_end6 = max(i for i, e in enumerate(events)
+                   if e["t"] == "step.end" and e["stepId"] == 6)
+    itv = [i for i, e in enumerate(events) if e["t"] == "intervention"]
+    assert len(itv) == 1 and itv[0] > idx_end6, "末步 steer 必须在收尾前消费"
+    # 参数已应用、第 6 步标脏;run 维持 done(决策三:不引入新状态)
+    step6 = store.load_step(run_id, 6)
+    assert step6.params["min_coherence"] == 0.4 and step6.state == "stale"
+    assert store.get_run(run_id)["status"] == "done"
+    assert any(e["t"] == "note" and "待重跑" in e["text"] for e in events)
+
+    # 续跑闭环:恰好只重跑第 6 步
+    events2 = asyncio.run(collect(driver.execute("s1")))
+    assert_event_invariants(events2, terminal="done")
+    assert {e["stepId"] for e in events2 if e["t"] == "step.start"} == {6}
+    assert command_counts(store, run_id) == {1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 2}
+    assert all(s.state == "done" for s in store.load_steps(run_id))
+    assert_store_consistent(store)
+
+
+def test_kill_after_last_step_completion_consumed_as_noop(store, workspace):
+    """决策一正例(KILL 分支):KILL 在最后一步完成后到达(错过泵内即时消费
+    窗口)—— 已无可取消对象:消费 + note 说明,不落 control 位,run 照常以
+    done 收尾;下一次 execute 不被遗留的 KILL 误拦成 interrupted。"""
+    driver = make_driver(store, workspace)
+    run_id = plan_run(driver, "s1")
+
+    fired: dict = {}
+    events = asyncio.run(drive(
+        driver.execute("s1"),
+        on_event=lambda e: (e["t"] == "step.end" and e["stepId"] == 6 and push_once(
+            fired, "kill", lambda: store.push_action(
+                scope="run", target=run_id, action="KILL",
+                deliver_as="steer", run_id=run_id)))))
+    assert_event_invariants(events, terminal="done")
+    assert not store.due_actions("steer", run_id=run_id)  # 已消费,不遗留
+    assert any(e["t"] == "note" and "KILL" in e["text"] and "无可作用对象" in e["text"]
+               for e in events)
+    run = store.get_run(run_id)
+    assert run["status"] == "done"      # 步骤都完成了:不是 interrupted
+    assert run["control"] == "running"  # 不落 control 位
+    assert all(s.state == "done" for s in store.load_steps(run_id))
+
+    # 反向守护:重入不被旧 KILL 拦截(决策二:空转防护 note,零终态重发)
+    events2 = asyncio.run(collect(driver.execute("s1")))
+    assert store.get_run(run_id)["status"] == "done"
+    assert not any(e["t"] in ("result", "report") for e in events2)
+    assert_store_consistent(store)
+
+
+def test_pause_after_last_step_completion_not_paused(store, workspace):
+    """决策一正例(PAUSE 分支):最后一步完成后到达的 PAUSE 已无可暂停对象 ——
+    消费 + note,run 收尾 done 而非 paused(不把完成的 run 翻回暂停态)。"""
+    driver = make_driver(store, workspace)
+    run_id = plan_run(driver, "s1")
+
+    fired: dict = {}
+    events = asyncio.run(drive(
+        driver.execute("s1"),
+        on_event=lambda e: (e["t"] == "step.end" and e["stepId"] == 6 and push_once(
+            fired, "pause", lambda: store.push_action(
+                scope="run", target=run_id, action="PAUSE",
+                deliver_as="steer", run_id=run_id)))))
+    assert_event_invariants(events, terminal="done")
+    assert not store.due_actions("steer", run_id=run_id)
+    assert any(e["t"] == "note" and "PAUSE" in e["text"] for e in events)
+    assert store.get_run(run_id)["status"] == "done"  # 不是 paused
+    assert_store_consistent(store)
+
+
+def test_execute_done_run_again_is_note_only_no_replay(store, workspace):
+    """决策二正例:done 且无待跑步骤的 run 重入 → 一条 note 即返回:
+    不重发 result/report(前端不重复渲染终态卡)、不重写 provenance/run.sh、
+    零步骤/命令级新效果;反例对照:首回合(有待跑步骤)照常完整收尾。"""
+    driver = make_driver(store, workspace)
+    run_id = plan_run(driver, "s1")
+    events1 = asyncio.run(collect(driver.execute("s1")))
+    assert_event_invariants(events1, terminal="done")  # 反例面:首回合完整收尾
+    prov_before = (workspace / "provenance.json").read_bytes()
+    sh_before = (workspace / "run.sh").read_bytes()
+
+    events2 = asyncio.run(collect(driver.execute("s1")))
+    assert_event_invariants(events2)
+    kinds = {e["t"] for e in events2}
+    assert "result" not in kinds and "report" not in kinds
+    assert "step.start" not in kinds
+    assert any(e["t"] == "note" and "已完成" in e["text"] and "重跑" in e["text"]
+               for e in events2)
+    # 账本零重写(字节级),命令账本零增长
+    assert (workspace / "provenance.json").read_bytes() == prov_before
+    assert (workspace / "run.sh").read_bytes() == sh_before
+    assert command_counts(store, run_id) == {sid: 1 for sid in MATRIX_STEPS}
+    assert store.get_run(run_id)["status"] == "done"
+    assert_store_consistent(store)
+
+
+def test_execute_done_run_explicit_step_ids_still_runs(store, workspace):
+    """决策二反例(豁免):显式 step_ids 指定时仍允许执行(重验证场景)——
+    不走「已完成」短路,回合正常收尾(result/report 恰一次);已 VERIFIED 的
+    步骤由执行器幂等守卫快速走查,不重复启动作业(命令账本不增长)。"""
+    driver = make_driver(store, workspace)
+    run_id = plan_run(driver, "s1")
+    asyncio.run(collect(driver.execute("s1")))
+
+    events = asyncio.run(collect(driver.execute("s1", run_id=run_id, step_ids=[6])))
+    assert_event_invariants(events, terminal="done")
+    assert [e["stepId"] for e in events if e["t"] == "step.start"] == [6]
+    assert command_counts(store, run_id)[6] == 1  # 重验证 ≠ 重启动
+    assert store.get_run(run_id)["status"] == "done"
+    assert_store_consistent(store)
+
+
+def test_execute_done_run_with_queued_steer_applies_and_reruns(store, workspace):
+    """决策二正例(不吞干预):done run 上排队的 SET_PARAMS(science,第 4 步)
+    在重入时入口消费:标脏 4-6 并在本回合直接重跑 —— 不是「note 后让用户再
+    点一次」;动作不悬挂,账本闭合。"""
+    driver = make_driver(store, workspace)
+    run_id = plan_run(driver, "s1")
+    asyncio.run(collect(driver.execute("s1")))
+    store.push_action(scope="step", target="4", action="SET_PARAMS",
+                      payload={"params": {"range_looks": 12}},
+                      deliver_as="steer", run_id=run_id)
+
+    events = asyncio.run(collect(driver.execute("s1")))
+    assert_event_invariants(events, terminal="done")
+    assert not store.due_actions("steer", run_id=run_id)
+    assert any(e["t"] == "intervention" for e in events)
+    assert {e["stepId"] for e in events if e["t"] == "step.start"} == {4, 5, 6}
+    assert store.load_step(run_id, 4).params["range_looks"] == 12
+    assert command_counts(store, run_id) == {1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 6: 2}
+    assert all(s.state == "done" for s in store.load_steps(run_id))
+    assert_store_consistent(store)
+
+
+def test_execute_done_run_with_queued_follow_up_not_stranded(store, workspace):
+    """决策二正例(follow_up 不悬挂):run 已 done 后才入队的 follow_up 错过了
+    它的天然消费点(run 收尾)—— 重入时入口消费并直接重跑,不被「已完成」
+    短路吞掉(旧语义会在空转收尾里消费它,新语义必须显式接住)。"""
+    driver = make_driver(store, workspace)
+    run_id = plan_run(driver, "s1")
+    asyncio.run(collect(driver.execute("s1")))
+    store.push_action(scope="step", target="6", action="RESET",
+                      deliver_as="follow_up", run_id=run_id)
+
+    events = asyncio.run(collect(driver.execute("s1")))
+    assert_event_invariants(events, terminal="done")
+    assert not store.due_actions("follow_up", run_id=run_id)
+    assert {e["stepId"] for e in events if e["t"] == "step.start"} == {6}
+    assert command_counts(store, run_id)[6] == 2
+    assert all(s.state == "done" for s in store.load_steps(run_id))
+    assert_store_consistent(store)
+
+
+def test_done_with_stale_finale_notes_list_waiting_steps(store, workspace):
+    """决策三正例:执行中对已完成第 1 步 SET_PARAMS(science)→ 本回合以 done
+    收尾但 1-3 待重跑:result 前的 note 明确列出待重跑步骤,report 之后恰好
+    再跟提示 note;run 状态仍是 done(不引入新状态),provenance 照常导出。"""
+    driver = make_driver(store, workspace)
+    run_id = plan_run(driver, "s1")
+
+    fired: dict = {}
+    events = asyncio.run(drive(
+        driver.execute("s1"),
+        on_event=lambda e: (e["t"] == "step.start" and e["stepId"] == 3 and push_once(
+            fired, "steer", lambda: store.push_action(
+                scope="step", target="1", action="SET_PARAMS",
+                payload={"params": {"scenes": 9}},
+                deliver_as="steer", run_id=run_id)))))
+    assert_event_invariants(events, terminal="done")
+    kinds = [e["t"] for e in events]
+    i_result, i_report = kinds.index("result"), kinds.index("report")
+    # result 之前:列出待重跑步骤(1、2、3 = 干预时已 done 又被标脏的)
+    pre = [e for e in events[:i_result] if e["t"] == "note" and "待重跑" in e["text"]]
+    assert pre and "1、2、3" in pre[-1]["text"]
+    # report 之后:只有提示 note,且确有一条提到待重跑
+    tail = events[i_report + 1:]
+    assert tail and all(e["t"] == "note" for e in tail)
+    assert any("待重跑" in e["text"] for e in tail)
+    assert store.get_run(run_id)["status"] == "done"
+    assert (workspace / "provenance.json").exists()
+    states = {s.step_id: s.state for s in store.load_steps(run_id)}
+    assert states[1] == states[2] == states[3] == "stale"
+    assert_store_consistent(store)
+
+
+def test_clean_done_finale_has_no_waiting_notes(store, workspace):
+    """决策三反例:无待重跑步骤的干净收尾 —— report 仍是最后一个事件,
+    全程不出现「待重跑」提示(不给前端造 note 噪声)。"""
+    driver = make_driver(store, workspace)
+    run_id = plan_run(driver, "s1")
+    events = asyncio.run(collect(driver.execute("s1")))
+    assert_event_invariants(events, terminal="done")
+    assert events[-1]["t"] == "report"
+    assert not any(e["t"] == "note" and "待重跑" in e["text"] for e in events)
+    assert store.get_run(run_id)["status"] == "done"
+    assert_store_consistent(store)
