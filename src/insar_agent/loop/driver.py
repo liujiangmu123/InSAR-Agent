@@ -318,6 +318,29 @@ class Driver:
                            ) -> AsyncIterator[dict]:
         store = self.store
         run = store.get_run(run_id) or {}
+
+        def _waiting_steps() -> list[int]:
+            return [s.step_id for s in store.load_steps(run_id)
+                    if s.state in ("pending", "stale", "interrupted",
+                                   "orphaned", "running")]
+
+        # ---- done run 重入防空转(2026-08-12 干预矩阵决策二) ----
+        # 此前对 status=done 且无待跑步骤的 run 再次 execute 会空转收尾:重写
+        # provenance/run.sh、重发 result/report(前端重复渲染终态卡)。现在:
+        # 无待跑步骤时先消费排队干预(不吞:steer 与 follow_up 此刻都已到期),
+        # 消费后仍无待跑步骤 → 一条 note 说明后直接返回;干预造出了待跑步骤
+        # (SET_PARAMS 标脏/RESET 复位)→ 照常进入执行,本回合直接重跑。
+        # 已有待跑步骤(如上一回合遗留的 stale)不走入口消费,由步间检查点按
+        # 原语义消费(KILL 在那里仍是取消)。显式 step_ids 不走此检查(重验证)。
+        if step_ids is None and run.get("status") == "done" and not _waiting_steps():
+            for deliver_as in ("steer", "follow_up"):
+                async for event in self._consume_actions_idle(run_id, deliver_as):
+                    yield event
+            if not _waiting_steps():
+                yield self._emit(ev.note(
+                    "ok", "run 已完成,无待跑步骤;改参数或 RESET 后可重跑"
+                          "(显式指定 step_ids 可重验证)"))
+                return
         store.set_run_status(run_id, "running")
 
         # 待跑集合:显式指定,或 pending+stale+interrupted+orphaned+running
@@ -474,6 +497,15 @@ class Driver:
                 yield self._emit(ev.note("bad", f"同类失败已连续 {consecutive_failures[fc]} 次,停链问人(§3.3)"))
             return
 
+        # ---- 收尾前的最后一次 steer 消费点(2026-08-12 干预矩阵决策一) ----
+        # 最后一步执行期间排队的 steer(KILL 除外 —— 泵内每 poll 即时消费)
+        # 此前没有检查点可消费,会静默遗留到该 run 的下一次 execute 才生效,
+        # 用户体感是「干预被吞了」。现在收尾前统一消费:能应用的应用(标脏/
+        # 复位,由下方「待重跑」note 说明将在续跑时生效);KILL/PAUSE/PLAY
+        # 已无作用对象,消费并 note 说明,不许静默遗留。
+        async for event in self._consume_actions_idle(run_id, "steer"):
+            yield event
+
         # ---- 收尾:重解析 → 账本 → 报告(try/finally 语义由 executor 层保证过程留痕) ----
         verify_results = verify_metrics(store, run_id, self.workspace)
         bad_metrics = [r for r in verify_results if not r["ok"]]
@@ -492,10 +524,25 @@ class Driver:
             for event in outcome.events:
                 yield self._emit(event)
 
+        # ---- 「done 但有待重跑」的明示(2026-08-12 干预矩阵决策三) ----
+        # 执行中(或收尾前消费点)对已完成步骤 SET_PARAMS/RESET 后,本回合仍以
+        # done 收尾、脏步骤留待续跑 —— 不引入新 run 状态(schema 不动),用
+        # note 消除「done = 全部最新」的误读:result 前列出待重跑步骤,report
+        # 后再补一条提示;provenance 照常导出(它反映本次执行的事实)。
+        waiting = sorted(s.step_id for s in store.load_steps(run_id)
+                         if s.state in ("pending", "stale"))
+        waiting_text = "、".join(str(sid) for sid in waiting)
+        if waiting:
+            yield self._emit(ev.note(
+                "warn", f"run 已完成,但第 {waiting_text} 步因干预待重跑:当前产物"
+                        f"仍对应干预前的配置,再次执行将只重跑这些步骤"))
         yield self._emit(ev.result())
         yield self._emit(ev.note(
             "ok", f"provenance: {prov_path.name} · 等价命令: {script_path.name}"))
         yield self._emit(ev.report())
+        if waiting:
+            yield self._emit(ev.note(
+                "warn", f"提示:第 {waiting_text} 步待重跑,续跑后结果才反映最新配置"))
 
     # ---------------- 干预消费 / 恢复 ----------------
 
@@ -515,6 +562,40 @@ class Driver:
                 self.store.append_trace(run_id=run_id, step_no=current_step,
                                         revision_trigger="intervention",
                                         observation=outcome.message)
+                yield self._emit(event)
+
+    async def _consume_actions_idle(self, run_id: str,
+                                    deliver_as: str) -> AsyncIterator[dict]:
+        """「已无在跑/待跑步骤」语境下的干预消费(2026-08-12 干预矩阵决策一/二)。
+
+        两处调用:回合收尾前的最后一次 steer 消费点(决策一:末步执行期间排队
+        的 steer 此前没有检查点可消费,会静默遗留到下一次 execute);done run
+        重入的入口消费(决策二:不吞排队干预)。
+
+        与 _consume_steer 的差别 —— 此刻没有「当前/下一步」可言:
+        - KILL/PAUSE/PLAY 已无作用对象:消费 + note 说明,不落 control 位、
+          不改 run 状态(否则遗留的 KILL 会误拦下一次 execute,PAUSE 会把
+          已完成的 run 翻回 paused);
+        - 状态类动作(SET_PARAMS/SET_METHOD/RESET/SKIP)照常应用:标脏/复位
+          即刻入库,由收尾处的「待重跑」note 说明将在续跑时生效(决策三)。
+        纪律:凡到期动作,本回合必消费、必留痕,不许静默遗留。
+        """
+        store = self.store
+        for action in store.due_actions(deliver_as, run_id=run_id):
+            kind = action["action"]
+            if kind in ("KILL", "PAUSE", "PLAY"):
+                store.consume_action(action["id"])
+                yield self._emit(ev.note(
+                    "warn", f"{kind} 干预到达时已无在跑/待跑步骤,无可作用对象,"
+                            f"已消费(不遗留到下一回合)"))
+                continue
+            outcome = apply_action(store, run_id, action, registry=self.registry,
+                                   tool_versions=self.probe().tool_versions())
+            store.consume_action(action["id"])
+            for event in outcome.events:
+                store.append_trace(run_id=run_id, step_no=None,
+                                   revision_trigger="intervention",
+                                   observation=outcome.message)
                 yield self._emit(event)
 
     async def resume(self, session_id: str) -> AsyncIterator[dict]:
