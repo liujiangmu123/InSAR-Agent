@@ -21,12 +21,13 @@ pub fn setup_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>
     app.plugin(tauri_plugin_global_shortcut::Builder::new().build())?;
 
     let toggle = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyI);
-    app.global_shortcut().on_shortcut(toggle, |app, _shortcut, event| {
-        // 只响应按下沿;Released 忽略,避免一次按键触发两次切换
-        if event.state == ShortcutState::Pressed {
-            toggle_main_window(app);
-        }
-    })?;
+    app.global_shortcut()
+        .on_shortcut(toggle, |app, _shortcut, event| {
+            // 只响应按下沿;Released 忽略,避免一次按键触发两次切换
+            if event.state == ShortcutState::Pressed {
+                toggle_main_window(app);
+            }
+        })?;
     Ok(())
 }
 

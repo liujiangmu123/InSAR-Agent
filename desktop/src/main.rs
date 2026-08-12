@@ -260,10 +260,11 @@ fn open_window(handle: &AppHandle, label: &str, title: &str, url: String, size: 
                 return;
             }
         };
-        let built = WebviewWindowBuilder::new(&handle_, label.as_str(), WebviewUrl::External(parsed))
-            .title(title.as_str())
-            .inner_size(size.0, size.1)
-            .build();
+        let built =
+            WebviewWindowBuilder::new(&handle_, label.as_str(), WebviewUrl::External(parsed))
+                .title(title.as_str())
+                .inner_size(size.0, size.1)
+                .build();
         if let Err(e) = built {
             eprintln!("[desktop] 创建窗口失败:{e}");
             handle_.exit(1);
@@ -300,7 +301,13 @@ fn show_diagnostics(
     workdir: &Path,
 ) {
     eprintln!("[desktop] 启动失败:{error}");
-    match serve_html(diagnostics_html(error, backend_desc, launch_desc, port, workdir)) {
+    match serve_html(diagnostics_html(
+        error,
+        backend_desc,
+        launch_desc,
+        port,
+        workdir,
+    )) {
         Ok(diag_port) => open_window(
             handle,
             "diagnostics",

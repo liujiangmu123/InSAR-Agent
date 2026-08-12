@@ -66,12 +66,16 @@ fn load() -> Option<WindowState> {
 /// 原子写:先写同目录 `.tmp` 再 rename 覆盖,避免关机/崩溃时留下半个 JSON。
 /// 所有失败都静默——窗口状态属于「锦上添花」,绝不为它打扰用户。
 fn save(state: &WindowState) {
-    let Some(path) = state_file_path() else { return };
+    let Some(path) = state_file_path() else {
+        return;
+    };
     let Some(dir) = path.parent() else { return };
     if fs::create_dir_all(dir).is_err() {
         return;
     }
-    let Ok(json) = serde_json::to_string_pretty(state) else { return };
+    let Ok(json) = serde_json::to_string_pretty(state) else {
+        return;
+    };
     let tmp = path.with_extension("json.tmp");
     if fs::write(&tmp, json.as_bytes()).is_ok() {
         let _ = fs::rename(&tmp, &path);
@@ -97,7 +101,12 @@ fn monitor_rects(window: &WebviewWindow) -> Vec<Rect> {
                 .map(|m| {
                     let p = m.position();
                     let s = m.size();
-                    Rect { x: p.x, y: p.y, w: s.width as i32, h: s.height as i32 }
+                    Rect {
+                        x: p.x,
+                        y: p.y,
+                        w: s.width as i32,
+                        h: s.height as i32,
+                    }
                 })
                 .filter(|r| r.w > 0 && r.h > 0)
                 .collect()
@@ -145,7 +154,13 @@ fn clamp_to_monitors(state: WindowState, monitors: &[Rect]) -> WindowState {
     let height = state.height.min(target.h as u32);
     let x = state.x.clamp(target.x, target.x + target.w - width as i32);
     let y = state.y.clamp(target.y, target.y + target.h - height as i32);
-    WindowState { x, y, width, height, ..state }
+    WindowState {
+        x,
+        y,
+        width,
+        height,
+        ..state
+    }
 }
 
 // ---------------- 公开接口 ----------------
@@ -200,7 +215,10 @@ fn snapshot_merged(window: &WebviewWindow, prev: WindowState) -> Option<WindowSt
     }
     let maximized = window.is_maximized().ok()?;
     if maximized {
-        return Some(WindowState { maximized: true, ..prev });
+        return Some(WindowState {
+            maximized: true,
+            ..prev
+        });
     }
     let pos = window.outer_position().ok()?;
     let size = window.inner_size().ok()?;
@@ -219,12 +237,22 @@ fn snapshot_merged(window: &WebviewWindow, prev: WindowState) -> Option<WindowSt
 /// 开始追踪窗口几何变化并持久化(注册 Tauri 2 WindowEvent 监听,
 /// 监听随窗口销毁自动解除)。窗口创建后调用一次,通常紧跟 [`restore`]。
 pub fn track(window: &WebviewWindow) {
-    let fallback = WindowState { x: 100, y: 100, width: 1440, height: 900, maximized: false };
+    let fallback = WindowState {
+        x: 100,
+        y: 100,
+        width: 1440,
+        height: 900,
+        maximized: false,
+    };
     let base = load().unwrap_or(fallback);
     let init = snapshot_merged(window, base).unwrap_or(base);
 
     let win = window.clone();
-    let tracker = Mutex::new(Tracker { state: init, dirty: false, last_write: None });
+    let tracker = Mutex::new(Tracker {
+        state: init,
+        dirty: false,
+        last_write: None,
+    });
     window.on_window_event(move |event| {
         let Ok(mut t) = tracker.lock() else { return };
         match event {

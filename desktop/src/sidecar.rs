@@ -227,7 +227,10 @@ impl RollingLog {
 
     fn ensure_open(&mut self) -> std::io::Result<()> {
         if self.file.is_none() {
-            let f = OpenOptions::new().create(true).append(true).open(&self.path)?;
+            let f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)?;
             self.written = f.metadata().map(|m| m.len()).unwrap_or(0);
             self.file = Some(f);
         }

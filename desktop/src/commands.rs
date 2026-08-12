@@ -25,7 +25,11 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[tauri::command]
 pub async fn pick_directory(title: String) -> Option<String> {
     let trimmed = title.trim();
-    let dialog_title = if trimmed.is_empty() { "选择目录" } else { trimmed };
+    let dialog_title = if trimmed.is_empty() {
+        "选择目录"
+    } else {
+        trimmed
+    };
     rfd::AsyncFileDialog::new()
         .set_title(dialog_title)
         .pick_folder()
