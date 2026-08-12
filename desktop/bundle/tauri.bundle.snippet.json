@@ -1,0 +1,26 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "InSAR-Agent 项目组",
+    "shortDescription": "InSAR 形变监测智能体桌面版",
+    "longDescription": "InSAR-Agent 桌面版:内置 Python 分析后端的卫星雷达形变监测智能体,开箱即用的桌面工作台。",
+    "icon": [
+      "icons/icon.ico",
+      "icons/128x128.png",
+      "icons/32x32.png"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false,
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  }
+}

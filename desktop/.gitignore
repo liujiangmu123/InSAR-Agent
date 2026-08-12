@@ -1,1 +1,6 @@
 /target
+
+# 图标为生成物(icons/make_icons.py 占位图或 cargo-tauri icon 设计稿输出),
+# 正式设计稿定稿入库时再移除以下忽略
+/icons/*.png
+/icons/icon.ico
