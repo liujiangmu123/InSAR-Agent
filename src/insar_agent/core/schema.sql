@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS runs (
   parent_run_id TEXT,                              -- run fork(PI_FRAMEWORK absorb-E5)
   created_at    REAL NOT NULL,
   status        TEXT NOT NULL DEFAULT 'planning',  -- planning|running|paused|done|failed|interrupted
+  control       TEXT NOT NULL DEFAULT 'running',   -- running|cancel_requested(取消是控制位不是状态,absorb-E3)
   intent        TEXT,                              -- JSON 结构化意图
   scenario      TEXT,
   workspace     TEXT NOT NULL,

@@ -176,6 +176,26 @@ class Store:
         with self.db.tx() as cur:
             cur.execute("UPDATE runs SET status=? WHERE run_id=?", (status, run_id))
 
+    # ---- 取消 control 位(absorb-E3,pi harness「abort 是 control 位不是状态」) ----
+
+    def request_cancel(self, run_id: str) -> None:
+        """落盘取消意图(幂等)。control 位与 status 分离:已在途的作业照常结算,
+        只禁止发起新效果;服务重启后意图不丢 —— resume/execute 读到
+        cancel_requested 就不再启动新步骤,直接把 run 收尾为 interrupted。"""
+        with self.db.tx() as cur:
+            cur.execute("UPDATE runs SET control='cancel_requested' WHERE run_id=?",
+                        (run_id,))
+
+    def clear_cancel(self, run_id: str) -> None:
+        """取消意图已兑现(run 已收尾 interrupted):control 复位 running,
+        之后用户显式重跑不再被旧意图拦截。"""
+        with self.db.tx() as cur:
+            cur.execute("UPDATE runs SET control='running' WHERE run_id=?", (run_id,))
+
+    def cancel_requested(self, run_id: str) -> bool:
+        r = self.db.query_one("SELECT control FROM runs WHERE run_id=?", (run_id,))
+        return bool(r) and r["control"] == "cancel_requested"
+
     def latest_run(self, session_id: str) -> dict | None:
         r = self.db.query_one(
             "SELECT * FROM runs WHERE session_id=? ORDER BY created_at DESC LIMIT 1",
@@ -300,8 +320,14 @@ class Store:
         return True, None
 
     def mark_step(self, run_id: str, step_id: int, *, state: str,
-                  failure_class: str | None = None, **fields: Any) -> None:
-        """终态/中间态标记(不推进 stage)。"""
+                  failure_class: str | None = None, expect_stage: str | None = None,
+                  **fields: Any) -> None:
+        """终态/中间态标记(不推进 stage)。
+
+        expect_stage 提供时做 CAS(absorb-E6 外部终结):行必须仍处于该 stage,
+        否则 StageConflict —— 活跃执行器若已推进,终结者是竞争的输者,必须自停,
+        绝不覆写别人的推进。
+        """
         sets = ["state=?"]
         vals: list[Any] = [state]
         if failure_class is not None:
@@ -313,9 +339,19 @@ class Store:
             sets.append(f"{key}=?")
             vals.append(value)
         with self.db.tx() as cur:
-            cur.execute(
-                f"UPDATE steps SET {', '.join(sets)} WHERE run_id=? AND step_id=?",
-                tuple(vals) + (run_id, step_id))
+            if expect_stage is None:
+                cur.execute(
+                    f"UPDATE steps SET {', '.join(sets)} WHERE run_id=? AND step_id=?",
+                    tuple(vals) + (run_id, step_id))
+            else:
+                cur.execute(
+                    f"UPDATE steps SET {', '.join(sets)}"
+                    " WHERE run_id=? AND step_id=? AND stage=?",
+                    tuple(vals) + (run_id, step_id, expect_stage))
+                if cur.rowcount == 0:
+                    raise StageConflict(
+                        f"step {run_id}/{step_id}: stage moved past {expect_stage},"
+                        " refusing to overwrite")
 
     def set_step_config(self, run_id: str, step_id: int, *, method: str, params: dict,
                         hashes: dict) -> None:

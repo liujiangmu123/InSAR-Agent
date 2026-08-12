@@ -30,6 +30,7 @@ from insar_agent.core.store import Store
 from insar_agent.loop.driver import Driver
 from insar_agent.planner.feasibility import narrow_methods
 from insar_agent.planner.plan import fork_run
+from insar_agent.api.admin_router import create_admin_router
 from insar_agent.api.setup_router import create_setup_router
 from insar_agent.api.version_router import router as version_router
 from insar_agent.registry.capabilities import PIPELINE, REGISTRY
@@ -94,6 +95,7 @@ def create_app(home: Path | None = None) -> FastAPI:
     app = FastAPI(title="insar-agent", version="0.1.0")
     app.include_router(create_setup_router(home))  # 环境向导(/api/setup/*,settings.json 与 DB 同目录)
     app.include_router(version_router)             # 版本信息与更新检查(/api/version*)
+    app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
 
     def driver_of(session_id: str) -> Driver:
         if session_id not in drivers:
