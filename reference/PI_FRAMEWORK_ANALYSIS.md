@@ -285,27 +285,409 @@ pi 核心无子代理,官方示例用扩展实现(`examples/extensions/subagent/
 
 ---
 
-## 3. 基于 pi 的项目如何用 pi(openclaw / pi-chat)
+## 3. Pi 生态周边(2025-2026 现状)
 
-*(后台源码探查进行中,本节待补:openclaw 的 pi 会话驱动方式、多渠道网关与会话解耦、
-memory/heartbeat/cron 实现、长任务与会话恢复机制;pi-chat 的定位与差异。)*
+> 本节回答三件事:pi 本体这一年发生了什么;谁在生产环境用它、怎么用;生态里有什么值得抄。
+> 证据混合:本地克隆(pi / openclaw / pi-chat,2026-08-12)+ 网络调研,网络来源随文给链接。
+
+### 3.1 pi 本体:从个人项目到 Earendil(近一年时间线)
+
+| 时间 | 事件 | 出处 |
+|---|---|---|
+| 2025-11-12 | `@mariozechner/pi-coding-agent` npm 首发(badlogic/pi-mono 时期) | [npm](https://www.npmjs.com/package/@mariozechner/pi-coding-agent) |
+| 2025-11-24 | Peter Steinberger 以 pi 为 agent 内核发布 Warelay(即后来的 OpenClaw),两个月内冲到数十万 star,pi 随之出圈 | §3.2 |
+| 2025-11-30 | 设计宣言《What I learned building an opinionated and minimal coding agent》,含 Terminal-Bench 2.0 上与 Codex/Cursor/Windsurf 的对比跑分 | [mariozechner.at](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/) |
+| 2026-04-08 | **Earendil Inc.(Armin Ronacher 与 Colin Hanna 2025 年创立的公益公司)收购 pi 项目**,Mario Zechner 成为主要股东与团队成员;同日 Mario 发《I've sold out》;Earendil 支持者含 Steinberger、Sentry/Slack/Revolut/n8n 创始人 | [公告](https://earendil.com/posts/announcing-pi-and-lefos/)、[博客索引](https://mariozechner.at/) |
+| 2026-05-07 | npm scope 迁移:`@mariozechner/*`(止于 0.73.1)→ `@earendil-works/*`(0.74.0 起);仓库为 earendil-works/pi | [npm](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) |
+| 2026-08-07 | 最新 0.84.1;周下载约 165 万、483 个依赖包;官方文档站 [pi.dev](https://pi.dev/),Discord 设包分享频道 | 同上 |
+
+**文章/演讲(近一年,按时间):**
+《Prompts are code, .json/.md files are state》(2025-06-02)、《MCP vs CLI: Benchmarking Tools for
+Coding Agents》(2025-08-15)、《What if you don't need MCP at all?》(2025-11-02,pi 无 MCP 决策的论据)、
+pi 设计宣言(2025-11-30)、《Thoughts on slowing the fuck down》(2026-03-25,解释 pi 的慢开发哲学)、
+《I've sold out》(2026-04-08,收购当日);演讲《Building pi in a World of Slop》(2026);
+[Pragmatic Engineer 播客 2026-04-29](https://newsletter.pragmaticengineer.com/p/building-pi-and-what-makes-self-modifying)
+(与 Armin Ronacher 对谈:pi 因 Claude Code 加功能后行为不可预测而生,「少加功能=行为稳定」;
+pi 定位是「让造专用 harness 变得容易」);Armin Ronacher 2026-02-02
+《Pi: The Minimal Agent Within OpenClaw》([lucumr.pocoo.org](https://lucumr.pocoo.org/))。
+
+**仓库近一年机制演进亮点(本地克隆 CHANGELOG 核验,补 §1-2 的静态视角):**
+
+1. **会话层大改:v4 lane-based Session**(`pi/packages/agent/CHANGELOG.md:19-42`,0.84.0,2026-08-06)
+   ——durable operation records、global facts、共享序列号、树作用域 lane 视图;旧 JSONL/内存后端全部
+   换成实现统一 `SessionRepo` 契约的 v4 版;**为原子 JSONL 发布把 `renameFile()`(同文件系统替换语义)
+   写进执行环境接口**——我们已吸收的「tmp+rename 原子写」在 pi 里被上升为接口契约。
+2. **AgentHarness 仍在实现中**:0.84.0 提供 compile-complete 脚手架,未完成路径抛
+   `HarnessNotImplemented`(`agent/CHANGELOG.md:32`)——印证 §2.2 的判断:harness.md 是规范先行,
+   我们抄的是规范而非等它的实现。
+3. **恢复查询进接口**:带索引的 `Session.findOpenOperations()` + `RecordQuery.operationKind` 过滤
+   (`agent/CHANGELOG.md:34`)——§2.4「0/1/2 个未完成操作=空闲/可恢复/损坏」的落地。
+4. **RPC/JSON 事件改增量**:`message_update` 只发 `assistantMessageEvent` delta,删除累计 `message`
+   字段;原设计每个 delta 都带全量消息,输出随消息长度二次方增长
+   (`pi/packages/coding-agent/CHANGELOG.md:66`,#7290)。→ 直接教训:**流式事件只发增量,
+   `message_end` 才是权威全量**(吸收为 F3)。
+5. **实验性约束采样**:`PI_EXPERIMENTAL=1` 下对 read/bash/edit/write 启用 strict JSON-schema
+   constrained sampling(`coding-agent/CHANGELOG.md:8`,Unreleased)——工具参数在采样阶段就受
+   schema 约束。→ 对我们 brain/select:本地部署 14B 时用 vLLM guided_json / llama.cpp GBNF
+   把「候选集选择题」的值域错误在采样层杜绝,与 E9(截断整体拒绝)互补(吸收为 F6)。
+6. **新增包**:protocol / server / client / session-backends(sqlite-node)/ evals
+   (本地 `pi/packages/` 目录)——官方把「远程会话 + SQLite 会话后端」提上主线,TUI 降为众多前端之一。
+
+### 3.2 OpenClaw(原 Clawdbot / Moltbot):pi 之上最大的生产项目
+
+**现名查证**:五个名字三个月——Warelay(2025-11-24 首发)→ CLAWDIS(2025-12-03)→ Clawdbot
+(2026-01-02)→ Moltbot(2026-01-27,Anthropic 商标施压,作者自述「非我所愿」)→ **OpenClaw**
+(2026-01-30 至今)([Wikipedia](https://en.wikipedia.org/wiki/OpenClaw))。GitHub
+[openclaw/openclaw](https://github.com/openclaw/openclaw) 约 38 万 star(2026-08),MIT;
+2026-02-14 Steinberger 宣布加入 OpenAI,项目移交 OpenClaw Foundation。主流媒体持续报道其安全争议
+(暴露网关、提示注入面、一键技能安装),作者自认「需要仔细配置才安全,不面向非技术用户」
+([CNBC 2026-02-02](https://www.cnbc.com/2026/02/02/openclaw-open-source-ai-agent-rise-controversy-clawdbot-moltbot-moltbook.html))。
+
+**与 pi 的关系(本地克隆核验)**:发端时直接嵌 pi 作 agent 内核(Earendil 公告称 pi 为
+「the minimal agent within OpenClaw」);至 2026-08 主干,lockfile 里 pi 家族只剩
+`@earendil-works/pi-tui 0.82.1`(`openclaw/package.json:2018`),agent 运行时已内化为自己的
+`src/agents|gateway|cron|memory|hooks|fleet/…`。**「以极小内核起步、长大后内化」正是 pi
+『核心极小、皆可替换』哲学的成功案例,也再次印证我们「brain 层可整体拔除」的架构约束。**
+
+**值得记录的机制**(来自 [docs.openclaw.ai](https://docs.openclaw.ai/concepts/architecture)):
+
+| 机制 | 内容 | 对我们 |
+|---|---|---|
+| 网关 wire protocol | WS 类型化帧 req/res/event 三分;首帧必须 `connect` 否则硬断;**副作用方法(send/agent)强制幂等键,服务端短期去重缓存** | → F1;与 §2.8 RPC 纪律同源,幂等键是增量 |
+| 事件不重放 | 「Events are not replayed; clients must refresh on gaps」,事件帧带 seq/stateVersion | → F2,双 SSE 断线语义 |
+| 会话路由 | 按来源定会话:DM 共享、群/房间隔离、**cron 每次跑新会话**、webhook 隔离([session](https://docs.openclaw.ai/concepts/session.md)) | 印证「一次处理=一个 run」 |
+| 会话重置 | daily/idle 双模式;**heartbeat/cron/exec 等系统事件可写元数据但不延长 freshness**;重置时丢弃旧会话排队的系统通知 | → F5「系统事件不得给会话续命」 |
+| heartbeat vs automations | heartbeat=近似周期(默认 30min)、主会话上下文、**不产生任务记录**、忙时自动让位;automations=精确 cron/one-shot/webhook、独立会话、**必有任务记录**([automation](https://docs.openclaw.ai/automation)) | → F5 分层:我们的判活轮询≈heartbeat,用户可见调度≈automations |
+| 记忆/技能 | 记忆=markdown 文件(账户级+渠道级);技能=`~/.openclaw/skills/<name>/SKILL.md`,同 agentskills.io 规范 | 印证 E7 场景 skill 化 |
+| doctor --fix | 迁移模式:先物化系统持有的 DB 行,再导入旧文件内容,归档原件后删除;运行时只读 DB 不读旧文件([heartbeat](https://docs.openclaw.ai/gateway/heartbeat)) | schema/配置迁移的好样板 |
+
+### 3.3 pi-chat 与「远程会话」方向(附 pi-web / pi-tui 现状)
+
+[earendil-works/pi-chat](https://github.com/earendil-works/pi-chat)(官方下游,本地克隆):
+把 Discord/Telegram 桥接到沙箱化 pi 会话(勘误 §0 表:桥接对象是 Discord/Telegram;
+Slack 方向的下游示例是 `@mariozechner/pi-mom`)。机制:
+
+- **每渠道一个 [Gondolin](https://github.com/earendil-works/gondolin) micro-VM**(Alpine/QEMU),
+  工具全部在 VM 内执行;持久工作区 + 账户/渠道两级记忆文件(`pi-chat/README.md:3,32-37`);
+- agent 可自造技能(SKILL.md 格式)并自动发现注入提示词(`README.md:152-170`)
+  ——**运行时能力自增长**,与我们「registry 锁定能力集」相反,明确不抄;
+- **worker 舰队管理**:每渠道一个 detached tmux/pi worker,**每 15 秒向
+  `~/.pi/agent/chat/worker-status/` 覆写状态快照 JSON,编排者读快照而非探进程**(`README.md:81`)→ F4;
+- `ConversationRuntime` 自述「日志状态机 + 作业队列 + 切片构建 + 检查点管理」(`pi-chat/AGENTS.md`)
+  ——聊天驱动的循环同样在向「先落盘再行动」收敛;
+- 秘密管理:agent 只见占位符环境变量,Gondolin 仅对白名单主机的出站 HTTP 替换真值,
+  **agent 永远看不到真实秘密**(`README.md:176-184`)——「凭据不过 LLM」的干净实现,
+  对我们 probe_env / 凭据处理是好参照。
+
+**pi-tui 现状**:持续作为核心包演进(0.84.x:运行时切换的全屏模式、Mermaid/LaTeX 终端渲染、
+差分渲染三策略 + CSI 2026 同步输出),OpenClaw 至今直接依赖它。
+**pi-web 现状**:两条线——官方主线转向 protocol/server/client/session-backends 远程会话栈
+(§3.1-6;badlogic 时期曾有 `pi-web-ui` Lit 组件包);社区有 [PI WEB](https://pi-web.dev/)
+(服务端常驻 daemon 持有会话,浏览器/手机只是控制面,关浏览器会话继续跑)。
+**「会话活在服务端、UI 是可断连的控制面」已成 pi 生态共识,我们 FastAPI + 双 SSE 架构被三方印证。**
+
+### 3.4 扩展/技能生态:有什么值得抄
+
+**分发机制**([packages.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)):
+`pi install npm:@foo/bar@1.2.3 | git:host/user/repo@ref`;npm keyword `pi-package` 可搜;
+git ref pin 死后 `pi update --all` 自动跳过;安装用 `npm install --omit=dev` + `--ignore-scripts`
+——供应链纪律与 §1.2 一脉相承,再次印证我们「内置锁定 registry」决议。
+
+**官方 50+ 示例扩展**(本地 `pi/packages/coding-agent/examples/extensions/`)按主题分:
+
+- 安全闸:permission-gate、confirm-destructive、**timed-confirm(带超时的确认)**、protected-paths、
+  dirty-repo-guard、project-trust;
+- 过程留痕:git-checkpoint(每 turn stash)、auto-commit-on-exit、bookmark、session-name;
+- 人机交互:question、**questionnaire(多步结构化提问)**、handoff、send-user-message;
+- 结构化/流程:structured-output、todo、plan-mode、custom-compaction、kimi-deferred-tools;
+- 系统集成:**event-bus(扩展间事件总线)**、**file-trigger(文件变化触发注入)**、reload-runtime、
+  rpc-demo、shutdown-command、ssh、interactive-shell;
+- 沙箱:sandbox、gondolin(micro-VM 工具执行);另有 doom-overlay/snake/space-invaders 等玩具
+  ——证明扩展 API 的表达力(pi-doom 也是官方 README 的安装示例)。
+
+对我们信息量最大的三个(→ F7):
+
+1. **timed-confirm**:确认对话框带倒计时,超时走默认分支。我们审批卡(§7.6)需要同款语义:
+   **超时必须有显式默认,且默认=拒绝/暂停,绝不默认放行**,倒计时可见。
+2. **questionnaire**:把「问用户」做成多步结构化表单而非自由聊天。对应我们 intent 澄清:
+   参数缺失时发结构化问卷(候选集单选/数值域输入),不做开放式追问
+   ——与「LLM 只做选择题」哲学同构,UI 形态可直接抄。
+3. **file-trigger**:监听文件系统事件注入消息。对应我们「产物落盘 → 触发质量门/失效传播」,
+   我们的触发源是作业目录契约文件,更可控,方向一致。
+
+### 3.5 吸收决议(absorb-F 系列,编号接续 §5.2 的 E 系列)
+
+| # | 吸收点 | 来源证据 | 落点 | 优先级 |
+|---|---|---|---|---|
+| **F1** | 副作用 API 强制幂等键 + 服务端短期去重(重试安全,与 E4 的投递模式声明正交) | OpenClaw 网关协议([architecture](https://docs.openclaw.ai/concepts/architecture)) | `api/app.py`(POST /runs、/message、审批答复) | P1 |
+| **F2** | 事件流不回放:事件带单调 seq,客户端见缺口 → GET 全量快照重同步;服务端不留回放缓冲 | 同上「Events are not replayed; clients must refresh on gaps」 | 双 SSE + prototype 重连逻辑 | P1 |
+| **F3** | 流式事件只发 delta,终态事件为权威全量(防二次方膨胀) | pi 0.84.0 破坏性变更(`coding-agent/CHANGELOG.md:66`,#7290) | `loop/events.py` + SSE 序列化 | P1 |
+| **F4** | 作业进度快照文件:wrapper 周期覆写 status.json(pid/阶段/进度),监控与 reattach 读快照,不解析日志推断 | pi-chat worker-status 15s 快照(`pi-chat/README.md:81`) | `runtime/wrapper` + executor reattach | P1-P2 |
+| **F5** | 系统 tick 与用户任务分层:判活轮询/水位检查等系统事件不进 run 历史与 provenance;用户可见的调度任务必有任务记录 | OpenClaw heartbeat/automations 对照([automation](https://docs.openclaw.ai/automation)) | `loop/timer` + `core/store`(ops 日志与 provenance 分表) | P2 |
+| **F6** | 结构化输出用约束采样兜底:select/intent 的 JSON 输出启用 schema-constrained sampling,值域错误在采样层杜绝 | pi 实验特性(`coding-agent/CHANGELOG.md:8`) | `brain/select.py`(vLLM guided_json / GBNF) | **P1(与 E9 配对)** |
+| **F7** | 审批卡超时显式默认(默认拒绝/暂停 + 可见倒计时);intent 澄清用结构化问卷而非自由追问 | pi 官方扩展 timed-confirm / questionnaire(`examples/extensions/`) | prototype 审批卡 + intent 澄清流程 | P2 |
+
+**明确不抄(§3 范围):**
+
+| 不抄 | 原因 |
+|---|---|
+| Gondolin per-channel micro-VM | WSL 已是我们的隔离边界;单用户科研桌面无多租户需求 |
+| 多渠道网关 + heartbeat 常驻 agent | 单用户单机工具;未来若做「巡检告警」,回头抄 automations 的任务记录模型即可 |
+| agent 运行时自造 skills(pi-chat) | 能力集必须锁定在 registry(可复现性红线);场景包由人审后入库(E7) |
+| OpenClaw 的「信任外置」安全模型 | 其暴露面事故正是反面教材;审批/质量门内置路线不变 |
 
 ---
 
-## 4. 同类框架横向对比
+## 4. Python agent 框架横向对比(选型再验证,2025-2026)
 
-*(后台源码探查进行中,本节待补:mini-swe-agent / smolagents / claude-agent-sdk-python / deepagents
-的主循环形状、步骤数据结构、中断恢复、LLM 约束方式,以及与 pi 的对照表。)*
+> 问题:我们的自研执行层(SQLite 真相源 + 五阶段幂等执行器 + 事件总线)在 Python 生态是否已有现成替代?
+> 方法:对七个主流框架逐一回答五问——持久化/断点恢复模型、工具重放语义、人机审批点、流式事件模型、
+> 与我们自研件的对应物。证据:官方文档与发布记录(链接随文)+ 四个本地克隆
+> (smolagents / claude-agent-sdk-python / deepagents / mini-swe-agent)。
 
-已有结论可先记录的部分:
+### 4.0 2025-2026 战场地图
 
-| 框架 | 主循环归属 | 状态持久化 | 对我们的主要价值 |
-|---|---|---|---|
-| pi | 自研 TS(agent-loop.ts 718 行) | JSONL/SQLite 会话 + 寄存器 | 崩溃恢复事务纪律(§2.2-2.3) |
-| mini-swe-agent | 自研 Python(~100 行核心) | 待核验 | 最小主循环参照 |
-| smolagents | 自研 Python | 待核验 | ActionStep 步骤记录结构 |
-| claude-agent-sdk-python | **外包**(封装 Claude Code CLI 子进程) | Claude Code 会话 | hooks/权限模式 API 设计 |
-| deepagents | LangGraph | checkpointer | middleware/interrupt 模式 |
+| 框架 | 2026-08 状态 | 关键事件 |
+|---|---|---|
+| pydantic-ai | **V2.0(2026-06-23)**,harness-first | V1 2025-09;V2 引入 capabilities 原语([release](https://github.com/pydantic/pydantic-ai/releases/tag/v2.0.0)) |
+| LangGraph | 1.x 稳定(1.1.10) | 1.0 于 2025-10-22 与 LangChain v1 同发;`create_agent` 建于其上;deepagents 是官方 harness 样板 |
+| OpenAI Agents SDK | 活跃;HITL/RunState 已内建 | 2025-03 发布(Swarm 后继);[Temporal 集成 GA 2026-03-23](https://temporal.io/blog/announcing-openai-agents-sdk-integration) |
+| Claude Agent SDK | 活跃 | 2025 年秋由 Claude Code SDK 更名;内核=Claude Code CLI 子进程,SDK 是封装 |
+| smolagents | 1.2x(1.24.0,2026-01-16),约 27k★ | 定位未变:代码即动作的轻量原型([对比文 2026-05](https://futureagi.com/blog/oss-agent-frameworks-2026/)) |
+| CrewAI | 1.x(1.14.4,2026-04-30),约 51k★ | 1.8.0 起 `@human_feedback`;商业层 AMP;已宣称独立于 LangChain |
+| AutoGen | **维护模式**(2025-09-30 后冻结) | 双后继:官方 → **Microsoft Agent Framework 1.0 GA 2026-04**([InfoQ](https://www.infoq.com/news/2026/08/agent-framework-harness-ga/));社区 → AG2(0.12.x,Apache 2.0) |
+
+三条横向观察:
+
+1. **「harness」成了 2026 年的行业词**:pi 自称 agent harness;pydantic-ai V2 官方措辞
+   「leans into a harness-first design」;MAF 在 Build 2026 发布「Agent Harness」运行时;
+   deepagents 自述「opinionated harness」。各家都在把「循环+工具+上下文+会话」骨架与业务分离
+   ——我们 Loop/Core 分层与此一致;论文写相关工作时可用这个词锚定。
+2. **审批点全行业收敛到同一形状**:「工具声明需审批 → run 暂停/结束并携带待批清单 →
+   决策以结构化对象送回 → 恢复」。七家中五家(pydantic-ai/OpenAI/Claude/CrewAI/MAF)是这个形状,
+   只剩参数命名不同。我们 §7.6 审批卡方向被全面印证,具体形状抄 pydantic-ai(G1)。
+3. **崩溃级持久化仍是分水岭**:框架自带的多是「对话/状态快照」;真正崩溃恢复要么外包
+   Temporal/DBOS(pydantic-ai、OpenAI),要么靠 checkpointer/超步检查点(LangGraph、MAF)。
+   **没有一家把「外部长进程」当一等恢复对象**——这正是我们五阶段执行器的生态位(见 4.9 节)。
+
+### 4.1 pydantic-ai(V2,harness-first)
+
+- **持久化/恢复**:核心库无 checkpointer;消息史可序列化(`ModelMessagesTypeAdapter`)。崩溃级
+  durability 外包给四家官方集成:Temporal(模型/工具调用下放为 Activity,编排确定性重放)、
+  DBOS(步骤 checkpoint 进 Postgres,进程内)、Prefect、Restate
+  ([durable execution overview](https://pydantic.dev/docs/ai/capabilities/durable_execution/overview/))。
+- **工具重放**:本体无声明;Temporal 模式下工具=Activity,结果入事件历史、重放不重执行
+  (≈我们「结算落盘后不重跑」,但要求编排代码确定性)。
+- **审批点**([deferred tools](https://pydantic.dev/docs/ai/tools-toolsets/deferred-tools/)):
+  `requires_approval=True` 或工具内 raise `ApprovalRequired`;run 以 `DeferredToolRequests`
+  (待批 tool_call 清单)**正常结束**;调用方收集决策后携带 `DeferredToolResults`
+  (tool_call_id → bool / `ToolApproved(override_args)` / `ToolDenied(message)`)+ 原消息史发起
+  **新 run(新 run_id,用 conversation_id 关联,明文规定不得复用暂停 run 的 id)**。
+  V2 另有进程内路径(`HandleDeferredToolCalls` capability 内联清算)。
+- **外部工具**:`CallDeferred` 异常=「结果不在本 run 内产生」;工具先调度后台任务、带走
+  `tool_call_id`,结果由外部系统日后送回——**七家中唯一把「慢任务交给外部执行器」建模为一等概念**,
+  但只定义了「结果送回」,没有判活/reattach/产物校验;后半段正是我们五阶段的内容。
+- **流式**:`run_stream` / `event_stream_handler`(V2 移入 `ProcessEventStream` capability);
+  `AgentStreamEvent` 闭集,[版本政策](https://pydantic.dev/docs/ai/project/version-policy/)明言
+  「新增事件类型属 minor,消费方必须防御性编码」。
+- **对应物**:DeferredToolRequests/Results ≈ 审批卡出入口(→ G1);CallDeferred + tool_call_id ≈
+  LAUNCHED 意图落盘的前半段;durable 集成 ≈ 我们 store+executor(引擎外置)。
+  **术语撞车预警**:pydantic-ai 的 capability=「行为扩展包」(工具+指令+钩子+模型设置打包),
+  我们 registry 的 capability=「可执行处理能力」;文档互引时必须显式区分。
+
+### 4.2 LangGraph 1.x(+ deepagents)
+
+- **持久化/恢复**:checkpointer(InMemory/SQLite/Postgres)以 `thread_id` 为主键,每个 super-step
+  结束存全图状态 + **pending writes(超步内已成功节点的写先存,失败节点重跑时成功节点不重算)**
+  ([checkpointers](https://docs.langchain.com/oss/python/langgraph/checkpointers))。
+  durability 三档:`exit` / `async` / `sync`(每步同步落盘)。支持时间旅行与 fork thread。
+- **工具重放语义(关键坑)**:`interrupt()` 暂停后 `Command(resume=…)` 恢复,**节点从头重放,
+  interrupt 之前的副作用会再执行一次**(官方文档明示,
+  [interrupt reference](https://reference.langchain.com/python/langgraph/types/interrupt));
+  多个 interrupt 按**索引顺序**配对 resume 值,节点内代码顺序一改即错位。functional API 略好:
+  重放时 `@task` 结果从 checkpointer 恢复不重算
+  ([functional-api](https://docs.langchain.com/oss/python/langgraph/functional-api))。
+  **「节点=恢复边界」比我们「阶段=恢复边界」粗一档,节点内幂等要用户自己保证
+  ——五阶段守卫解决的正是这个粒度问题。**
+- **审批点**:interrupt 是通用暂停原语,HITL 建于其上(payload 经
+  `stream.interrupts` 暴露);LangChain v1 提供 HumanInTheLoopMiddleware 包装工具审批。
+- **流式**:多模式(values/updates/messages/custom)+ `stream_events(version="v3")`。
+- **deepagents(本地克隆)**:「Deep Agents=中间件/后端/档案的 opinionated harness;
+  LangGraph=执行运行时:state、checkpoints、streaming、interrupts」
+  (`deepagents/openwiki/architecture/overview.md:14-16`)。两个可抄细节:
+  `DeepAgentState` 用 **delta 式 message reducer 防长线程 checkpoint 超线性增长**(:28);
+  后端能力决定工具面——不能执行 shell 的后端直接**移除** execute 工具与相应提示词,
+  而不是调用时报错(:38),「不给不可用的选项」与我们候选集哲学同构。
+- **对应物**:checkpointer+thread_id ≈ store+run_id;durability=sync ≈ 我们逐阶段落盘;
+  interrupt/Command ≈ 审批卡+干预队列;@task 结果恢复 ≈ COLLECTED 产物复用。
+- **再验证结论**:LangGraph 是七家中唯一能整体替代我们 store+executor 外壳的,但我们的核心逻辑
+  (WSL 进程 reattach、产物指纹跳过、参数级 stale 传播)全部生活在「节点内部」,LangGraph 帮不上;
+  引入它 = 五阶段一行不少 + checkpoint 状态与 SQLite 真相源双写。
+  **维持自研决议,理由从「它不够」升级为「它帮不到刀刃上」。**
+
+### 4.3 OpenAI Agents SDK(Python)
+
+- **持久化/恢复**:两层——Sessions(SQLiteSession/SQLAlchemy/OpenAI Conversations/Redis)存对话史;
+  **RunState 存「暂停的 run」全量快照**(model responses、生成 items、审批状态、
+  `_last_processed_response`、序列化 tool_input),`to_json()/from_json()` 显式进出
+  ([run_state](https://openai.github.io/openai-agents-python/ref/run_state/))。
+  RunState 只在 HITL 中断时产生;工具执行中进程崩溃无恢复语义,崩溃级 durability 的官方答案是
+  Temporal 集成(GA 2026-03-23)。
+- **工具重放**:无声明;Temporal 模式同 4.1 节。
+- **审批点**([human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)):
+  工具声明 `needs_approval` → run 结果带 interruptions → `result.to_state()` →
+  `state.approve(item)/reject(item)`(**支持 `always_approve/always_reject` 粘性决策,
+  随 RunState 序列化存活**)→ `Runner.run(agent, state)` 恢复。
+- **流式**:三层事件——`raw_response_event`(LLM 原始 delta)/ `run_item_stream_event`(语义级:
+  message_output_created、tool_called、tool_output、handoff_*、mcp_approval_requested…)/
+  `agent_updated_stream_event`([streaming](https://openai.github.io/openai-agents-python/streaming/));
+  文档强调**流未消费完 = run 未结束,session 持久化副作用可能仍在结算**。
+- **对应物**:RunState ≈ 我们 steps 行 total state(但粒度=整 run 快照,非每步一行);
+  三层事件 ≈ 我们 data/ui 事件分离;粘性审批 → G2。
+
+### 4.4 Claude Agent SDK(Python,本地克隆佐证)
+
+- **持久化/恢复**:真相源在 Claude Code CLI 的会话转录(JSONL),SDK 只管 `resume=session_id` /
+  `fork_session=True`(`claude-agent-sdk-python/src/claude_agent_sdk/types.py:1841-1862`);
+  `enable_file_checkpointing` 可回滚**文件系统状态**(workspace 快照)。resume 恢复的是对话,
+  不是执行位置;工具执行中崩溃无恢复语义。
+- **工具重放**:无;PreToolUse 可返回 `permissionDecision:"defer"` 把工具调用「停车」
+  ——结束本次 query,恢复时经 deferred-replay pass 重新决策
+  ([hooks](https://code.claude.com/docs/en/agent-sdk/hooks))。
+- **审批点(四层漏斗)**:PreToolUse 钩子(`allow/deny/ask/defer` + `updatedInput` 参数改写)→
+  声明式 allow/deny 规则 → permission_mode → `can_use_tool` 回调兜底;SDK 内置
+  「can_use_tool 被上游规则遮蔽」的告警(`types.py:1700-1781`)——**层级多到需要遮蔽检测,
+  反面提示:我们的审批层级保持两层(质量门+审批卡)以内**。
+- **流式**:CLI 子进程 stdout 消息流(可含 partial);Python 钩子六种 vs TS 十二种,
+  SessionStart/End 在 Python 只能走 settings 文件 shell 钩子——**跨语言钩子面不齐,
+  外包内核的典型代价**。
+- **对应物**:can_use_tool ≈ 审批卡;PreToolUse/PostToolUse ≈ E8 的 before/after 钩子;
+  fork_session ≈ E5;file checkpointing ≈ 产物指纹(我们校验而非回滚)。
+  **真相源在别人进程里,与「SQLite 唯一真相源」红线相抵——维持「抄 API 设计、不抄依赖形态」。**
+
+### 4.5 smolagents(本地克隆佐证)
+
+- **持久化/恢复**:内存态 `AgentMemory`(`MemoryStep` 谱系:ActionStep/PlanningStep/TaskStep/
+  FinalAnswerStep,`smolagents/src/smolagents/memory.py:42-214`);`agent.to_dict()/from_dict()`
+  (`agents.py:970,1011`)序列化的是**配置**而非执行位置;跨 run 持久化至今是开放 issue
+  ([#1216](https://github.com/huggingface/smolagents/issues/1216)),社区靠手动搬 `memory.steps`。
+  有 `interrupt()`(:754,协作式停止)与 `replay(detailed=)`(:859,**离线回放展示,非执行恢复**)。
+- **工具重放**:无;每次 run 从头。
+- **审批点**:无内建;step_callbacks 可自行拦截。
+- **流式**:`stream_outputs=True` + `run(stream=True)` 生成器逐步产出(`agents.py:352,436,658`)。
+- **对应物**:MemoryStep 谱系 ≈ 我们 steps/trace 结构;其 `replay` ≈ 我们的轨迹回放 UI
+  ——名字相同语义不同,见 4.10 节术语决议。定位是原型/教学,「要 durable state 与 workflow replay
+  就别用它」是 2026 年对比文的共识标注,选型无变化。
+
+### 4.6 CrewAI Flows
+
+- **持久化/恢复**:`@persist`(类级=每方法后存,方法级=定点存)默认 SQLiteFlowPersistence
+  ([flows](https://docs.crewai.com/en/concepts/flows));**方法成功后写快照,无意图落盘**
+  ——方法执行中崩溃=该方法白跑,重入语义未定义(效果三明治只有下半片)。恢复/分叉双参数:
+  `kickoff(inputs={"id": uuid})`=同世系续跑(历史延长);`kickoff(restore_from_state_id=uuid)`=
+  快照播种新世系(新 state.id);与另一套 Checkpointing 系统互斥,混用抛 ValueError
+  ([mastering-flow-state](https://docs.crewai.com/en/guides/flows/mastering-flow-state))。
+- **审批点**:`@human_feedback`(1.8.0+):暂停收集人工反馈,**自由文本反馈由 LLM 折叠成 emit
+  枚举 outcome 再路由给 @listen**;异步 provider 下 kickoff 返回 `HumanFeedbackPending`,
+  状态自动持久化,`resume()` 继续([human-feedback](https://docs.crewai.com/en/learn/human-feedback-in-flows))。
+- **工具重放**:未定义。
+- **流式**:`Flow.stream=True` → kickoff 返回可迭代的 StreamFrame。
+- **对应物**:@persist ≈ store.advance(但无幂等守卫、无意图提交);resume/fork 双参数 → G5
+  (E5 的 API 细化);「LLM 折叠自由反馈到枚举」有想象力但**拒绝**:审批答复必须是确定性结构
+  (勾选/数值),不能再过一层 LLM。
+
+### 4.7 AutoGen 系:AG2 与 Microsoft Agent Framework
+
+**格局**:[microsoft/autogen](https://github.com/microsoft/autogen) 于 2025-09-30
+(autogen-agentchat 0.7.5)后冻结进维护模式,官方指路
+[Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/overview/)
+(AutoGen + Semantic Kernel 两团队合并;preview 2025-10-01 → 1.0 GA 2026-04;Build 2026 又发
+Agent Harness 运行时与编排模式 GA)。社区线 AG2(ag2ai/ag2,Apache 2.0,0.12.3,2026-05)延续
+0.2 风格 API:`human_input_mode=ALWAYS|TERMINATE|NEVER` 的控制台式审批、group chat 恢复=把导出的
+消息列表喂回 manager——2023 年的形状,只对存量用户有意义。
+
+**MAF 的 workflows 检查点(值得细看)**([checkpoints](https://learn.microsoft.com/en-us/agent-framework/workflows/checkpoints)):
+
+- 执行按 **superstep** 推进,每个 superstep 结束自动存检查点:全部 executor 状态 + 下一超步
+  pending messages + **pending requests/responses** + shared state;
+- executor 自定义状态必须实现 `on_checkpoint_save()/on_checkpoint_restore()` 对——**把「哪些状态
+  入检查点」的责任显式压给节点作者**,与我们 E2 的 total state 纪律同源(→ G6);
+- 恢复:`workflow.run(checkpoint_id=…)` **与新 message 互斥**;挂起的人工请求
+  (`ctx.request_info()` + `@response_handler`)可在恢复时同批投喂答复(→ G4);
+- 存储:File/Cosmos 用 pickle + **受限 unpickler**(类型白名单 `allowed_checkpoint_types`,
+  越界抛 `WorkflowCheckpointException`)——为安全给 pickle 打的补丁之复杂,反证 JSON-only 决议(→ G8);
+- 坦诚的边界声明:**server-side session(FoundryAgent)状态不入检查点**,「要可靠检查点请自写
+  executor」——外部世界状态进不了检查点、只能记指针,与我们「SQLite 记录处理真相,
+  外部世界靠判活+校验」是同构问题的同款答案。
+
+**对应物**:superstep 检查点 ≈ 阶段推进;pending requests 入检查点 ≈ pending_actions 表;
+checkpoint_id 与新消息互斥 ≈ G4。
+
+### 4.8 对照组:mini-swe-agent(本地克隆)
+
+100 行哲学的下限样本(`mini-swe-agent/src/minisweagent/agents/default.py`):主循环 `run()` 38 行
+(:88-124);**每步 `finally: self.save()` 无条件把全量轨迹(config+messages+stats)写盘**
+(:120-121, :159-190)——total-state 落盘的最朴素实现,崩溃后**人**可以拿 messages 续,
+程序不能续;step/cost/wall-time 三限额在 query 入口检查(:130-147)。
+**信息量:极简路线的「持久化」就是全量快照,够 SWE-bench 跑分,不够科学工作流
+——我们与它的差全部落在恢复语义上,这正是论文对比叙事的素材。**
+
+### 4.9 五问对照总表(与我们自研件互查)
+
+| 框架 | 持久化单位 | 断点恢复 | 工具重放语义 | 审批点 | 流式事件 |
+|---|---|---|---|---|---|
+| **我们(自研)** | SQLite:runs/steps 行(total state) | 五阶段守卫,按 step_id 点查,进程 reattach | capability `replay: never\|safe`(E1)+ job_state 判活 | 审批卡(before 钩子,fail-closed) | 事件总线 data/ui 分离 + 双 SSE |
+| pydantic-ai V2 | 消息史(可序列化) | 外包 Temporal/DBOS/Prefect/Restate | Activity 重放(Temporal 模式) | DeferredToolRequests/Results ★ | AgentStreamEvent 闭集 |
+| LangGraph 1.x | checkpointer 超步快照 + pending writes | thread_id + Command(resume);**节点内副作用重放** | @task 结果恢复;节点级无守卫 | interrupt() 原语 | 多模式 + stream_events v3 |
+| OpenAI Agents SDK | Sessions + RunState 快照 | HITL 中断点恢复;崩溃靠 Temporal | 无(Temporal 模式=Activity) | needs_approval + 粘性 approve/reject ★ | 三层事件 ★ |
+| Claude Agent SDK | CLI 会话转录(外部进程持有) | resume/fork 会话;无执行位置恢复 | defer 停车 + deferred-replay pass | 四层漏斗 hooks→规则→mode→can_use_tool ★ | CLI stdout 消息流 |
+| smolagents | 内存 AgentMemory | 无(开放 issue) | 无 | 无内建 | run(stream=True) 生成器 |
+| CrewAI Flows | SQLite 状态快照(方法后) | resume/fork 双参数 ★;无意图落盘 | 未定义 | @human_feedback(LLM 折叠反馈) | StreamFrame |
+| MAF 1.0 | superstep 检查点(含 pending requests)★ | checkpoint_id(与新消息互斥)★ | 无声明;超步内已完成 executor 不重跑 | request_info + response_handler | workflow 事件流 |
+
+★ = 有值得抄的具体形状(进 G 系列)。
+
+读表结论:
+
+1. **持久化单位没有一家是「外部长进程作业」**。最接近的两个:pydantic-ai `CallDeferred`
+   (只管结果送回,不管判活/产物)、MAF 的「server-side 状态不入检查点」免责声明(承认问题,
+   不解决)。我们 LAUNCHED/RUNNING 的 reattach(pid 判活、log_offset 续读、产物完整性判定)
+   在七家中零对应——**自研必要性再确认**。
+2. **工具重放语义只有 pi(E1 来源)与 LangGraph(部分)显式处理**,其余未定义或整段外包 Temporal。
+   replay 声明 + 五阶段守卫作为内建能力,是我们相对生态的真实差异点。
+3. **审批点形状全行业收敛**(4.0 节观察 2),抄形状即可,不必抄框架。
+4. **流式事件的「原始/语义/控制」三层结构是事实标准**(OpenAI 三层、LangGraph 多模式、
+   pi RPC 三分),我们 data/ui 分离已对齐,补上 F2/F3 的断线与增量纪律即可。
+
+### 4.10 吸收决议(absorb-G 系列,接续 F 系列)
+
+| # | 吸收点 | 来源证据 | 落点 | 优先级 |
+|---|---|---|---|---|
+| **G1** | 审批=「run 正常出口 + 批复作下次输入」:待批清单(tool_call_id→上下文)是 run 的一种正常结束态;批复对象 {id→approve(override_args)/deny(message)};续跑是**新 run**,以 run 链关联,绝不复用挂起线程 | pydantic-ai deferred tools([文档](https://pydantic.dev/docs/ai/tools-toolsets/deferred-tools/)) | `core/actions` + `api`(POST /runs/{id}/approvals)+ §7.6 审批卡数据形状 | **P1** |
+| **G2** | 粘性审批:`always_approve/always_reject` 决策落库、随恢复存活;审批卡加「本 run 内同类不再询问」 | OpenAI Agents SDK RunState([HITL](https://openai.github.io/openai-agents-python/human_in_the_loop/)) | approvals 表 + prototype | P2 |
+| **G3** | 审批钩子返回值闭集 `allow\|deny\|ask\|defer` + 可审计的 `updatedInput` 参数改写;defer=挂起进队列而非阻塞进程 | Claude Agent SDK PreToolUse([hooks](https://code.claude.com/docs/en/agent-sdk/hooks)) | 审批钩子契约(与 E8 配套) | P1 |
+| **G4** | 恢复入口互斥:resume(run_id) 与新指令互斥;恢复第一步清算 pending 审批/干预,再进执行 | MAF `run(checkpoint_id=…)` 语义([checkpoints](https://learn.microsoft.com/en-us/agent-framework/workflows/checkpoints)) | `api` + executor 恢复入口 | P2 |
+| **G5** | E5 run fork 的 API 细化:resume 与 fork 是两个互斥参数(同世系续跑 vs 快照播种新世系),混用即错 | CrewAI `inputs.id` vs `restore_from_state_id`([文档](https://docs.crewai.com/en/guides/flows/mastering-flow-state)) | `api`(并入 E5 实现) | P2 |
+| **G6** | 自定义状态入检查点走显式契约(on_save/on_restore 对),不隐式序列化对象图 | MAF executor 检查点 API | `core/store`(steps 行字段白名单,拒绝 blob 塞对象) | P2 |
+| **G7**(拒绝) | 不引外部 durable execution 引擎(Temporal/DBOS/Prefect/Restate):单机科研工具引编排服务不成比例;Activity 重放收益已由五阶段意图/结算覆盖;Temporal 要求编排代码确定性,与「外部 CLI reattach」模型错位 | pydantic-ai/OpenAI 官方路线的适用前提 | ——(记录为选型依据) | — |
+| **G8**(拒绝) | 不用 pickle 序列化任何状态(即使带受限 unpickler);SQLite 行内字段 + JSON 白名单到底 | MAF restricted unpickler 的复杂度即反证 | `core/schema.sql` 纪律 | — |
+
+术语小决议(随 G 系列记录):**resume/reattach 专指执行恢复,replay 只指 UI 轨迹回放**
+——smolagents 的 `replay()` 是回放展示、pi 的 `replay` 是重放安全声明、Temporal 的 replay 是
+确定性重放,三个 replay 三个意思,我们文档必须锁死用法。
+
+### 4.11 结论:自研路线是否仍成立
+
+**成立,且比 2026-08-10 定稿时更有把握。**
+
+1. **竞争面**:2025-10 至 2026-06 的三波大版本(LangGraph 1.0、MAF 1.0、pydantic-ai V2)把力气都
+   花在「对话级持久化 + 审批点 + 流式」,没有人下探「外部科学计算作业的崩溃恢复」;
+   我们的差异化(五阶段 reattach + 参数级 stale + 候选集约束)反而更清晰。
+2. **可抄面**:审批点(G1-G3)与恢复入口(G4-G5)已有行业收敛形状,照抄省设计;
+   E 系列(pi)管执行内核,F 系列(生态运维面)管协议纪律,G 系列(Python 生态)管 API 面,三组正交。
+3. **风险面**:若未来必须并入某框架,唯一候选是 LangGraph(checkpointer 换 store 外壳),
+   迁移成本=把五阶段包进节点 + 双真相源对账;已评估,不值得——除非出现「多人协作/云端托管」需求
+   (那是 LangGraph Platform 的主场,与论文场景无关)。
 
 ---
 
