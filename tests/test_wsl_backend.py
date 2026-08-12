@@ -529,8 +529,10 @@ def test_driver_releases_keepalive_on_interrupted_run(store, workspace, monkeypa
     async def scenario():
         async for e in driver.execute("s1"):
             if e["t"] == "step.start":
+                # run_id 归属:执行期消费已改严格匹配(REVIEW-r2 P1-3),
+                # 未定向动作不再被消费 —— 与 API 入队行为一致
                 store.push_action(scope="run", target=run["run_id"], action="KILL",
-                                  deliver_as="steer")
+                                  deliver_as="steer", run_id=run["run_id"])
 
     asyncio.run(scenario())
     assert store.get_run(run["run_id"])["status"] == "interrupted"
