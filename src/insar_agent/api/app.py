@@ -16,9 +16,11 @@ import json
 import logging
 import os
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse,
+                               StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -65,6 +67,13 @@ _STEP_ACTIONS = frozenset({"RESET", "SKIP", "SET_METHOD", "SET_PARAMS"})
 
 #: SQLite INTEGER 上限之内的宽松步骤号边界(流水线实际只有 1-11)
 _STEP_ID_MAX = 1_000_000
+
+#: 影像面板可直读的图像扩展名闭集(→ Content-Type)。svg 显式排除:
+#: 它可携带脚本,作为同源文档打开会成为 XSS 面;位图格式无此风险。
+_IMAGE_MEDIA_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
 
 
 def check_session_id(session_id: str) -> str:
@@ -504,6 +513,77 @@ def create_app(home: Path | None = None) -> FastAPI:
             "X-Log-Size": str(size),
             "X-Log-Truncated": "1" if size > limit else "0",
         })
+
+    # ---------------- 图像产物(面板 2「影像」) ----------------
+
+    def resolve_artifact_file(run: dict, rel_path: str) -> Path | None:
+        """产物相对路径 → run 工作区内的绝对路径;越界一律返回 None。
+
+        artifacts.path 由执行器落库为相对工作区的路径,但该值可能来自
+        坏数据/被篡改的 DB 行 —— 与 check_session_id 同理,读文件前必须
+        在边界处规范化复核:绝对路径、盘符、../ 穿越都不放行。
+        调用方对 None 统一按 404 处理,错误信息不携带磁盘路径。
+        """
+        base = Path(run["workspace"]).resolve()
+        rel = Path(rel_path)
+        if rel.is_absolute() or rel.drive:
+            return None
+        target = (base / rel).resolve()
+        if target == base or not target.is_relative_to(base):
+            return None
+        return target
+
+    @app.get("/api/figures")
+    def figures(session: str, run_id: str | None = None):
+        """该 run 全部图像类产物的清单(按扩展名闭集过滤,文件已缺失的行不列)。
+
+        条目含 step/artId/文件名/尺寸/mtime 与可直接用作 <img src> 的 url;
+        尺寸与 mtime 取落盘文件实测值,不信 DB 记录(可能已被覆写)。
+        """
+        run = resolve_run(session, run_id, required=False)
+        if run is None:
+            return {"run": None, "figures": []}
+        items = []
+        for art in store.artifacts_of(run["run_id"]):
+            if Path(art["path"]).suffix.lower() not in _IMAGE_MEDIA_TYPES:
+                continue
+            target = resolve_artifact_file(run, art["path"])
+            if target is None or not target.is_file():
+                continue
+            st = target.stat()
+            items.append({
+                "step": art["step_id"], "artId": art["art_id"],
+                "name": target.name, "path": art["path"], "kind": art["kind"],
+                "size": st.st_size, "mtime": st.st_mtime,
+                "url": "/api/artifact-file?" + urlencode({
+                    "session": session, "run_id": run["run_id"],
+                    "step": art["step_id"], "art_id": art["art_id"]}),
+            })
+        items.sort(key=lambda x: (x["step"], x["artId"]))
+        return {"run": run["run_id"], "figures": items}
+
+    @app.get("/api/artifact-file")
+    def artifact_file(session: str, art_id: str,
+                      step: int = Query(ge=0, le=_STEP_ID_MAX),
+                      run_id: str | None = None):
+        """产物图像文件本体(只读 FileResponse)。
+
+        安全边界:非图像扩展名 400;产物不存在/路径越界/跨会话一律 404,
+        且不泄露磁盘路径(与 resolve_run 的「不存在」口径一致)。
+        """
+        run = resolve_run(session, run_id)
+        art = next((a for a in store.artifacts_of(run["run_id"], step)
+                    if a["art_id"] == art_id), None)
+        if art is None:
+            raise HTTPException(404, "no artifact")
+        media = _IMAGE_MEDIA_TYPES.get(Path(art["path"]).suffix.lower())
+        if media is None:
+            raise HTTPException(
+                400, f"仅支持图像类产物({'/'.join(sorted(e.lstrip('.') for e in _IMAGE_MEDIA_TYPES))})")
+        target = resolve_artifact_file(run, art["path"])
+        if target is None or not target.is_file():
+            raise HTTPException(404, "no artifact file")
+        return FileResponse(target, media_type=media)
 
     # ---------------- 全局 SSE ----------------
 
