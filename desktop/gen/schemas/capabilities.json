@@ -1,1 +1,1 @@
-{}
+{"remote-ui":{"identifier":"remote-ui","description":"允许本地后端页面(127.0.0.1)调用桌面壳 command(JS 桥,见 INTEGRATION-commands.md)","remote":{"urls":["http://127.0.0.1:*","http://localhost:*"]},"local":true,"windows":["main"],"permissions":["core:default"]}}

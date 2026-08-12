@@ -11,7 +11,7 @@ Python 后端(FastAPI,`src/insar_agent/api/app.py`)与静态 Web UI
 1. 读 `INSAR_PORT`(缺省 8873);
 2. 若端口上已有健康后端 → 直接连接(适合开发时手动起 uvicorn 的场景),
    此时不 spawn、退出时也不误杀别人的进程;
-3. 否则探测 Python:`INSAR_PYTHON` > `C:\Python314\python.exe` > `PATH`;
+3. 否则探测 Python:`INSAR_PYTHON` > `{仓库根}\.venv\Scripts\python.exe`(项目约定)> `PATH`;
 4. spawn `python -m insar_agent.api.app`(工作目录 = 仓库根,显式传
    INSAR_PORT;stdout/stderr 重定向到 `%TEMP%\insar-agent-sidecar-{port}.log`);
 5. 轮询 `http://127.0.0.1:{port}/api/health`(手写 std::net 最小 HTTP GET,

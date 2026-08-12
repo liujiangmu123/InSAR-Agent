@@ -15,7 +15,12 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod commands;
+mod shortcuts;
 mod sidecar;
+mod singleton;
+mod tray;
+mod window_state;
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -481,9 +486,16 @@ fn main() {
         std::process::exit(run_smoke(port));
     }
 
-    let app = tauri::Builder::default()
+    // 单实例包装必须在其他插件之前(见 INTEGRATION-tray.md)
+    let app = singleton::ensure_single_instance(tauri::Builder::default())
+        .invoke_handler(commands::handlers())
         .setup(move |app| {
             let handle = app.handle().clone();
+            tray::setup_tray(app.handle())?; // 托盘:关闭到托盘钩子经 window_created 自动挂上
+            window_state::attach_when_ready(app.handle()); // 窗口几何持久化(主窗异步创建)
+            if let Err(e) = shortcuts::setup_shortcuts(app.handle()) {
+                eprintln!("[desktop] 全局快捷键注册失败(不影响主流程):{e}");
+            }
             // 健康检查最长 30 秒,放后台线程,避免卡死事件循环
             std::thread::spawn(move || boot(handle, port));
             Ok(())
