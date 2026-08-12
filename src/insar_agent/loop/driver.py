@@ -341,6 +341,15 @@ class Driver:
                 return
 
             step = store.load_step(run_id, sid)
+            if step.state == "skipped":
+                # SKIP 干预在步间被消费后,该步已标 skipped;step_ids 是回合入口
+                # 的快照,不复查状态会照跑并把 skipped 覆写成 done,静默吞掉用户
+                # 的跳过决定(触发场景:执行中对未跑步骤排队 SKIP,矩阵测试发现)
+                done_count += 1
+                yield self._emit(ev.note(
+                    "warn", f"第 {sid} 步已被标记跳过,不执行(产物沿用现状)"))
+                yield self._emit(ev.overall(round(done_count / total * 100)))
+                continue
             cap = self.registry[sid]
             yield self._emit(ev.step_start(sid))
             yield self._emit(ev.tool_start(
