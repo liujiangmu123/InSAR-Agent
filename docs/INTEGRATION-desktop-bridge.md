@@ -75,6 +75,9 @@ const info = await appInfo(); // 浏览器环境 = null
 
 ## 五、运行时前提
 
-桥在壳内点亮,要求壳分支完成 `withGlobalTauri` + 远程 origin capability
-两处配置(见 `desktop/INTEGRATION-commands.md` §三)。未配置时 `isDesktop()`
-返回 `false`,一切自动降级为浏览器行为 —— 不会坏,只是不出现桌面能力。
+桥在壳内点亮,要求壳分支完成 `withGlobalTauri`、`build.rs` 的 app_manifest
+权限生成、远程 origin capability 授权三处配置(见
+`desktop/INTEGRATION-commands.md` §三,2026-08-12 已实机验证点亮,含实测
+结论矩阵)。未配置时 `isDesktop()` 返回 `false`;若只缺 capability 授权,
+`isDesktop()` 为 `true` 但 invoke 全部安全降级(pickDirectory/appInfo 返回
+`null`、openPath 返回 `false`)—— 不会坏,只是不出现桌面能力。
