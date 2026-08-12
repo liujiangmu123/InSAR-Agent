@@ -57,7 +57,9 @@ def _feas6():
 
 PROV = {"run_id": "r", "scenario": "quake", "simulated": True,
         "environment": {"python": "3.14", "platform": "win32", "tools": {}},
-        "steps": {"6": {"name": "解缠", "method": "snaphu_mcf",
+        # state=done:方法章节只为已执行步骤展开参数细节(2026-08 质量升级),
+        # 本夹具的意图是「模板里确有数字」→ 必须是已执行步骤
+        "steps": {"6": {"name": "解缠", "method": "snaphu_mcf", "state": "done",
                         "params": {"min_coherence": 0.25}}},
         "metrics": {}, "evidence": {"level": "runnable", "ladder": [], "reasons": []},
         "thresholds": {}}

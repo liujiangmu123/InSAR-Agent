@@ -652,7 +652,31 @@ function metricRow(name, role, src, tone, verdict) {
    报告视图
    ============================================================ */
 function reportView() {
-  return h('div', null,
+  /* 真实化（GET /api/methods.md，经 reportlive.js 拉取与 30s 缓存）：
+     run done 后渲染服务端生成的真实方法草稿 —— 顶部标注生成来源
+     （X-Narrate-Source：llm = LLM 增强 / template = 规则生成）＋「下载 .md」
+     Blob 下载；草稿里的〔prov-N〕可溯引用渲染为特殊样式（.cite）。
+     无 run（404）/ 后端不可达 → 回落原静态演示草稿 + 「演示数据」横幅。
+     reportlive.js 走动态 import，不新增模块级 import（与并行分支解耦）。 */
+  const root = h('div', null,
+    h('p', { class: 'blurb' }, '正在获取方法草稿（GET /api/methods.md）…'));
+
+  // ---- 演示回落：原静态草稿（数字为示意值），顶部醒目标注 ----
+  const demoBody = (RPT) => [
+    h('div', {
+      class: 'note is-stale', role: 'status',
+      style: { display: 'flex', alignItems: 'center', gap: '7px',
+               marginBottom: '10px', borderStyle: 'dashed' },
+    },
+      icon('warn'),
+      h('span', { style: { flex: '1' } },
+        h('b', null, '演示数据（未接入真实运行）'),
+        ' 本会话还没有可导出的运行记录，或后端不可达 —— 以下草稿为静态示意，数字非真实结果。'),
+      h('button', {
+        class: 'btn btn-gho btn-sm', type: 'button',
+        'aria-label': '重试拉取真实方法草稿',
+        onclick: () => { RPT.invalidate(); refresh(); },
+      }, icon('refresh'), '重试')),
     h('h3', { class: 'sect' }, '论文方法草稿'),
     h('div', { class: 'draft' },
       h('h4', null, '2.3 InSAR 时序形变分析'),
@@ -674,7 +698,52 @@ function reportView() {
     h('p', { class: 'blurb' }, '论文可复现性要求：系统必须能导出与 Agent 执行等价的命令行脚本。'),
     h('div', { class: 'shell' },
       '#!/usr/bin/env bash\nset -euo pipefail\n\n' +
-      STEP_DEFS.map((d) => buildCmd(d.id).replace(/^\$ /, '')).join('\n')));
+      STEP_DEFS.map((d) => buildCmd(d.id).replace(/^\$ /, '')).join('\n')),
+  ];
+
+  // ---- 实测渲染：服务端真实草稿 + 来源标注 + 「下载 .md」 ----
+  const liveBody = (RPT, data) => {
+    const isLLM = data.source === 'llm';
+    return [
+      h('h3', { class: 'sect' }, '论文方法草稿（服务端生成）'),
+      h('div', {
+        style: { display: 'flex', gap: '7px', alignItems: 'center',
+                 flexWrap: 'wrap', marginBottom: '8px' },
+      },
+        h('span', {
+          class: `tag is-${isLLM ? 'run' : 'ok'}`,
+          title: `X-Narrate-Source: ${data.source}`,
+        }, icon(isLLM ? 'brain' : 'shield'), RPT.sourceLabel(data.source)),
+        h('span', { style: { flex: '1' } }),
+        h('button', {
+          class: 'btn btn-pri btn-sm', type: 'button',
+          'aria-label': '下载方法草稿 methods.md',
+          onclick: () => {
+            download(`methods_${S.sessionId}.md`, data.markdown, 'text/markdown');
+            toast('已下载 methods.md（服务端生成内容）');
+          },
+        }, icon('doc'), '下载 .md'),
+        h('button', {
+          class: 'btn btn-gho btn-sm', type: 'button',
+          'aria-label': '重新拉取方法草稿（跳过 30 秒缓存）',
+          onclick: () => { RPT.invalidate(); refresh(); },
+        }, icon('refresh'), '刷新')),
+      h('div', { class: 'draft' }, RPT.renderMarkdown(data.markdown)),
+      h('p', { class: 'blurb' },
+        '内容由 GET /api/methods.md 从 provenance 账本确定生成；〔prov-N〕指向第 N 步执行记录，' +
+        '〔ref:…〕为文献/依据锚点。LLM 只做措辞润色且有数字反幻觉护栏，失败自动回落规则模板。'),
+    ];
+  };
+
+  (async () => {
+    const RPT = await import('./reportlive.js');
+    if (!root.isConnected) return;
+    const data = await RPT.fetchReportLive();
+    if (!root.isConnected) return;                 // 面板已切走，丢弃过期结果
+    root.replaceChildren(...(data ? liveBody(RPT, data) : demoBody(RPT)));
+  })();
+
+  return root;
 }
 
 /* ============================================================
