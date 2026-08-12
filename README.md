@@ -127,9 +127,11 @@ Phase 1 验收「11 对 HyP3 真实数据跑通 MintPy 链」**已通过**:
 ## 当前边界(诚实声明)
 
 - **ISCE2 全链(2-6 步)与 SNAPHU 已在 WSL 实测跑通**(ALOS Baja 同震对,2026-08-12,
-  见 `docs/VALIDATION-isce2-wsl.md`),但验证是经 §4.7 作业目录**文件契约 + `wsl_wrapper.sh`
-  手工**完成;把 WSL 后端(`runtime/wsl.py` 的 `WslJobBackend`)端到端接进 `Driver`/API
-  的自动编排尚未完成(当前默认走 `LocalJobBackend`)。日常 HyP3 路线仍把 2-6 步交给 ASF 云端。
+  见 `docs/VALIDATION-isce2-wsl.md`,验证经 §4.7 作业目录文件契约 + `wsl_wrapper.sh` 手工完成)。
+  WSL 后端此后已接进执行链:`runtime/backend_select.py` 按引擎路由(isce2/snaphu 且
+  `INSAR_WSL_DISTRO` 可达 → `WslJobBackend`,可用 `INSAR_JOB_BACKEND` 强制),含真实 WSL
+  echo 冒烟测试;**真实 ISCE2 重型链尚未经代理编排回放**(只回放过手工链)。
+  日常 HyP3 路线仍把 2-6 步交给 ASF 云端。
 - **ISCE2→PyStamps 桥(主 novelty)是接口边界**:三个难点(par 字段自洽/TCN 基线/
   big-endian)不允许在无真值环境下猜测实现,见 `engines/bridges/isce2_to_pystamps.py`。
 - 阈值台账 5 项 PENDING 待标定 → 证据阶梯封顶 audited(§4.13 的自我约束);

@@ -537,20 +537,32 @@ class Store:
     # ---------------- pending_actions(干预队列) ----------------
 
     def push_action(self, *, scope: str, target: str, action: str,
-                    payload: dict | None = None, deliver_as: str = "steer") -> int:
+                    payload: dict | None = None, deliver_as: str = "steer",
+                    run_id: str | None = None) -> int:
         if deliver_as not in DELIVER_AS:
             raise ValueError(f"unknown deliver_as {deliver_as}")
         with self.db.tx() as cur:
             cur.execute(
-                "INSERT INTO pending_actions(created_at,scope,target,action,payload,deliver_as)"
-                " VALUES (?,?,?,?,?,?)",
-                (time.time(), scope, target, action, json.dumps(payload or {}), deliver_as))
+                "INSERT INTO pending_actions(created_at,run_id,scope,target,action,payload,deliver_as)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (time.time(), run_id, scope, target, action,
+                 json.dumps(payload or {}), deliver_as))
             return int(cur.lastrowid)
 
-    def due_actions(self, deliver_as: str) -> list[dict]:
-        rows = self.db.query(
-            "SELECT * FROM pending_actions WHERE consumed_at IS NULL AND deliver_as=?"
-            " ORDER BY id", (deliver_as,))
+    def due_actions(self, deliver_as: str, run_id: str | None = None) -> list[dict]:
+        """未消费动作;run_id 给定时只取"该 run 的 + 未定向(NULL)"的动作。
+
+        NULL 兼容旧数据与未接线的入队方(API 层补 run_id 前不丢投递);
+        run 隔离语义由带 run_id 的行保证(REVIEW P1:跨 run 互吞)。
+        """
+        if run_id is None:
+            rows = self.db.query(
+                "SELECT * FROM pending_actions WHERE consumed_at IS NULL AND deliver_as=?"
+                " ORDER BY id", (deliver_as,))
+        else:
+            rows = self.db.query(
+                "SELECT * FROM pending_actions WHERE consumed_at IS NULL AND deliver_as=?"
+                " AND (run_id=? OR run_id IS NULL) ORDER BY id", (deliver_as, run_id))
         out = []
         for r in rows:
             d = dict(r)
@@ -565,16 +577,23 @@ class Store:
                 (time.time(), action_id))
             return cur.rowcount > 0
 
-    def consume_actions(self, deliver_as: str) -> list[dict]:
+    def consume_actions(self, deliver_as: str, run_id: str | None = None) -> list[dict]:
         """整批出队:取出该投递语义下全部未消费动作并标记消费(单事务原子)。
 
         driver 主循环用「due_actions → 应用 → consume_action」逐条消费
         (应用失败不吞动作);这里是批量场景(如 run 结束统一收 follow_up)。
+        run_id 过滤语义同 due_actions(含 NULL 兼容行)。
         """
         with self.db.tx() as cur:
-            rows = cur.execute(
-                "SELECT * FROM pending_actions WHERE consumed_at IS NULL AND deliver_as=?"
-                " ORDER BY id", (deliver_as,)).fetchall()
+            if run_id is None:
+                rows = cur.execute(
+                    "SELECT * FROM pending_actions WHERE consumed_at IS NULL AND deliver_as=?"
+                    " ORDER BY id", (deliver_as,)).fetchall()
+            else:
+                rows = cur.execute(
+                    "SELECT * FROM pending_actions WHERE consumed_at IS NULL AND deliver_as=?"
+                    " AND (run_id=? OR run_id IS NULL) ORDER BY id",
+                    (deliver_as, run_id)).fetchall()
             now = time.time()
             out = []
             for r in rows:

@@ -236,10 +236,10 @@ def test_e2e_ui_journey(client):
         assert te["exit"] == 0 and isinstance(te["artifacts"], list)
         assert all({"path", "hash"} <= set(a) for a in te["artifacts"])
 
-    # 已知缺口(P1,见报告):执行器直发的 step.stage / 执行期 tool.log 只进
-    # EventBus(全局 SSE),不进回合 NDJSON 流 —— 修复需改 loop/driver.py,
-    # 超出本分支职责。总线侧行为由 test_executor_detail_events_bus_routing 固定。
-    assert not [e for e in run_events if e["t"] == "step.stage"]
+    # 双通道承诺(P1 已修):执行器细节事件经 driver 队列泵入回合流,
+    # 每个执行步骤的阶段推进(step.stage)必须出现在 NDJSON 里。
+    assert [e for e in run_events if e["t"] == "step.stage"], \
+        "执行期 step.stage 应进入回合 NDJSON 流(driver 泵接线)"
 
     # 进度单调递增至 100
     pcts = [e["pct"] for e in run_events if e["t"] == "overall"]
@@ -330,12 +330,11 @@ def test_e2e_ui_journey(client):
 
 
 # ---------------------------------------------------------------------------
-# 4. 执行器细节事件的通道路由(现状固定 + P1 缺口留痕):
-#    step.stage / 执行期 tool.log 由 runtime/executor.py 经 Driver._emit 直发,
-#    只发布到 EventBus(全局 SSE 通道),不进回合 NDJSON 流。
-#    前端现状:回合流没有这些事件;SSE 侧 onGlobalEvent 又只认 5 类带外条目
-#    且 busy 期间全部跳过 —— 所以执行期日志行当前到不了 UI(报告 P1)。
-#    本测试固定"总线上形状正确"这半边契约,防止修复时再走形。
+# 4. 执行器细节事件的通道路由(P1 已修,双通道断言):
+#    step.stage / 执行期 tool.log 由 runtime/executor.py 经 driver 的 pump 队列
+#    同时:发布到 EventBus(全局 SSE)+ 泵入回合 NDJSON 流(工具卡滚动日志
+#    由回合流承载;SSE 侧 onGlobalEvent 只认带外条目、busy 时跳过,不承担此职)。
+#    本测试双边固定:总线形状正确 + 回合流确实收到细节事件。
 # ---------------------------------------------------------------------------
 def test_executor_detail_events_bus_routing(store, workspace, monkeypatch):
     import asyncio
@@ -364,8 +363,9 @@ def test_executor_detail_events_bus_routing(store, workspace, monkeypatch):
 
     _, exec_events, bus_events = asyncio.run(run())
 
-    # 回合流:只有骨架,无 step.stage(现状;修复后此断言应反转并更新注册表豁免)
-    assert not [e for e in exec_events if e["t"] == "step.stage"]
+    # 回合流:执行器细节事件已泵入(双通道承诺对执行期成立)
+    assert [e for e in exec_events if e["t"] == "step.stage"], \
+        "回合流应包含执行期 step.stage"
 
     # 总线:driver yield 的每个事件都同步发布(双通道承诺),外加执行器细节事件
     def _key(e: dict) -> str:
@@ -392,7 +392,7 @@ def test_executor_detail_events_bus_routing(store, workspace, monkeypatch):
     assert all({"id", "line", "tone"} <= set(e) for e in bus_logs)
     stream_logs = [e for e in exec_events
                    if e["t"] == "tool.log" and e["id"].startswith("s")]
-    assert not stream_logs  # 现状:回合流收不到执行期日志(P1)
+    assert stream_logs  # 回合流能收到执行期日志(P1 已修:工具卡滚动日志有数据源)
 
 
 # ---------------------------------------------------------------------------

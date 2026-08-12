@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import time
+import uuid
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -111,12 +112,12 @@ class Driver:
                                 simulated=bool(run.get("simulated")),
                                 override=self.backend)
 
-    def _exec_ctx(self, backend: JobBackend | None = None) -> ExecContext:
+    def _exec_ctx(self, backend: JobBackend | None = None, emit=None) -> ExecContext:
         return ExecContext(
             store=self.store, backend=backend or self.backend or LocalJobBackend(),
             workspace=self.workspace,
             registry=self.registry, builder=default_builder, contract=self.contract,
-            emit=self._emit, poll=self._poll, startup_grace=self._startup_grace,
+            emit=emit or self._emit, poll=self._poll, startup_grace=self._startup_grace,
             idle_timeout_override=self._idle_override,
             total_timeout_override=self._total_override)
 
@@ -174,9 +175,12 @@ class Driver:
                     f"应用上次预约的变更:第 {sid} 步 {action['payload']}"))
 
         # ---- 计划 ----
+        # next_run 预约的变更(overrides)只能经 make_plan 进入新计划;复用既有
+        # run 的分支不会应用它们 —— 有 overrides 时必须重新规划,否则动作已被
+        # 消费却静默丢失(REVIEW P1:next_run 干预失效)。
         latest = store.latest_run(session_id)
         plan: PlanResult | None = None
-        if latest and latest["scenario"] == sc.key and latest["status"] in (
+        if latest and not overrides and latest["scenario"] == sc.key and latest["status"] in (
                 "ready", "planning", "paused", "interrupted", "running", "done", "failed"):
             run_id = latest["run_id"]
         else:
@@ -261,21 +265,48 @@ class Driver:
             yield self._emit(ev.note(
                 "warn", "检测到持久化的取消请求:不启动新步骤,run 收尾为 interrupted"))
             return
+        # §4.11 运行锁:同一 run 只允许一个执行回合(并发 execute 会在执行器
+        # 五阶段推进上撞 StageConflict 并可能双重启动作业 —— REVIEW P1)。
+        # 租约带心跳:活跃回合每 ~5s 续租;崩溃回合约 60s 后可被接管(resume)。
+        holder = uuid.uuid4().hex
+        lease = f"run:{run_id}"
+        if not store.acquire_lease(lease, holder, ttl=60.0, stale_after=60.0):
+            yield self._emit(ev.note(
+                "bad", "该 run 已有执行回合在进行(运行锁被占用);并发执行被拒绝。"
+                       "若上一回合已崩溃,约 60 秒后重试即可接管。"))
+            return
+        try:
+            async for event in self._execute_run(run_id, step_ids, token,
+                                                 lease=lease, holder=holder):
+                yield event
+        finally:
+            store.release_lease(lease, holder)
+
+    async def _execute_run(self, run_id: str, step_ids: list[int] | None,
+                           token: CancelToken, *, lease: str, holder: str
+                           ) -> AsyncIterator[dict]:
+        store = self.store
+        run = store.get_run(run_id) or {}
         store.set_run_status(run_id, "running")
 
-        # 待跑集合:显式指定,或 stale+pending+interrupted+orphaned(failed 需人工 RESET)
+        # 待跑集合:显式指定,或 pending+stale+interrupted+orphaned+running
+        # (failed 需人工 RESET;running 是服务重启后的接回目标 —— REVIEW P1:
+        # 漏掉它会让活作业永远接不回,下游步骤反因缺输入 contract_broken,
+        # 执行器的 claim/reattach 语义本就支持接回,不会重跑已完成阶段)
         steps = {s.step_id: s for s in store.load_steps(run_id)}
         if step_ids is None:
             step_ids = [sid for sid, s in steps.items()
-                        if s.state in ("pending", "stale", "interrupted", "orphaned")]
+                        if s.state in ("pending", "stale", "interrupted",
+                                       "orphaned", "running")]
         step_ids = topo_order(step_ids)
-        for sid in step_ids:  # 失效/中断步骤先复位(新 attempt)
+        for sid in step_ids:  # 失效/中断步骤先复位(新 attempt);running 不复位,交执行器接回
             if steps[sid].state in ("stale", "interrupted", "orphaned"):
                 store.reset_step_for_rerun(run_id, sid)
 
         total = len(step_ids)
         done_count = 0
         consecutive_failures: dict[str, int] = {}
+        last_renew = time.monotonic()
 
         for sid in step_ids:
             # 干预消费:steer 在步骤之间生效(§4.5 / absorb-E4)
@@ -300,17 +331,34 @@ class Driver:
                 f"s{sid}", f"[{sid:02d}/{max(step_ids)}]",
                 f"{cap.name} --method {step.method}", cap.name, open_=True))
 
-            # 执行 + 并行动作轮询(KILL 即时响应,§1.7)
+            # 执行 + 并行动作轮询(KILL 即时响应,§1.7)。执行器细节事件
+            # (step.stage / 执行期 tool.log)经队列泵入回合流:双通道承诺对
+            # 执行期同样成立 —— 此前只进 SSE 总线,前端 SSE 侧 busy 时全部
+            # 跳过,UI 两条通道都收不到执行日志(契约对账 P1)。
+            detail: asyncio.Queue = asyncio.Queue()
+
+            def pump(event: dict, _q: asyncio.Queue = detail) -> dict:
+                self._emit(event)
+                _q.put_nowait(event)
+                return event
+
             backend = self._backend_for(run, cap, step.method)
             exec_task = asyncio.create_task(
-                execute_step(self._exec_ctx(backend), run_id, sid, token))
+                execute_step(self._exec_ctx(backend, emit=pump), run_id, sid, token))
             while not exec_task.done():
                 await asyncio.sleep(min(self._poll, 0.2))
-                for action in store.due_actions("steer"):
+                while not detail.empty():
+                    yield detail.get_nowait()
+                if time.monotonic() - last_renew > 5.0:  # 运行锁心跳续租
+                    store.acquire_lease(lease, holder, ttl=60.0, stale_after=60.0)
+                    last_renew = time.monotonic()
+                for action in store.due_actions("steer", run_id=run_id):
                     if action["action"] == "KILL":
                         store.consume_action(action["id"])
                         self.request_cancel(run_id)  # E3:control 位同步落盘
-                        yield self._emit(ev.intervention("取消当前步骤(KILL)"))
+                        yield self._emit(ev.intervention("取消当前步骤(KILL)", mode="steer"))
+            while not detail.empty():  # 执行结束后冲刷余量,不丢尾部日志
+                yield detail.get_nowait()
             result = exec_task.result()
             step = result.step
 
@@ -385,8 +433,8 @@ class Driver:
         script_path = write_run_script(store, run_id, self.workspace)
         store.set_run_status(run_id, "done")
 
-        # follow_up 干预此刻消费(absorb-E4)
-        for action in store.due_actions("follow_up"):
+        # follow_up 干预此刻消费(absorb-E4;按 run 过滤,防跨 run 互吞)
+        for action in store.due_actions("follow_up", run_id=run_id):
             outcome = apply_action(store, run_id, action, registry=self.registry,
                                    tool_versions=(self.probe().tool_versions()))
             store.consume_action(action["id"])
@@ -401,12 +449,12 @@ class Driver:
     # ---------------- 干预消费 / 恢复 ----------------
 
     async def _consume_steer(self, run_id: str, current_step: int) -> AsyncIterator[dict]:
-        for action in self.store.due_actions("steer"):
+        for action in self.store.due_actions("steer", run_id=run_id):
             kind = action["action"]
             if kind == "KILL":
                 self.store.consume_action(action["id"])
                 self.request_cancel(run_id)
-                yield self._emit(ev.intervention("取消运行(KILL)"))
+                yield self._emit(ev.intervention("取消运行(KILL)", mode="steer"))
                 continue
             outcome = apply_action(self.store, run_id, action,
                                    registry=self.registry,

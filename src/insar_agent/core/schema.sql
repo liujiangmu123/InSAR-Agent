@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS metrics (
 CREATE TABLE IF NOT EXISTS pending_actions (
   id          INTEGER PRIMARY KEY,
   created_at  REAL NOT NULL,
+  run_id      TEXT,                                -- 归属 run;NULL=旧数据/未定向(next_run 预约
+                                                   -- 面向"下次规划",天然无 run 归属)
   scope       TEXT NOT NULL,                       -- 'step' | 'run'
   target      TEXT NOT NULL,                       -- step_id 或 run_id
   action      TEXT NOT NULL,                       -- RESET|PAUSE|PLAY|SKIP|KILL|SET_METHOD|SET_PARAMS|USER_MESSAGE

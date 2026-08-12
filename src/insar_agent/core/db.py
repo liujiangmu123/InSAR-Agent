@@ -20,6 +20,9 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # absorb-E3:取消是控制位不是状态 —— 持久化取消意图,服务重启后不丢
     ("runs", "control",
      "ALTER TABLE runs ADD COLUMN control TEXT NOT NULL DEFAULT 'running'"),
+    # 干预动作按 run 隔离(REVIEW-2026-08-12 P1:跨 run 互吞/溯源污染)
+    ("pending_actions", "run_id",
+     "ALTER TABLE pending_actions ADD COLUMN run_id TEXT"),
 )
 
 _STATEMENT_MIGRATIONS: tuple[str, ...] = (

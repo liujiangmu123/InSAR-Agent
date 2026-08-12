@@ -89,11 +89,15 @@ def export_provenance(store: Store, run_id: str, *, contract: dict[str, Threshol
             "reparsed_ok": bool(m["reparsed_ok"]) if m["reparsed_ok"] is not None else None,
         }
 
+    # 只导出归属本 run 的干预(REVIEW P1:全库查询会把所有历史 run 的干预混进
+    # 任一账本,污染溯源)。run_id 为 NULL 的旧行/未定向行宁可不进账本也不错记
+    # ——溯源的原则是"可归属才可声明"。
     interventions = [
         {"action": a["action"], "target": a["target"], "payload": a["payload"],
          "deliver_as": a["deliver_as"], "consumed_at": a["consumed_at"]}
         for a in store.db.query(
-            "SELECT * FROM pending_actions WHERE consumed_at IS NOT NULL ORDER BY id")
+            "SELECT * FROM pending_actions WHERE consumed_at IS NOT NULL AND run_id=?"
+            " ORDER BY id", (run_id,))
     ]
     for item in interventions:
         if isinstance(item["payload"], str):
