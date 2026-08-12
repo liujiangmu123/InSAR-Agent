@@ -13,7 +13,7 @@ dependencies = [
 # 栅格校验与真实 qa/出图(run_ok 的 NaN 检查、engines/qa.py、engines/figures.py 宿主回退)。
 # matplotlib 默认由引擎 conda 环境提供,故不在此声明;需宿主直接出图时另行安装。
 raster = ["numpy>=1.26", "h5py>=3.10"]
-dev = ["pytest>=8.0", "httpx>=0.27"]
+dev = ["pytest>=8.0", "httpx>=0.27", "hypothesis>=6.100"]
 
 [build-system]
 requires = ["setuptools>=68"]
