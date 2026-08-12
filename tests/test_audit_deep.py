@@ -508,33 +508,54 @@ def test_ladder_simulated_caps_at_runnable(store):
     assert "模拟执行" in ev.ceiling_reason
 
 
-# ================= fork:证据继承语义现状(P1 守护) =================
+# ================= fork / 云端跳过:证据继承与进阶语义(FOLLOWUPS #11/#12) =================
+#
+# 本节两个守护测试(test_fork_reuse_audits_along_ancestor_chain /
+# test_fork_skipped_stays_skipped_and_capped)由原
+# test_fork_reuse_inherits_no_evidence_p1 / test_fork_keeps_skipped_steps_skipped
+# 按设计后的新语义改写:原测试固定的是「缺口现状」(fork 零产物空洞过 L2、
+# 全跳过 run 空洞爬 audited),语义升级后按新判定断言。
 
-def test_fork_reuse_inherits_no_evidence_p1(store):
-    """fork 复用步骤的证据继承现状(P1 缺口的守护测试,行为变更须显式过此测试):
-
-    - 复用步骤在 fork run 里 VERIFIED/run_ok=1(qa=reused_from_parent)→ L0/L1 通过;
-    - 但产物/指标不随 fork 复制:L2「审计完整」对零产物零指标空洞通过(过宽),
-      父 run 的 gnss/crossval 指标不继承 → 永远停在 audited(过严)。
-    两个方向都不是设计后的语义 —— 修复须显式设计继承规则(见报告 P1)。
-    """
+def _fork_scaffold():
+    """fork 类测试的公共导入(保持与原守护测试相同的取材方式)。"""
     from insar_agent.core.stale import compute_step_hashes
     from insar_agent.planner.plan import fork_run
     from tests.test_loop import empty_probe
+    return compute_step_hashes, fork_run, empty_probe()
 
-    cap = _cap()
-    probe = empty_probe()
+
+def _mk_parent(store, cap, probe, compute_step_hashes, *, run_id="parent",
+               fp="content:v1:" + "f" * 64, artifact=True, validations=True):
+    """构造一个已执行完成的父 run(可选:带指纹产物 + 外部验证指标)。"""
     hashes = compute_step_hashes(cap, "m1", {}, [], probe.tool_versions())
     store.create_session("s1", "test")
-    store.create_run("parent", "s1", workspace="ws")
-    store.create_step("parent", cap.id, capability=str(cap.id), name=cap.name,
+    store.create_run(run_id, "s1", workspace="ws")
+    store.create_step(run_id, cap.id, capability=str(cap.id), name=cap.name,
                       method="m1", params={}, hashes=hashes)
-    store.advance("parent", cap.id, "VERIFIED", state="done", run_ok=1)
-    store.record_artifact("parent", cap.id, "qa_report", path="qa.json", kind="REPORT",
-                          layout="", policy="content", fp="content:v1:" + "f" * 64)
-    for name, val in (("gnss_rmse_mm", 1.0), ("crossval_r", 0.92)):
-        store.record_metric("parent", name, value=val, source_artifact="qa.json",
-                            source_field=name, reparsed_ok=True)
+    store.advance(run_id, cap.id, "VERIFIED", state="done", run_ok=1)
+    if artifact:
+        store.record_artifact(run_id, cap.id, "qa_report", path="qa.json", kind="REPORT",
+                              layout="", policy="content", fp=fp)
+    if validations:
+        for name, val in (("gnss_rmse_mm", 1.0), ("crossval_r", 0.92)):
+            store.record_metric(run_id, name, value=val, source_artifact="qa.json",
+                                source_field=name, reparsed_ok=True)
+    return hashes
+
+
+def test_fork_reuse_audits_along_ancestor_chain(store):
+    """守护测试改写(#11 语义升级):fork 复用步骤沿祖先链核对,不再空洞过审。
+
+    - 复用步骤 VERIFIED/run_ok=1(qa=reused_from_parent)照常继承 → L0/L1 通过
+      (执行没变,结论可携带);
+    - L2 不再对零产物空洞放行:产物记录沿 parent_run_id 可寻得且指纹一致 → 计入完整,
+      step_sources 记 inherited(parent=xx);
+    - 父 run 的 gnss/crossval 属外部验证,fork 后不自动继承(换参数须重新验证)
+      → 停在 audited,但 parent_validations 列出「曾验证过什么 + 当时参数指纹」供人判断。
+    """
+    compute_step_hashes, fork_run, probe = _fork_scaffold()
+    cap = _cap()
+    hashes = _mk_parent(store, cap, probe, compute_step_hashes)
     assert compute_evidence(store, "parent", OK_CONTRACT).level == "validated"
 
     plan = fork_run(store, "parent", registry={cap.id: cap}, changes={}, probe=probe)
@@ -545,19 +566,29 @@ def test_fork_reuse_inherits_no_evidence_p1(store):
     assert store.find_artifact(fork_id, "qa_report") is not None  # 产物沿祖先链可解析
 
     ev = compute_evidence(store, fork_id, OK_CONTRACT)
-    # 现状:fork run 自身零产物零指标,L2 空洞通过、父指标不继承 → audited
+    # fork run 自身仍零产物零指标,但 L2 现在有真实依据(祖先链核对通过)
     assert store.artifacts_of(fork_id) == [] and store.metrics_of(fork_id) == []
-    assert ev.level == "audited"
+    assert ev.level == "audited" and ev.ceiling is None
+
+    src = ev.step_sources[str(cap.id)]
+    assert src["origin"] == "inherited" and src["parent_run_id"] == "parent"
+    assert src["source"] == "inherited(parent=parent)"
+    assert src["artifacts"] == {"qa_report": "content:v1:" + "f" * 64}
+
+    # 父链验证清单:名称有序、指向父 run、附当时的参数指纹,且明确不继承
+    assert [v["name"] for v in ev.parent_validations] == ["crossval_r", "gnss_rmse_mm"]
+    for v in ev.parent_validations:
+        assert v["run_id"] == "parent" and v["inherited"] is False
+        assert v["args_hash"] == hashes["args_hash"]  # 验证发生时的参数指纹
+    # 降级原因把「父链曾验证过」说给人听
+    assert any("不自动继承" in r for r in ev.reasons)
 
 
-def test_fork_keeps_skipped_steps_skipped(store):
-    """云端已完成(skipped)的步骤 fork 后仍是 skipped;全跳过 run 的证据级现状。"""
-    from insar_agent.core.stale import compute_step_hashes
-    from insar_agent.planner.plan import fork_run
-    from tests.test_loop import empty_probe
-
+def test_fork_skipped_stays_skipped_and_capped(store):
+    """守护测试改写(#12 语义升级):skipped 步骤 fork 后仍 skipped;
+    全跳过 + 零本地产物 + 无 manifest 的 run 封顶 checked,不再空洞爬 audited。"""
+    compute_step_hashes, fork_run, probe = _fork_scaffold()
     cap = _cap()
-    probe = empty_probe()
     hashes = compute_step_hashes(cap, "m1", {}, [], probe.tool_versions())
     store.create_session("s1", "test")
     store.create_run("parent", "s1", workspace="ws")
@@ -568,6 +599,230 @@ def test_fork_keeps_skipped_steps_skipped(store):
     step = store.load_steps(plan.run_id)[0]
     assert step.state == "skipped" and step.run_ok is None and step.qa is None
 
-    # 现状:全跳过 run 无任何本地证据,也能空洞爬到 audited(cloud 证据不进阶梯,见报告)
-    ev = compute_evidence(store, plan.run_id, OK_CONTRACT)
+    ev = compute_evidence(store, plan.run_id, OK_CONTRACT)  # 未提供 workspace → 无云端证据
+    assert (ev.level, ev.ceiling) == ("checked", "checked")
+    assert "hyp3_manifest" in ev.ceiling_reason  # 审计缺口写明
+    assert "全部步骤云端跳过" in ev.ceiling_reason  # 零本地产物的run 不高于 checked
+    src = ev.step_sources[str(cap.id)]
+    assert src["origin"] == "missing" and "缺本地证据" in src["detail"]
+
+
+def test_fork_two_level_chain_inherits_from_grandparent(store):
+    """fork 链两级继承:孙代复用步骤的产物在祖代(中间代无产物记录),就近祖先解析。"""
+    compute_step_hashes, fork_run, probe = _fork_scaffold()
+    cap = _cap()
+    _mk_parent(store, cap, probe, compute_step_hashes, run_id="gen0", validations=False)
+
+    gen1 = fork_run(store, "gen0", registry={cap.id: cap}, changes={}, probe=probe).run_id
+    gen2 = fork_run(store, gen1, registry={cap.id: cap}, changes={}, probe=probe).run_id
+    assert store.artifacts_of(gen1) == []  # 中间代零产物记录,链核对须穿透它
+
+    ev = compute_evidence(store, gen2, OK_CONTRACT)
     assert ev.level == "audited"
+    src = ev.step_sources[str(cap.id)]
+    assert src["origin"] == "inherited" and src["parent_run_id"] == "gen0"
+
+
+def test_fork_ancestor_rerun_breaks_inheritance(store):
+    """指纹不一致降级:fork 后祖先被改参(指纹变了),复用步骤的审计依据失效 → checked。"""
+    compute_step_hashes, fork_run, probe = _fork_scaffold()
+    cap = _cap()
+    _mk_parent(store, cap, probe, compute_step_hashes, validations=False)
+    fork_id = fork_run(store, "parent", registry={cap.id: cap}, changes={},
+                       probe=probe).run_id
+    assert compute_evidence(store, fork_id, OK_CONTRACT).level == "audited"
+
+    # 父 run 改参重跑:步骤指纹与 fork 复用时不再一致(产物记录被覆写风险)
+    new_hashes = compute_step_hashes(cap, "m1", {"threads": 8}, [], probe.tool_versions())
+    store.set_step_config("parent", cap.id, method="m1", params={"threads": 8},
+                          hashes=new_hashes)
+
+    ev = compute_evidence(store, fork_id, OK_CONTRACT)
+    assert (ev.level, ev.level_index) == ("checked", 1)
+    assert any("fork 复用不可核对" in r for r in ev.reasons)
+    src = ev.step_sources[str(cap.id)]
+    assert src["origin"] == "missing" and "指纹不一致" in src["detail"]
+
+
+def test_fork_ancestor_artifact_without_fp_blocks_audit(store):
+    """祖先产物缺指纹:找得到记录但无 fp 可核 → 复用步骤不计入完整,停在 checked。"""
+    compute_step_hashes, fork_run, probe = _fork_scaffold()
+    cap = _cap()
+    _mk_parent(store, cap, probe, compute_step_hashes, fp="", validations=False)
+    fork_id = fork_run(store, "parent", registry={cap.id: cap}, changes={},
+                       probe=probe).run_id
+    ev = compute_evidence(store, fork_id, OK_CONTRACT)
+    assert ev.level == "checked"
+    src = ev.step_sources[str(cap.id)]
+    assert src["origin"] == "missing" and "缺指纹" in src["detail"]
+
+
+def test_fork_broken_chain_is_missing(store):
+    """链断裂:parent_run_id 指向不存在的 run → 复用依据无从核对,停在 checked。"""
+    store.create_session("s1", "test")
+    store.create_run("orphan", "s1", workspace="ws", parent_run_id="ghost")
+    store.create_step("orphan", 6, capability="6", name="步6", method="m",
+                      params={}, hashes=_H)
+    store.advance("orphan", 6, "VERIFIED", state="done", run_ok=1,
+                  qa=[{"check": "reused_from_parent", "ok": True, "detail": "ghost"}])
+
+    ev = compute_evidence(store, "orphan", OK_CONTRACT)
+    assert ev.level == "checked"
+    src = ev.step_sources["6"]
+    assert src["origin"] == "missing" and "不存在" in src["detail"]
+
+
+def test_fork_reused_zero_artifact_step_is_legal(store):
+    """复用本就不登记产物的步骤:找到执行原点且指纹一致 → 与本地零产物步骤同等对待。"""
+    compute_step_hashes, fork_run, probe = _fork_scaffold()
+    cap = _cap()
+    _mk_parent(store, cap, probe, compute_step_hashes, artifact=False, validations=False)
+    fork_id = fork_run(store, "parent", registry={cap.id: cap}, changes={},
+                       probe=probe).run_id
+    ev = compute_evidence(store, fork_id, OK_CONTRACT)
+    assert ev.level == "audited"  # 不因「零产物」误伤
+    src = ev.step_sources[str(cap.id)]
+    assert src["origin"] == "inherited" and src["artifacts"] == {}
+
+
+def test_parent_validations_two_generations_nearest_wins(store):
+    """父链验证清单跨两代收集:同名指标取最近祖先,来源 run 与参数指纹如实标注。"""
+    compute_step_hashes, fork_run, probe = _fork_scaffold()
+    cap = _cap()
+    _mk_parent(store, cap, probe, compute_step_hashes, run_id="gen0")  # gnss=1.0 + crossval
+    gen1 = fork_run(store, "gen0", registry={cap.id: cap}, changes={}, probe=probe).run_id
+    # 中间代自己重做了 GNSS 验证(值不同)—— 孙代视角应看到最近的这次
+    store.record_metric(gen1, "gnss_rmse_mm", value=2.0, source_artifact="qa.json",
+                        source_field="gnss_rmse_mm", reparsed_ok=True)
+    gen2 = fork_run(store, gen1, registry={cap.id: cap}, changes={}, probe=probe).run_id
+
+    ev = compute_evidence(store, gen2, OK_CONTRACT)
+    vals = {v["name"]: v for v in ev.parent_validations}
+    assert set(vals) == {"gnss_rmse_mm", "crossval_r"}
+    assert vals["gnss_rmse_mm"]["run_id"] == gen1 and vals["gnss_rmse_mm"]["value"] == 2.0
+    assert vals["crossval_r"]["run_id"] == "gen0" and vals["crossval_r"]["value"] == 0.92
+    # gen1 是复用 run,无产物记录可定位来源 → 参数指纹如实为空;gen0 可定位
+    assert vals["gnss_rmse_mm"]["args_hash"] is None
+    assert vals["crossval_r"]["args_hash"]
+
+
+def test_fork_mixed_reuse_and_cloud(store, workspace):
+    """混合 fork:一步复用(祖先链核对)+ 一步云端跳过(manifest 佐证)。"""
+    import json as _json
+
+    compute_step_hashes, fork_run, probe = _fork_scaffold()
+    cap6, cap7 = _cap(), _cap(id=7, name="审计深测步7")
+    _mk_parent(store, cap6, probe, compute_step_hashes, validations=False)
+    h7 = compute_step_hashes(cap7, "m1", {}, [], probe.tool_versions())
+    store.create_step("parent", 7, capability="7", name=cap7.name, method="m1",
+                      params={}, hashes=h7, state="skipped")
+    (workspace / "hyp3_manifest.json").write_text(
+        _json.dumps([{"job_id": "j1"}]), encoding="utf-8")
+
+    fork_id = fork_run(store, "parent", registry={6: cap6, 7: cap7}, changes={},
+                       probe=probe).run_id
+    ev = compute_evidence(store, fork_id, OK_CONTRACT, workspace=workspace)
+    assert (ev.level, ev.ceiling) == ("audited", "audited")  # 云端封顶 audited
+    assert ev.step_sources["6"]["origin"] == "inherited"
+    assert ev.step_sources["7"]["origin"] == "cloud"
+
+
+# ================= 云端跳过进阶梯(#12) =================
+
+def _cloud_run(store, *, run_id="r1", skipped_ids=(5,), local_ids=(6,),
+               validations=True):
+    """构造混合 run:skipped_ids 云端跳过,local_ids 本地完成(带指纹产物+重解析指标)。"""
+    _mk_run(store, run_id)
+    for sid in skipped_ids:
+        _add_step(store, run_id, sid, skipped=True)
+    for sid in local_ids:
+        _add_step(store, run_id, sid)
+        store.record_artifact(run_id, sid, f"art{sid}", path=f"products/a{sid}.json",
+                              kind="REPORT", layout="", policy="content",
+                              fp="content:v1:" + "f" * 64)
+    if local_ids:
+        store.record_metric(run_id, "unwrap_coverage", value=0.94,
+                            source_artifact=f"a{local_ids[0]}.json",
+                            source_field="unwrap_coverage", reparsed_ok=True)
+        if validations:
+            for name, val in (("gnss_rmse_mm", 1.0), ("crossval_r", 0.92)):
+                store.record_metric(run_id, name, value=val,
+                                    source_artifact=f"a{local_ids[0]}.json",
+                                    source_field=name, reparsed_ok=True)
+
+
+def test_cloud_skip_with_manifest_caps_at_audited(store, workspace):
+    """混合 run + 可核 manifest:跳过步骤计入完整,但整 run 封顶 audited
+    (云端过程不可本地复核,calibrated/validated 的外部验证须本地重新做)。"""
+    import hashlib as _hashlib
+    import json as _json
+
+    _cloud_run(store)  # 本地部分满足到 validated 的全部条件
+    manifest = workspace / "hyp3_manifest.json"
+    manifest.write_text(_json.dumps([{"job_id": "j1"}, {"job_id": "j2"}]),
+                        encoding="utf-8")
+
+    ev = compute_evidence(store, "r1", OK_CONTRACT, workspace=workspace)
+    assert (ev.level, ev.ceiling) == ("audited", "audited")
+    assert "不可本地复核" in ev.ceiling_reason
+    assert any("封顶 audited" in r for r in ev.reasons)  # 若无云端封顶本可到 validated
+
+    sha = _hashlib.sha256(manifest.read_bytes()).hexdigest()
+    src = ev.step_sources["5"]
+    assert src["origin"] == "cloud" and src["manifest_sha256"] == sha
+    assert src["source"] == f"cloud(manifest sha256:{sha[:12]})"
+    assert ev.step_sources["6"] == {"origin": "local", "source": "local"}
+
+    # 账本 evidence 段透出同一份判定依据(#12 连带 #3:ledger 同步)
+    from insar_agent.core.ledger import export_provenance
+
+    doc = export_provenance(store, "r1", contract=OK_CONTRACT, workspace=workspace)
+    assert doc["evidence"]["step_sources"]["5"]["origin"] == "cloud"
+    assert doc["evidence"]["step_sources"]["6"]["origin"] == "local"
+
+
+def test_cloud_skip_without_manifest_caps_at_checked(store, workspace):
+    """混合 run + 无 manifest:云端完成声明无凭据 → 审计缺口,封顶 checked。"""
+    _cloud_run(store)
+    ev = compute_evidence(store, "r1", OK_CONTRACT, workspace=workspace)
+    assert (ev.level, ev.ceiling) == ("checked", "checked")
+    assert "审计缺口" in ev.ceiling_reason
+    src = ev.step_sources["5"]
+    assert src["origin"] == "missing" and "缺本地证据" in src["detail"]
+
+
+def test_all_skipped_run_never_above_checked_even_with_manifest(store, workspace):
+    """全跳过 + 零本地产物:即便 manifest 可核,也不得高于 checked
+    (manifest 单独不构成审计完整;per-step 来源仍如实记 cloud)。"""
+    import json as _json
+
+    _cloud_run(store, skipped_ids=(5, 6), local_ids=())
+    (workspace / "hyp3_manifest.json").write_text(_json.dumps([{"job_id": "j1"}]),
+                                                  encoding="utf-8")
+    ev = compute_evidence(store, "r1", OK_CONTRACT, workspace=workspace)
+    assert (ev.level, ev.ceiling) == ("checked", "checked")
+    assert "全部步骤云端跳过" in ev.ceiling_reason
+    assert ev.step_sources["5"]["origin"] == "cloud"  # 步级证据与 run 级封顶各说各话
+    assert ev.step_sources["6"]["origin"] == "cloud"
+
+
+def test_cloud_manifest_parse_error_not_credited(store, workspace):
+    """manifest 存在但不可解析:sha256 虽可算,不构成云端完成的证据 → 同缺失处理。"""
+    _cloud_run(store)
+    (workspace / "hyp3_manifest.json").write_text("{不是 json", encoding="utf-8")
+    ev = compute_evidence(store, "r1", OK_CONTRACT, workspace=workspace)
+    assert (ev.level, ev.ceiling) == ("checked", "checked")
+    src = ev.step_sources["5"]
+    assert src["origin"] == "missing" and "无法解析" in src["detail"]
+
+
+def test_step_sources_local_run_shape(store):
+    """普通本地 run:step_sources 全为 local,parent_validations 为空,
+    且 to_dict() 输出账本 evidence 段的新字段(#3 字段契约)。"""
+    _audited_state(store)
+    ev = compute_evidence(store, "r1", OK_CONTRACT)
+    assert ev.step_sources == {"6": {"origin": "local", "source": "local"}}
+    assert ev.parent_validations == []
+    d = ev.to_dict()
+    assert set(d) == {"level", "level_index", "ladder", "reasons", "ceiling",
+                      "ceiling_reason", "step_sources", "parent_validations"}

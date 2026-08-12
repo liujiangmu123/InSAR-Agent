@@ -2,45 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 import time
 from pathlib import Path
 
 from insar_agent.audit.contract import Threshold
-from insar_agent.audit.ladder import compute_evidence
+from insar_agent.audit.ladder import cloud_evidence, compute_evidence
 from insar_agent.core.store import Store
 
 SCHEMA_VERSION = "1.0"
-
-# 云端(HyP3)完成声明的本地证据候选(工作区相对路径,按序查找)
-_CLOUD_MANIFEST_CANDIDATES = ("hyp3/hyp3_manifest.json", "hyp3_manifest.json")
-
-
-def _cloud_evidence(workspace: Path | None) -> dict:
-    """跳过步骤(云端已完成)的证据:HyP3 manifest 存在即引用并指纹,缺失如实声明。
-
-    诚实原则:跳过 ≠ 免检 —— provenance 里必须能看到「凭什么说云端做过」,
-    而不是一句无凭据的 skipped。
-    """
-    if workspace is None:
-        return {"present": False, "detail": "未提供 workspace,无法查找云端证据"}
-    for rel in _CLOUD_MANIFEST_CANDIDATES:
-        p = workspace / rel
-        if not p.is_file():
-            continue
-        raw = p.read_bytes()
-        out: dict = {"present": True, "kind": "hyp3_manifest", "path": rel,
-                     "sha256": hashlib.sha256(raw).hexdigest()}
-        try:
-            data = json.loads(raw.decode("utf-8"))
-            out["entries"] = len(data) if isinstance(data, (list, dict)) else 0
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            out["parse_error"] = True
-        return out
-    return {"present": False,
-            "detail": "未找到 hyp3_manifest.json(云端完成声明缺本地证据)"}
 
 
 def export_provenance(store: Store, run_id: str, *, contract: dict[str, Threshold],
@@ -49,7 +20,9 @@ def export_provenance(store: Store, run_id: str, *, contract: dict[str, Threshol
     if run is None:
         raise KeyError(run_id)
     steps = store.load_steps(run_id)
-    evidence = compute_evidence(store, run_id, contract)
+    # workspace 传给阶梯:云端跳过的 manifest 证据参与证据级判定(#12),
+    # evidence 段随之携带每步证据来源(step_sources)与父链验证清单(parent_validations)
+    evidence = compute_evidence(store, run_id, contract, workspace=workspace)
 
     cloud_ev: dict | None = None  # 全部跳过步骤共享同一份云端证据,惰性求值一次
     steps_out: dict[str, dict] = {}
@@ -70,7 +43,7 @@ def export_provenance(store: Store, run_id: str, *, contract: dict[str, Threshol
         }
         if s.state == "skipped":
             if cloud_ev is None:
-                cloud_ev = _cloud_evidence(workspace)
+                cloud_ev = cloud_evidence(workspace)
             steps_out[str(s.step_id)]["cloud_evidence"] = cloud_ev
 
     artifacts_out = {}
