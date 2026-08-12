@@ -170,8 +170,14 @@ CREATE TABLE IF NOT EXISTS trace (
   raw_response     TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_steps_run ON steps(run_id);
+-- 注:steps/artifacts/metrics 的复合主键自带 autoindex,run_id 前缀查询走它,
+-- 不再单建 steps(run_id) 索引(旧库的 idx_steps_run 由 db.py 迁移删除)。
 CREATE INDEX IF NOT EXISTS idx_actions_due ON pending_actions(consumed_at, deliver_as);
 CREATE INDEX IF NOT EXISTS idx_trace_run ON trace(run_id);
 CREATE INDEX IF NOT EXISTS idx_commands_step ON commands(run_id, step_id);
 CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id);
+-- duration_history 跨 run 聚合:没有它,查询计划从 commands 全表扫(落空时扫全量,
+-- 成本随历史线性涨);有它,计划器从 (capability,method) 点进 steps 再点查 commands。
+CREATE INDEX IF NOT EXISTS idx_steps_cap_method ON steps(capability, method);
+-- 按会话取 run 列表/最新 run(list_runs/latest_run):消 SCAN runs + 临时排序。
+CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, created_at);

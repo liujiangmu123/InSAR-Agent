@@ -392,12 +392,35 @@ class Store:
                         cwd: str | None = None, cmd_path: str | None = None,
                         stdout_path: str | None = None, attempt: int = 1,
                         env_delta: dict | None = None) -> int:
-        """意图落盘:命令即将执行,exit_code 为 NULL(absorb-E2 预留 id)。"""
+        """意图落盘:命令即将执行,exit_code 为 NULL(absorb-E2 预留 id)。
+
+        崩溃重入守卫:同 (run,step) 已有「同 argv、未结算」的意图行时,复用其
+        预留 id 并刷新落点(cwd/路径/attempt/created_at),不再新插。
+        触发场景:执行器在 reserve 之后、launch 前崩溃 —— 恢复路径查
+        latest_unsettled_command 发现作业从未启动、不认领,重走 reserve;
+        旧行若不复用会永远悬挂为未结算(假的"在途命令"),且 attempt 取
+        COUNT(commands)+1(executor.py),每次崩溃循环都再涨一格。
+        刷新(而非只返回 id)是必要的:恢复时的认领判定读该行 stdout_path
+        找作业目录,落点必须指向本次真实要启动的目录。
+        argv 变了(重规划)则照常新插 —— 那是另一条意图。
+        """
+        argv_json = json.dumps(argv)
         with self.db.tx() as cur:
+            row = cur.execute(
+                "SELECT id FROM commands WHERE run_id=? AND step_id=? AND argv=?"
+                " AND exit_code IS NULL ORDER BY id DESC LIMIT 1",
+                (run_id, step_id, argv_json)).fetchone()
+            if row is not None:
+                cur.execute(
+                    "UPDATE commands SET cwd=?, env_delta=?, cmd_path=?, stdout_path=?,"
+                    " attempt=?, created_at=? WHERE id=?",
+                    (cwd, json.dumps(env_delta or {}), cmd_path, stdout_path,
+                     attempt, time.time(), row["id"]))
+                return int(row["id"])
             cur.execute(
                 "INSERT INTO commands(run_id,step_id,argv,cwd,env_delta,cmd_path,exit_code,"
                 "duration,stdout_path,attempt,created_at) VALUES (?,?,?,?,?,?,NULL,NULL,?,?,?)",
-                (run_id, step_id, json.dumps(argv), cwd,
+                (run_id, step_id, argv_json, cwd,
                  json.dumps(env_delta or {}), cmd_path, stdout_path, attempt, time.time()))
             return int(cur.lastrowid)
 
