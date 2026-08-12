@@ -51,3 +51,34 @@ metadata:
 
 数据待获取(data_ready=false):Sentinel-1,玉树区域,2020-01 — 2023-12;
 获取后走 `asf_search_slc` 下载原始 SLC,或 HyP3 云端路线(跳过 2-6 步,失去中间产物控制权)。
+
+## 领域知识 · 参数依据(2026-08 调研)
+
+来源:reference/RESEARCH-insar-params-2026-08-12.md(引用均已按一手来源核对)。
+
+- **形变模型标准式**:一阶社区默认 d(t)=a·t+b·sin(2πt/T+φ₀)+c,T = 1 年(Li et al. 2019,
+  Remote Sens. 11(9):1000 青藏高原 S1 案例;Heihe 综述式(3),doi:10.1029/2022JF006782)。
+  Daout et al. (2017, GRL) 用 8 年数据证明冬季冻结期无形变、季节循环非正弦不对称 ——
+  半年项(periods=[1, 0.5])正是吸收该不对称的傅里叶二阶项;更物理的替代是 Stefan
+  度日模型(形变 ∝ √累计融化度日,Liu et al. 2012, JGR)。
+- **量级预期**:青藏高原冻融峰-峰季节位移常见 40–80 mm(Li et al. 2019),长期退化沉降
+  mm–cm/yr —— 远小于单景大气扰动(Zebker et al. 1997, JGR:相对湿度 20% 变化 ≈10 cm
+  形变误差),故大气校正不可省。
+- **大气校正依据**:高原分层延迟与地形强相关,会伪装成与地形相关的冻融信号;GACOS 校正后
+  InSAR−GNSS 速度差 STD 2.4→1.9 mm/yr(Morishita et al. 2020 §3.4);ERA-I 在青藏昆仑
+  平均削减 APS 73%(Jolivet et al. 2011, GRL)。GACOS 产品自带可行性指标,应先查指标再
+  决定采用(Yu et al. 2018, JGR 123:9202-9222)。经验高程相关校正(tropo_height_corr)
+  无法区分与地形相关的真实冻融形变,降级时必须在报告声明(MintPy cfg §8 注释;
+  Yunjun et al. 2019 §4.6)。
+- **网络设计(时间基线收紧)**:contract 台账的 max_temporal_baseline = 120 天是宽松侧
+  全局门(Yunjun et al. 2019 §6.3 主张宽松阈值+冗余网络);本场景跨冻结/融化季的干涉对
+  相干性系统性下降,应收紧至 S1 惯例区间 24–90 天(同数据源对照:ASF Ridgecrest 教程
+  24 天、GMTSAR S1 教程 50 天)并优先序贯短时基线对,同时保证冗余 —— 闭合修正能力随
+  冗余上升:序贯 3/5/10 连接可完全修正的错误干涉图占比上限 5/20/35%(Yunjun et al. 2019
+  结论 2)。
+- **数据跨度**:周期项可靠估计需 ≥2 个完整年循环;观测 <14 个月时线性趋势与季节项
+  不可分离(Li et al. 2019)—— 本场景 2020-01 — 2023-12 的 4 年设计满足要求。
+- **质检侧重**:解缠覆盖率门参照 LiCSBAS unw_cov_thre=0.3 下限惯例(Morishita et al.
+  2020 §2.4.1;本项目 contract 取 0.70 从严,待实测标定);低相干区时序反演后按时间相干
+  ≥0.7 掩膜(Pepe & Lanari 2006, IEEE TGRS;MintPy minTempCoh 默认),掩膜后可靠像元数
+  ≥100(MintPy minNumPixel 默认)。
