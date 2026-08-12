@@ -19,13 +19,12 @@ import re
 from types import SimpleNamespace
 
 import pytest
+from tests.test_loop import collect, make_driver
 
 from insar_agent.audit.ladder import LADDER
 from insar_agent.core.db import Database
 from insar_agent.core.store import Store
 from insar_agent.report.methods import methods_markdown
-
-from tests.test_loop import collect, make_driver
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _FP = re.compile(r"^(path|stat|content):(v\d+|sha256):[0-9a-f]{64}$")

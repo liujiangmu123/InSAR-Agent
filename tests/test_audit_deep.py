@@ -518,9 +518,10 @@ def test_ladder_simulated_caps_at_runnable(store):
 
 def _fork_scaffold():
     """fork 类测试的公共导入(保持与原守护测试相同的取材方式)。"""
+    from tests.test_loop import empty_probe
+
     from insar_agent.core.stale import compute_step_hashes
     from insar_agent.planner.plan import fork_run
-    from tests.test_loop import empty_probe
     return compute_step_hashes, fork_run, empty_probe()
 
 

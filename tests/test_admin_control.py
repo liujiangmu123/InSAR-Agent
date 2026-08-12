@@ -26,8 +26,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from insar_agent.api.admin_router import (create_admin_router, terminate_run,
-                                          terminate_step)
+from insar_agent.api.admin_router import create_admin_router, terminate_run, terminate_step
 from insar_agent.brain.facade import Brain
 from insar_agent.core.db import Database, _load_schema
 from insar_agent.core.store import StageConflict, Store

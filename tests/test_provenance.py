@@ -5,6 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 
+from tests.test_executor import (  # 复用执行器测试的脚手架
+    GATE_JOB,
+    _gate_cap,
+    make_ctx,
+    make_step,
+    script_builder,
+)
+
 from insar_agent.audit.contract import load_contract, pending_keys
 from insar_agent.audit.ladder import compute_evidence
 from insar_agent.audit.verify import verify_metrics
@@ -13,10 +21,6 @@ from insar_agent.core.store import Store
 from insar_agent.registry.capabilities import PIPELINE
 from insar_agent.report.methods import methods_markdown
 from insar_agent.report.script import export_run_script
-
-from tests.test_executor import (  # 复用执行器测试的脚手架
-    GATE_JOB, _gate_cap, make_ctx, make_step, script_builder,
-)
 from insar_agent.runtime.executor import execute_step
 
 
@@ -116,8 +120,9 @@ def test_provenance_export_complete(store, workspace):
 
 def test_provenance_on_failed_run(store, workspace):
     """审计在失败时同样产出(§1.6):失败步骤的 failure_class 与命令轨迹俱在。"""
-    from insar_agent.registry.model import ArtifactSpec
     from tests.test_executor import custom_cap
+
+    from insar_agent.registry.model import ArtifactSpec
 
     cap = custom_cap(artifacts=(ArtifactSpec("must", ("data/never.h5",)),))
     registry = {cap.id: cap}

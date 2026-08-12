@@ -8,7 +8,6 @@ mock 基建复用 test_provider_http(MockLLMServer / openai_body)。
 from __future__ import annotations
 
 import pytest
-from test_provider_http import MockLLMServer, openai_body
 
 from insar_agent.brain.facade import Brain
 from insar_agent.brain.provider import LLMProvider
@@ -17,6 +16,7 @@ from insar_agent.planner.feasibility import narrow_methods
 from insar_agent.registry.capabilities import REGISTRY
 from insar_agent.report.methods import methods_markdown
 from insar_agent.runtime.probe import ProbeResult
+from test_provider_http import MockLLMServer, openai_body
 
 
 @pytest.fixture(autouse=True)

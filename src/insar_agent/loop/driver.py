@@ -28,7 +28,6 @@ from insar_agent.brain.facade import Brain
 from insar_agent.core.actions import apply_action
 from insar_agent.core.failures import DISPOSITIONS, FailureClass
 from insar_agent.core.ledger import write_provenance
-from insar_agent.core.stale import estimate_rerun
 from insar_agent.core.store import Store
 from insar_agent.engines import default_builder
 from insar_agent.loop import events as ev

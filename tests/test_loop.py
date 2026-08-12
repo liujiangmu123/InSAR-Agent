@@ -7,7 +7,6 @@ import asyncio
 from insar_agent.brain.facade import Brain
 from insar_agent.loop.driver import Driver
 from insar_agent.loop.events import EventBus
-from insar_agent.registry.capabilities import REGISTRY
 from insar_agent.runtime.probe import ProbeResult
 
 

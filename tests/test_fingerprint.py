@@ -2,7 +2,6 @@
 
 from insar_agent.core.fingerprint import split_params, step_hashes
 
-
 KINDS = {"min_coherence": "science", "threads": "resource", "dpi": "presentation"}
 
 

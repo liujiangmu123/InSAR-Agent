@@ -2,7 +2,7 @@
 
 import pytest
 
-from insar_agent.core.store import StageConflict, Store, new_run_id
+from insar_agent.core.store import StageConflict, Store
 
 HASHES = {"task_hash": "t", "args_hash": "a", "local_hash": "l", "eval_hash": "e"}
 

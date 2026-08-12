@@ -13,7 +13,12 @@ dependencies = [
 # 栅格校验与真实 qa/出图(run_ok 的 NaN 检查、engines/qa.py、engines/figures.py 宿主回退)。
 # matplotlib 默认由引擎 conda 环境提供,故不在此声明;需宿主直接出图时另行安装。
 raster = ["numpy>=1.26", "h5py>=3.10"]
-dev = ["pytest>=8.0", "httpx>=0.27", "hypothesis>=6.100"]
+dev = [
+    "pytest>=8.0", "httpx>=0.27", "hypothesis>=6.100",
+    # 质检工具链:ruff 静态检查门禁 / pip-audit 依赖漏洞审计
+    "ruff>=0.16",
+    "pip-audit>=2.10",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -29,3 +34,23 @@ insar_agent = ["core/schema.sql", "audit/contract.yaml", "runtime/wsl_wrapper.sh
 testpaths = ["tests"]
 # basetemp 指向项目内目录:本机 %TEMP% 的 pytest 根目录存在 ACL 损坏(WinError 5)
 addopts = "-q --basetemp=.pytest_tmp"
+
+[tool.ruff]
+# 行宽对齐仓库现状:绝大多数行 <= 100(全仓最长 112,超 100 的约 30 行按告警清单管理,
+# 不为清零而改写既有代码);不启用 ruff format,避免全仓格式化大 diff
+line-length = 100
+target-version = "py311"
+# src 布局的一方包识别(isort 分组用)
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+# 保守规则集:pycodestyle 错误/警告(E/W)+ pyflakes(F)+ import 排序(I)
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["insar_agent"]
+
+[tool.ruff.lint.per-file-ignores]
+# conftest 先插 sys.path 再 import 一方包是刻意设计(支持不安装直接跑测试),
+# 其后的模块级 import 允许不在文件顶部
+"tests/conftest.py" = ["E402"]

@@ -230,7 +230,7 @@ def main() -> None:
             return upstream[0]
 
         mean_c, best_c = timeit(cascade, reps=10)
-        print(f"\n[c] step_hashes 级联 500 步(Merkle 链)")
+        print("\n[c] step_hashes 级联 500 步(Merkle 链)")
         print(f"    单次 mean={mean_c:.2f} ms  best={best_c:.2f} ms")
         summary.append(("c: step_hashes 级联 500 步", mean_c, best_c))
 
@@ -242,7 +242,7 @@ def main() -> None:
                 discover_artifacts(ws, specs)
 
         mean_d, best_d = timeit(run_discover, reps=5)
-        print(f"\n[d] discover_artifacts × 50(6 spec,含 glob 候选)")
+        print("\n[d] discover_artifacts × 50(6 spec,含 glob 候选)")
         print(f"    50 次 mean={mean_d:.2f} ms  best={best_d:.2f} ms")
         summary.append(("d: discover ×50", mean_d, best_d))
 
@@ -253,7 +253,7 @@ def main() -> None:
                 trim_history(history, max_chars=8000)
 
         mean_e, best_e = timeit(run_trim, reps=5)
-        print(f"\n[e] trim_history × 200(400 条消息)")
+        print("\n[e] trim_history × 200(400 条消息)")
         print(f"    200 次 mean={mean_e:.2f} ms  best={best_e:.2f} ms")
         summary.append(("e: trim_history ×200", mean_e, best_e))
 
