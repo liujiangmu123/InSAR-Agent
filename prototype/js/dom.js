@@ -131,13 +131,26 @@ export function replay(el, cls) {
 }
 
 let toastHost = null;
-export function toast(msg, ms = 2400) {
+function ensureToastHost() {
   if (!toastHost) {
     toastHost = h('div', { class: 'toast-host', role: 'status', 'aria-live': 'polite' });
     document.body.appendChild(toastHost);
   }
+  return toastHost;
+}
+// a11y:live region 必须先于首条消息存在,否则屏幕阅读器不播报第一条 toast;
+// 模块脚本执行时 body 已可用,node 单测环境无 document 则跳过。
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => ensureToastHost(), { once: true });
+  } else {
+    ensureToastHost();
+  }
+}
+
+export function toast(msg, ms = 2400) {
   const t = h('div', { class: 'toast' }, msg);
-  toastHost.appendChild(t);
+  ensureToastHost().appendChild(t);
   setTimeout(() => t.remove(), ms);
 }
 

@@ -22,12 +22,14 @@
   /* ---- 文本 ---- */
   --text: #111827;
   --text-2: #4b5563;
-  --text-3: #9199a5;
+  /* a11y:#9199a5 在白/浅灰底仅 2.6–2.9:1,加深到 4.5:1 以上(WCAG AA) */
+  --text-3: #656e7c;
   --text-inv: #ffffff;
 
   /* ---- 语义色：主 ---- */
-  --accent: #3b82f6;
-  --accent-hover: #2563eb;
+  /* a11y:#3b82f6 上的白字/链接只有 3.68:1,整体下移一档(白字 5.17:1) */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
   --accent-weak: #eff6ff;
   --accent-border: #bfdbfe;
   --accent-text: #1d4ed8;
@@ -38,7 +40,8 @@
   --ok-border: #bbf7d0;
   --ok-text: #15803d;
 
-  --stale: #ea580c;          /* 失效：本项目独有语义 */
+  /* a11y:失效色作 .btn-wrn 底色时白字只有 3.56:1,加深到 4.62:1(保持橙色相) */
+  --stale: #ca4c0a;          /* 失效：本项目独有语义 */
   --stale-weak: #fff7ed;
   --stale-border: #fed7aa;
   --stale-text: #9a3412;
@@ -48,14 +51,16 @@
   --bad-border: #fecaca;
   --bad-text: #b91c1c;
 
-  --think: #d97706;
+  /* a11y:#d97706 在白底仅 3.19:1,加深到 5.02:1(思考条目标题是 12px 文本) */
+  --think: #b45309;
   --think-weak: #fffbeb;
   --think-border: #fde68a;
 
   /* ---- 终端配色（tool_call 输出） ---- */
   --term-bg: #0d1424;
   --term-fg: #cbd5e1;
-  --term-dim: #64748b;
+  /* a11y:#64748b 在终端深底仅 3.86:1,提亮到 4.5:1 以上(dim 行仍是需读的日志) */
+  --term-dim: #6f8098;
   --term-cmd: #7dd3fc;
   --term-ok: #86efac;
   --term-warn: #fbbf24;
@@ -117,7 +122,8 @@
 
   --text: #e6e9ee;
   --text-2: #a2acbb;
-  --text-3: #6c7787;
+  /* a11y:#6c7787 在深底最低 3.69:1,提亮到 4.5:1 以上 */
+  --text-3: #7c8796;
   --text-inv: #0e1116;
 
   --accent: #60a5fa;
@@ -159,5 +165,7 @@
     animation-duration: .001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .001ms !important;
+    /* 防御:CSS 平滑滚动同属动效(JS 侧 scrollIntoView 已单独判断该偏好) */
+    scroll-behavior: auto !important;
   }
 }
