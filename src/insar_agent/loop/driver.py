@@ -97,6 +97,9 @@ class Driver:
         return self._tokens[run_id]
 
     def request_cancel(self, run_id: str) -> None:
+        """取消 = control 位不是状态(absorb-E3):意图先落盘(服务重启不丢),
+        token 是同进程快路径。已在途的作业照常结算,只禁止新效果。"""
+        self.store.request_cancel(run_id)
         self.token_for(run_id).cancel()
 
     def _exec_ctx(self) -> ExecContext:
@@ -239,6 +242,15 @@ class Driver:
         if token.cancelled:
             self._tokens.pop(run_id, None)
             token = self.token_for(run_id)
+        # E3:持久化取消意图 —— 重启后 token 丢了,control 位还在。读到
+        # cancel_requested 就不启动任何新步骤,直接把 run 收尾为 interrupted
+        # (在途作业由 wrapper 按文件契约自行结算,不抢杀)。
+        if run.get("control") == "cancel_requested":
+            store.set_run_status(run_id, "interrupted")
+            store.clear_cancel(run_id)  # 意图已兑现,复位后允许显式重跑
+            yield self._emit(ev.note(
+                "warn", "检测到持久化的取消请求:不启动新步骤,run 收尾为 interrupted"))
+            return
         store.set_run_status(run_id, "running")
 
         # 待跑集合:显式指定,或 stale+pending+interrupted+orphaned(failed 需人工 RESET)
@@ -259,11 +271,15 @@ class Driver:
             # 干预消费:steer 在步骤之间生效(§4.5 / absorb-E4)
             async for event in self._consume_steer(run_id, sid):
                 yield event
-            if (store.get_run(run_id) or {}).get("status") == "paused":
+            run_row = store.get_run(run_id) or {}
+            if run_row.get("status") == "paused":
                 yield self._emit(ev.note("warn", "已暂停:当前进度已保留,PLAY 后继续"))
                 return
-            if token.cancelled:
+            # E3:每步之间检查 control 位(token 是同进程快路径,control 位管
+            # 跨进程/重启;外部终结者置位后活着的 driver 在此自停)
+            if token.cancelled or run_row.get("control") == "cancel_requested":
                 store.set_run_status(run_id, "interrupted")
+                store.clear_cancel(run_id)
                 yield self._emit(ev.note("warn", "运行已取消;已完成步骤保留"))
                 return
 
@@ -281,7 +297,7 @@ class Driver:
                 for action in store.due_actions("steer"):
                     if action["action"] == "KILL":
                         store.consume_action(action["id"])
-                        token.cancel()
+                        self.request_cancel(run_id)  # E3:control 位同步落盘
                         yield self._emit(ev.intervention("取消当前步骤(KILL)"))
             result = exec_task.result()
             step = result.step
@@ -303,6 +319,7 @@ class Driver:
 
             if result.outcome == "interrupted":
                 store.set_run_status(run_id, "interrupted")
+                store.clear_cancel(run_id)  # E3:取消意图已兑现,消费 control 位
                 yield self._emit(ev.note("warn", f"第 {sid} 步已取消 · 可续跑(已完成阶段保留)"))
                 return
             if result.outcome == "orphaned":
@@ -390,17 +407,22 @@ class Driver:
                 yield self._emit(event)
 
     async def resume(self, session_id: str) -> AsyncIterator[dict]:
-        """服务重启后的恢复入口(§7.4 reattach 条目):接回 running 状态的 run。"""
+        """服务重启后的恢复入口(§7.4 reattach 条目):接回 running 状态的 run。
+
+        E3:control 位是持久化的取消意图 —— 重启前请求过取消的 run 不再
+        reattach/启动新步骤,由 execute 的入口检查直接收尾为 interrupted。
+        """
         for run in self.store.list_runs(session_id):
             if run["status"] != "running":
                 continue
             run_id = run["run_id"]
-            live = [s for s in self.store.load_steps(run_id)
-                    if s.state == "running" and s.stage in ("PREPARED", "LAUNCHED", "RUNNING")]
-            if live:
-                s = live[0]
-                yield self._emit(ev.reattach(
-                    f"检测到第 {s.step_id} 步仍在运行(job: {s.job_dir},"
-                    f"日志偏移 {s.log_offset}),已接回 —— 不重跑已完成阶段"))
+            if run.get("control") != "cancel_requested":
+                live = [s for s in self.store.load_steps(run_id)
+                        if s.state == "running" and s.stage in ("PREPARED", "LAUNCHED", "RUNNING")]
+                if live:
+                    s = live[0]
+                    yield self._emit(ev.reattach(
+                        f"检测到第 {s.step_id} 步仍在运行(job: {s.job_dir},"
+                        f"日志偏移 {s.log_offset}),已接回 —— 不重跑已完成阶段"))
             async for event in self.execute(session_id, run_id):
                 yield event

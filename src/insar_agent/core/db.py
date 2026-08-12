@@ -12,6 +12,22 @@ def _load_schema() -> str:
     return (resources.files("insar_agent.core") / "schema.sql").read_text(encoding="utf-8")
 
 
+# 列迁移清单:schema.sql 的 CREATE TABLE IF NOT EXISTS 不会改动既有表,
+# 旧库缺列时按此清单 ALTER 补齐(PRAGMA table_info 检查,幂等)。
+_COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    # absorb-E3:取消是控制位不是状态 —— 持久化取消意图,服务重启后不丢
+    ("runs", "control",
+     "ALTER TABLE runs ADD COLUMN control TEXT NOT NULL DEFAULT 'running'"),
+)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, ddl in _COLUMN_MIGRATIONS:
+        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if cols and column not in cols:
+            conn.execute(ddl)
+
+
 class Database:
     """单进程访问(设计约束:只有宿主进程访问 .db)。线程安全靠 RLock 串行化。"""
 
@@ -24,6 +40,7 @@ class Database:
         if self.path != ":memory:":
             self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.executescript(_load_schema())
+        _migrate(self._conn)
         self._conn.commit()
 
     def close(self) -> None:
