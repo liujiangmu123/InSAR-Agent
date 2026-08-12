@@ -7,8 +7,10 @@
 要点:
   - onedir:桌面 sidecar 场景启动快(onefile 每次启动都要向临时目录解压);
   - console=False:无窗常驻,诊断依赖壳/脚本的输出重定向;
-  - datas:prototype/ 整目录 + 三个包内数据文件按原包相对路径摆进 _internal,
-    冻结态 importlib.resources.files(...) 才能解析到同样的位置;
+  - datas:prototype/ 整目录 + 包内数据文件按原包相对路径摆进 _internal,
+    冻结态 importlib.resources.files(...) / Path(__file__) 才能解析到同样的位置;
+    清单必须与 pyproject.toml 的 [tool.setuptools.package-data] 保持同步
+    (schema.sql / contract.yaml / wsl_wrapper.sh / scenario_packs/**);
   - local_wrapper.py 额外以数据文件带上:runtime/jobs.py 用
     Path(module.__file__) 把它交给外部解释器执行,PYZ 里的模块没有真实
     磁盘路径,补一份源码文件让该路径存在。
@@ -28,6 +30,9 @@ datas = [
     (str(SRC_PKG / "audit" / "contract.yaml"), "insar_agent/audit"),
     (str(SRC_PKG / "runtime" / "wsl_wrapper.sh"), "insar_agent/runtime"),
     (str(SRC_PKG / "runtime" / "local_wrapper.py"), "insar_agent/runtime"),
+    # 场景技能包整目录:registry/scenarios.py 用 Path(__file__) 同级 scenario_packs
+    # 扫描,漏掉不报错 —— SCENARIOS 静默变空,意图识别整体失效(首次打包实测补上)
+    (str(SRC_PKG / "registry" / "scenario_packs"), "insar_agent/registry/scenario_packs"),
 ]
 
 hiddenimports = sorted(set(
@@ -45,7 +50,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter"],
+    # hypothesis:dev-only 测试库,经 pydantic.v1._hypothesis_plugin /
+    # hypothesis.extra.numpy 的可选 import 被静态分析拖进包(首次打包实测),显式排除
+    excludes=["tkinter", "hypothesis"],
     noarchive=False,
 )
 

@@ -171,14 +171,24 @@ fn install_close_to_tray_hook<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<(
 
 // ---------------- 数据目录 ----------------
 
-/// 数据目录:与 main.rs `repo_root()` 同一语义 ——
-/// dev 构建下 desktop/ 的父目录即仓库根(runs/、workspace/、data/ 所在地);
-/// 打包分发后该路径不存在 → 应用数据目录;最后兜底当前工作目录。
+/// 数据目录,优先级与后端的数据落点保持一致:
+/// ① 环境变量 INSAR_HOME(显式指定,后端同样最优先认它);
+/// ② dev 构建:desktop/ 的父目录即仓库根(runs/、workspace/、data/ 所在地);
+/// ③ 打包分发:%LOCALAPPDATA%\insar-agent-data —— 冻结后端(entry.py)的缺省
+///    数据根,菜单打开的必须是 insar.db 真实所在地,不能用 Tauri app_data_dir
+///    (%APPDATA%\dev.insar.agent,后端从不写那里);
+/// ④ 兜底:Tauri 应用数据目录 → 当前工作目录。
 fn data_dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
+    if let Some(home) = std::env::var_os("INSAR_HOME") {
+        return PathBuf::from(home);
+    }
     if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
         if root.join("src").join("insar_agent").is_dir() {
             return root.to_path_buf();
         }
+    }
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(base).join("insar-agent-data");
     }
     if let Ok(dir) = app.path().app_data_dir() {
         return dir;

@@ -14,6 +14,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "resources": {
+      "backend-bundle/dist/insar-backend/": "backend/"
+    },
     "publisher": "InSAR-Agent 项目组",
     "shortDescription": "InSAR 形变监测智能体桌面版",
     "longDescription": "InSAR-Agent 桌面版:内置 Python 分析后端的卫星雷达形变监测智能体,开箱即用的桌面工作台。",

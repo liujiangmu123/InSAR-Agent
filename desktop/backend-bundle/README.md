@@ -41,7 +41,7 @@ dist/insar-backend/
 |---|---|---|
 | `INSAR_PORT` | 监听端口 | `8873` |
 | `INSAR_HOST` | 监听地址 | `127.0.0.1` |
-| `INSAR_HOME` | 数据目录 | 冻结态 `%LOCALAPPDATA%\insar-agent\workspace`(源码运行仍是 cwd 相对 `workspace/`,行为不变) |
+| `INSAR_HOME` | 数据目录 | 冻结态 `%LOCALAPPDATA%\insar-agent-data\workspace`(源码运行仍是 cwd 相对 `workspace/`,行为不变)。带 `-data` 后缀是因为 NSIS 安装目录 `%LOCALAPPDATA%\InSAR-Agent` 与 `insar-agent` 在 Windows 上大小写不敏感同目录,数据会寄生进安装目录(首次打包实测) |
 | `INSAR_UI_DIR` | 静态 UI 目录覆盖 | 自动探测:exe 旁 `prototype/` 优先,其次 `_internal\prototype` |
 
 UI 目录解析:冻结后 `api/app.py` 里按 `__file__` 回溯源码树的 `PROTOTYPE_DIR`
