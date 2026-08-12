@@ -33,6 +33,8 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 const DEFAULT_PORT: u16 = 8873;
 const HEALTH_TIMEOUT_SECS: u64 = 30;
+/// 后端健康检查端点(与 FastAPI 侧路由保持一致)。
+const HEALTH_PATH: &str = "/api/health";
 /// INSAR_PORT 被占且不是本后端时,从这里起向上扫描空闲端口。
 const PORT_SCAN_START: u16 = 8873;
 const PORT_SCAN_SPAN: u16 = 100;
@@ -55,6 +57,7 @@ fn insar_port() -> u16 {
 
 // ---------------- 端口裁决 ----------------
 
+#[derive(Debug, PartialEq, Eq)]
 enum PortPlan {
     /// 端口上已有健康后端:直接连接,不 spawn、不接管生命周期。
     Reuse(u16),
@@ -69,15 +72,26 @@ fn port_is_free(port: u16) -> bool {
 /// 端口裁决:健康后端 → 复用;空闲 → 用之;被占且 /api/health 非 200 →
 /// 从 PORT_SCAN_START 起向上找第一个空闲端口。
 fn resolve_port(desired: u16) -> Result<PortPlan, String> {
-    if health_ok(desired) {
+    resolve_port_with(desired, health_ok, port_is_free)
+}
+
+/// 端口裁决的纯逻辑核:健康探测与空闲探测以闭包注入,便于单测回退序列。
+/// 扫描时跳过 desired 本身 —— 走到扫描分支说明它已被判定不可用,
+/// 即使空闲探测因 TOCTOU 竞态再次放行也不能选回去。
+fn resolve_port_with(
+    desired: u16,
+    healthy: impl Fn(u16) -> bool,
+    free: impl Fn(u16) -> bool,
+) -> Result<PortPlan, String> {
+    if healthy(desired) {
         return Ok(PortPlan::Reuse(desired));
     }
-    if port_is_free(desired) {
+    if free(desired) {
         return Ok(PortPlan::Spawn(desired));
     }
     let end = PORT_SCAN_START.saturating_add(PORT_SCAN_SPAN);
     for p in PORT_SCAN_START..end {
-        if p != desired && port_is_free(p) {
+        if p != desired && free(p) {
             return Ok(PortPlan::Spawn(p));
         }
     }
@@ -89,15 +103,20 @@ fn resolve_port(desired: u16) -> Result<PortPlan, String> {
 
 // ---------------- 极简 HTTP(健康检查不为此引 reqwest 等重依赖) ----------------
 
+/// 组装最小 HTTP/1.1 GET 请求头(纯字符串拼装,拆出便于单测)。
+fn http_request_head(host: &str, port: u16, path: &str) -> String {
+    format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+    )
+}
+
 /// 对 host:port 发一个最小 HTTP/1.1 GET,返回响应状态码。
 fn http_get_status(host: &str, port: u16, path: &str, timeout: Duration) -> Option<u16> {
     let addr: std::net::SocketAddr = format!("{host}:{port}").parse().ok()?;
     let mut stream = TcpStream::connect_timeout(&addr, timeout).ok()?;
     stream.set_read_timeout(Some(timeout)).ok()?;
     stream.set_write_timeout(Some(timeout)).ok()?;
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-    );
+    let request = http_request_head(host, port, path);
     stream.write_all(request.as_bytes()).ok()?;
     let mut response = Vec::new();
     let mut buf = [0u8; 1024];
@@ -127,7 +146,7 @@ fn parse_status_code(response: &str) -> Option<u16> {
 }
 
 fn health_ok(port: u16) -> bool {
-    http_get_status("127.0.0.1", port, "/api/health", Duration::from_secs(2)) == Some(200)
+    http_get_status("127.0.0.1", port, HEALTH_PATH, Duration::from_secs(2)) == Some(200)
 }
 
 /// 轮询健康检查;sidecar 提前退出则立即失败(不空等满超时)。
@@ -260,10 +279,11 @@ fn open_window(handle: &AppHandle, label: &str, title: &str, url: String, size: 
                 return;
             }
         };
-        let built = WebviewWindowBuilder::new(&handle_, label.as_str(), WebviewUrl::External(parsed))
-            .title(title.as_str())
-            .inner_size(size.0, size.1)
-            .build();
+        let built =
+            WebviewWindowBuilder::new(&handle_, label.as_str(), WebviewUrl::External(parsed))
+                .title(title.as_str())
+                .inner_size(size.0, size.1)
+                .build();
         if let Err(e) = built {
             eprintln!("[desktop] 创建窗口失败:{e}");
             handle_.exit(1);
@@ -271,12 +291,17 @@ fn open_window(handle: &AppHandle, label: &str, title: &str, url: String, size: 
     });
 }
 
+/// 主窗口指向本地后端的 URL(纯拼装,拆出便于单测)。
+fn backend_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/")
+}
+
 fn open_main_window(handle: &AppHandle, port: u16) {
     open_window(
         handle,
         "main",
         "InSAR-Agent",
-        format!("http://127.0.0.1:{port}/"),
+        backend_url(port),
         (1440.0, 900.0),
     );
 }
@@ -300,7 +325,13 @@ fn show_diagnostics(
     workdir: &Path,
 ) {
     eprintln!("[desktop] 启动失败:{error}");
-    match serve_html(diagnostics_html(error, backend_desc, launch_desc, port, workdir)) {
+    match serve_html(diagnostics_html(
+        error,
+        backend_desc,
+        launch_desc,
+        port,
+        workdir,
+    )) {
         Ok(diag_port) => open_window(
             handle,
             "diagnostics",
@@ -372,6 +403,14 @@ fn boot(handle: AppHandle, desired_port: u16) {
     }
 }
 
+/// 第 attempt 次(从 1 计)自动重启前的退避时长:1s → 2s → 4s 指数翻倍。
+/// 移位量封顶(64s 上限)防溢出 —— 当前 MAX_RESTARTS=3 只用到前三档,
+/// 未来调大重启预算时该上限保证不 panic、不无限退避。
+fn restart_backoff(attempt: u32) -> Duration {
+    let shift = attempt.saturating_sub(1).min(6);
+    Duration::from_secs(1u64 << shift)
+}
+
 /// 运行期看护:sidecar 意外退出 → 指数退避(1s/2s/4s)自动重启,最多
 /// MAX_RESTARTS 次;稳定运行满 STABLE_UPTIME_SECS 后预算清零。重启期间
 /// 窗口标题实时提示;重启预算耗尽仍未恢复 → 弹诊断页并停止看护。
@@ -397,7 +436,7 @@ fn supervise(
         let mut recovered = false;
         while attempts < MAX_RESTARTS {
             attempts += 1;
-            let backoff = Duration::from_secs(1u64 << (attempts - 1)); // 1s/2s/4s
+            let backoff = restart_backoff(attempts); // 1s/2s/4s
             set_main_title(
                 &handle,
                 format!(
@@ -675,5 +714,95 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         assert!(!port_is_free(port));
+    }
+
+    // ---------------- 端口仲裁(纯逻辑,探测以闭包注入) ----------------
+
+    #[test]
+    fn resolve_port_reuses_healthy_backend() {
+        let plan = resolve_port_with(9000, |_| true, |_| panic!("已健康就不该再探测空闲"));
+        assert_eq!(plan, Ok(PortPlan::Reuse(9000)));
+    }
+
+    #[test]
+    fn resolve_port_spawns_on_free_desired_port() {
+        let plan = resolve_port_with(9000, |_| false, |p| p == 9000);
+        assert_eq!(plan, Ok(PortPlan::Spawn(9000)));
+    }
+
+    #[test]
+    fn resolve_port_falls_back_to_first_free_scan_port() {
+        // 期望端口被占且不健康 → 从 PORT_SCAN_START 起向上,命中第一个空闲端口
+        let plan = resolve_port_with(9000, |_| false, |p| p == 8875 || p == 8876);
+        assert_eq!(plan, Ok(PortPlan::Spawn(8875)));
+    }
+
+    #[test]
+    fn resolve_port_scan_covers_span_boundary() {
+        // 扫描区间为 [PORT_SCAN_START, PORT_SCAN_START+PORT_SCAN_SPAN):最后一个端口也能被找到
+        let last = PORT_SCAN_START + PORT_SCAN_SPAN - 1;
+        let plan = resolve_port_with(9000, |_| false, |p| p == last);
+        assert_eq!(plan, Ok(PortPlan::Spawn(last)));
+    }
+
+    #[test]
+    fn resolve_port_scan_skips_desired_even_if_freed_meanwhile() {
+        // desired 首查被占;扫描途中即使空闲探测因 TOCTOU 竞态对它放行,也必须跳过它
+        use std::cell::Cell;
+        let calls = Cell::new(0u32);
+        let free = |p: u16| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                false // 第一次(desired 直查)被占
+            } else {
+                p == 8873 || p == 8890
+            }
+        };
+        let plan = resolve_port_with(8873, |_| false, free);
+        assert_eq!(plan, Ok(PortPlan::Spawn(8890)));
+    }
+
+    #[test]
+    fn resolve_port_errors_when_scan_exhausted() {
+        let err = resolve_port_with(8873, |_| false, |_| false).unwrap_err();
+        assert!(err.contains("8873"), "错误信息应含期望端口:{err}");
+        assert!(err.contains("没有空闲端口"), "错误信息应说明扫描失败:{err}");
+    }
+
+    // ---------------- 重启退避曲线 ----------------
+
+    #[test]
+    fn restart_backoff_follows_doubling_curve() {
+        // MAX_RESTARTS=3 实际用到的三档:1s → 2s → 4s
+        assert_eq!(restart_backoff(1), Duration::from_secs(1));
+        assert_eq!(restart_backoff(2), Duration::from_secs(2));
+        assert_eq!(restart_backoff(3), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn restart_backoff_is_capped_and_never_panics() {
+        // 间隔上限 64s;次数上限由 supervise 的 while attempts < MAX_RESTARTS 保证
+        assert_eq!(restart_backoff(7), Duration::from_secs(64));
+        assert_eq!(restart_backoff(100), Duration::from_secs(64));
+        assert_eq!(restart_backoff(u32::MAX), Duration::from_secs(64));
+        // 0 不在正常调用域(attempt 从 1 计),防御性取最小档
+        assert_eq!(restart_backoff(0), Duration::from_secs(1));
+    }
+
+    // ---------------- 健康检查 / 主窗口 URL 拼装 ----------------
+
+    #[test]
+    fn backend_url_points_to_loopback_root() {
+        assert_eq!(backend_url(8873), "http://127.0.0.1:8873/");
+        assert_eq!(backend_url(18944), "http://127.0.0.1:18944/");
+    }
+
+    #[test]
+    fn http_request_head_is_well_formed() {
+        let head = http_request_head("127.0.0.1", 8873, HEALTH_PATH);
+        assert!(head.starts_with("GET /api/health HTTP/1.1\r\n"));
+        assert!(head.contains("Host: 127.0.0.1:8873\r\n"));
+        assert!(head.contains("Connection: close\r\n"));
+        assert!(head.ends_with("\r\n\r\n"), "请求头必须以空行结束");
     }
 }
