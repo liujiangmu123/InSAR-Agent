@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -23,10 +25,11 @@ from pydantic import BaseModel
 from insar_agent.audit.contract import load_contract
 from insar_agent.brain.facade import Brain
 from insar_agent.brain.provider import LLMProvider
+from insar_agent.core.actions import ACTIONS
 from insar_agent.core.db import Database
 from insar_agent.core.ledger import export_provenance
 from insar_agent.core.stale import preview_change
-from insar_agent.core.store import Store
+from insar_agent.core.store import DELIVER_AS, Store
 from insar_agent.loop.driver import Driver
 from insar_agent.planner.feasibility import narrow_methods
 from insar_agent.planner.plan import fork_run
@@ -43,6 +46,41 @@ from insar_agent.report.script import export_run_script
 _UI_DIR_OVERRIDE = os.environ.get("INSAR_UI_DIR", "")
 PROTOTYPE_DIR = (Path(_UI_DIR_OVERRIDE) if _UI_DIR_OVERRIDE
                  else Path(__file__).resolve().parents[3] / "prototype")
+
+log = logging.getLogger(__name__)
+
+# session_id 会成为 workspace 子目录名(home/sessions/<id>):必须在 API 边界
+# 挡掉路径穿越与文件系统非法名,否则 GET /api/registry?session=../../x 之类的
+# 请求会在 home 之外创建目录(driver 构造时 mkdir)。
+_SESSION_ID_MAX = 64
+_SESSION_FORBIDDEN_CHARS = set('/\\:*?"<>|')
+_WINDOWS_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL",
+                           *(f"COM{i}" for i in range(1, 10)),
+                           *(f"LPT{i}" for i in range(1, 10))}
+
+#: /api/actions 可入队的动作闭集(core/actions.ACTIONS + 掉线消息 USER_MESSAGE,
+#: 见 schema.sql pending_actions.action 注释);其中步骤级动作需要整数 target。
+_KNOWN_ACTIONS = frozenset(ACTIONS) | {"USER_MESSAGE"}
+_STEP_ACTIONS = frozenset({"RESET", "SKIP", "SET_METHOD", "SET_PARAMS"})
+
+#: SQLite INTEGER 上限之内的宽松步骤号边界(流水线实际只有 1-11)
+_STEP_ID_MAX = 1_000_000
+
+
+def check_session_id(session_id: str) -> str:
+    """校验 session_id 可安全用作目录名;不合法直接 400(结构化 detail)。"""
+    sid = session_id
+    if not sid or len(sid) > _SESSION_ID_MAX:
+        raise HTTPException(400, f"session 不合法:长度须为 1-{_SESSION_ID_MAX} 字符")
+    if any(c in _SESSION_FORBIDDEN_CHARS or ord(c) < 0x20 or ord(c) == 0x7F
+           for c in sid):
+        raise HTTPException(400, "session 不合法:不允许路径分隔符、控制字符或 "
+                                 '\'/\\:*?"<>|\' 字符')
+    if sid[0] == " " or sid[-1] in " .":
+        raise HTTPException(400, "session 不合法:首尾不允许空格,结尾不允许 '.'")
+    if sid.split(".")[0].upper() in _WINDOWS_RESERVED_NAMES:
+        raise HTTPException(400, f"session 不合法:{sid} 是 Windows 保留设备名")
+    return sid
 
 
 class TurnBody(BaseModel):
@@ -98,6 +136,7 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
 
     def driver_of(session_id: str) -> Driver:
+        check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
         if session_id not in drivers:
             ws = home / "sessions" / session_id
             drivers[session_id] = Driver(
@@ -106,11 +145,60 @@ def create_app(home: Path | None = None) -> FastAPI:
             store.create_session(session_id, session_id)
         return drivers[session_id]
 
+    # 回合泵任务的强引用(asyncio 只弱引用 task,不留强引用会被 GC 掐断)
+    turn_tasks: set[asyncio.Task] = set()
+
     def ndjson(agen):
+        """回合流:响应通道与回合执行解耦(协议纪律:POST 只代表「已接受」)。
+
+        - 客户端中途断开只关闭响应,不取消回合:run 归服务端所有,继续推进到
+          终态(事件仍发布到 SSE 总线),不留 status=running 却无人跟随的孤儿;
+          用户主动取消走 /api/abort(control 位)。
+        - 回合内部异常转成一条 note 事件(流协议里错误是事件,不是裸断连),
+          细节进服务端日志。
+        """
         async def gen():
-            async for event in agen:
-                yield json.dumps(event, ensure_ascii=False) + "\n"
+            queue: asyncio.Queue = asyncio.Queue()
+
+            async def pump():
+                try:
+                    async for event in agen:
+                        queue.put_nowait(json.dumps(event, ensure_ascii=False) + "\n")
+                except Exception:  # noqa: BLE001 —— 转结构化事件,绝不裸断连
+                    log.exception("回合流内部异常")
+                    queue.put_nowait(json.dumps(
+                        {"t": "note", "tone": "bad",
+                         "text": "服务内部错误,回合中止(详见服务端日志)"},
+                        ensure_ascii=False) + "\n")
+                finally:
+                    queue.put_nowait(None)
+
+            task = asyncio.create_task(pump())
+            turn_tasks.add(task)
+            task.add_done_callback(turn_tasks.discard)
+            while True:
+                line = await queue.get()
+                if line is None:
+                    break
+                yield line
+
         return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+    def resolve_run(session_id: str, run_id: str | None, *,
+                    required: bool = True) -> dict | None:
+        """按会话解析 run 并做归属校验。
+
+        run_id 缺省 → 该会话最近一个 run;给了 run_id 但不属于该会话 → 404
+        (统一按「不存在」处理,不泄露其他会话的 run 是否存在)。
+        """
+        run = store.get_run(run_id) if run_id else store.latest_run(session_id)
+        if run is None:
+            if required:
+                raise HTTPException(404, "no run")
+            return None
+        if run["session_id"] != session_id:
+            raise HTTPException(404, f"run {run['run_id']} 不存在或不属于会话 {session_id}")
+        return run
 
     def running_run(session_id: str) -> dict | None:
         latest = store.latest_run(session_id)
@@ -128,6 +216,7 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.post("/api/sessions")
     def create_session(body: SessionBody):
+        check_session_id(body.id)  # 先校验再落库:非法 id 不留半截会话行
         store.create_session(body.id, body.name or body.id, mode=body.mode)
         driver_of(body.id)
         return store.get_session(body.id)
@@ -191,7 +280,7 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.get("/api/state")
     def state(session: str, run_id: str | None = None):
-        run = store.get_run(run_id) if run_id else store.latest_run(session)
+        run = resolve_run(session, run_id, required=False)
         if run is None:
             return {"run": None, "steps": []}
         steps = [{
@@ -211,8 +300,20 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.post("/api/pipeline")
     def pipeline(body: PipelineBody):
-        return ndjson(driver_of(body.session).execute(
-            body.session, body.run_id, body.step_ids))
+        d = driver_of(body.session)  # 先做 session 校验,再解析 run
+        run = resolve_run(body.session, body.run_id, required=False)
+        if body.run_id and run is None:
+            raise HTTPException(404, f"run {body.run_id} 不存在")
+        if body.step_ids:
+            # 流式响应一旦开始就无法改状态码:step_ids 必须在开流前校验,
+            # 否则非法 id 会在 driver 循环里 KeyError 炸断连接
+            if run is None:
+                raise HTTPException(404, "no run")
+            planned = {s.step_id for s in store.load_steps(run["run_id"])}
+            bad = [sid for sid in body.step_ids if sid not in planned]
+            if bad:
+                raise HTTPException(400, f"步骤 id 不在该 run 的计划内:{bad}")
+        return ndjson(d.execute(body.session, body.run_id, body.step_ids))
 
     @app.post("/api/resume")
     def resume(body: PipelineBody):
@@ -220,9 +321,7 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.post("/api/abort")
     def abort(body: PipelineBody):
-        run = store.get_run(body.run_id) if body.run_id else store.latest_run(body.session)
-        if run is None:
-            raise HTTPException(404, "no run")
+        run = resolve_run(body.session, body.run_id)  # 404 覆盖不存在/不属于该会话
         driver_of(body.session).request_cancel(run["run_id"])
         return JSONResponse({"accepted": True}, status_code=202)
 
@@ -230,8 +329,14 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.post("/api/message")
     def message(body: MessageBody):
+        if store.get_session(body.session) is None:
+            # chat_messages 有外键约束:不先查会话,未知 session 会 IntegrityError → 500
+            raise HTTPException(404, f"会话 {body.session} 不存在")
+        if body.deliver_as is not None and body.deliver_as not in DELIVER_AS:
+            raise HTTPException(
+                400, f"未知投递语义 {body.deliver_as}(可用:{'|'.join(DELIVER_AS)})")
         active = running_run(body.session)
-        if active and body.deliver_as not in ("steer", "follow_up", "next_run"):
+        if active and body.deliver_as not in DELIVER_AS:
             # absorb-E4(pi rpc.md:56-65):运行中投递必须显式声明语义
             raise HTTPException(
                 400, "run 正在执行:必须指定 deliver_as=steer|follow_up|next_run")
@@ -242,8 +347,41 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.post("/api/actions")
     def actions(body: ActionBody):
+        # 入队即校验(闭集 + payload 形状):干预队列是跨回合消费的,坏动作
+        # 入队后会在之后某次 turn/execute 的流中间引爆(int(target)/payload KeyError),
+        # 那时已无法给客户端返回错误 —— 必须挡在入口。
+        if body.action not in _KNOWN_ACTIONS:
+            raise HTTPException(
+                400, f"未知动作 {body.action}(可用:{sorted(_KNOWN_ACTIONS)})")
+        if body.deliver_as not in DELIVER_AS:
+            raise HTTPException(
+                400, f"未知投递语义 {body.deliver_as}(可用:{'|'.join(DELIVER_AS)})")
+        if body.scope not in ("step", "run"):
+            raise HTTPException(400, f"未知 scope {body.scope}(可用:step|run)")
+        if body.action in _STEP_ACTIONS:
+            try:
+                sid = int(body.target)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    400, f"{body.action} 的 target 必须是步骤号,收到 {body.target!r}")
+            cap = REGISTRY.get(sid)
+            if cap is None:
+                raise HTTPException(400, f"未知步骤 {sid}")
+            if body.action == "SET_METHOD":
+                method = body.payload.get("method")
+                if not isinstance(method, str) or cap.method(method) is None:
+                    raise HTTPException(
+                        400, f"第 {sid} 步没有方法 {method!r}"
+                             f"(候选:{[m.id for m in cap.methods]})")
+            if body.action == "SET_PARAMS":
+                params = body.payload.get("params")
+                if not isinstance(params, dict):
+                    raise HTTPException(400, "SET_PARAMS 需要 payload.params 为 JSON 对象")
+                errors = cap.validate_params(params)
+                if errors:
+                    raise HTTPException(400, f"参数校验失败:{errors}")
         if body.action == "KILL":
-            run = store.get_run(body.run_id) if body.run_id else store.latest_run(body.session)
+            run = resolve_run(body.session, body.run_id, required=False)
             if run:
                 driver_of(body.session).request_cancel(run["run_id"])
         action_id = store.push_action(scope=body.scope, target=body.target,
@@ -252,16 +390,32 @@ def create_app(home: Path | None = None) -> FastAPI:
         return JSONResponse({"accepted": True, "id": action_id}, status_code=202)
 
     @app.get("/api/impact")
-    def impact(session: str, step: int, method: str | None = None,
-               params: str | None = None, run_id: str | None = None):
-        run = store.get_run(run_id) if run_id else store.latest_run(session)
-        if run is None:
-            raise HTTPException(404, "no run")
+    def impact(session: str, step: int = Query(ge=0, le=_STEP_ID_MAX),
+               method: str | None = None, params: str | None = None,
+               run_id: str | None = None):
+        run = resolve_run(session, run_id)
         d = driver_of(session)
+        if store.load_step(run["run_id"], step) is None:
+            raise HTTPException(404, f"步骤 {step} 不在该 run 中")
+        if params is not None:
+            try:
+                params_patch = json.loads(params)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(400, f"params 不是合法 JSON:{exc}")
+            if not isinstance(params_patch, dict):
+                raise HTTPException(400, "params 必须是 JSON 对象(参数名 → 值)")
+        else:
+            params_patch = None
+        if method is not None:
+            cap = d.registry.get(step)
+            if cap is not None and cap.method(method) is None:
+                raise HTTPException(
+                    400, f"第 {step} 步没有方法 {method!r}"
+                         f"(候选:{[m.id for m in cap.methods]})")
         imp = preview_change(
             store, run["run_id"], step, registry=d.registry,
             tool_versions=d.probe().tool_versions(), method=method,
-            params_patch=json.loads(params) if params else None)
+            params_patch=params_patch)
         return {
             "changedStep": imp.changed_step, "reason": imp.reason,
             "affected": imp.affected, "rerunMinutes": imp.rerun_minutes,
@@ -271,9 +425,26 @@ def create_app(home: Path | None = None) -> FastAPI:
     @app.post("/api/fork")
     def fork(body: ForkBody):
         d = driver_of(body.session)
-        plan = fork_run(store, body.run_id, registry=d.registry,
-                        changes={int(k): v for k, v in body.changes.items()},
-                        probe=d.probe())
+        run = resolve_run(body.session, body.run_id)  # fork_run 对未知 run 抛 KeyError
+        changes = {int(k): v for k, v in body.changes.items()}
+        planned = {s.step_id for s in store.load_steps(run["run_id"])}
+        for sid, change in changes.items():
+            if sid not in planned:
+                raise HTTPException(400, f"步骤 id 不在该 run 的计划内:{sid}")
+            cap = d.registry.get(sid)
+            m = change.get("method")
+            if m is not None and (not isinstance(m, str)
+                                  or (cap is not None and cap.method(m) is None)):
+                raise HTTPException(
+                    400, f"第 {sid} 步没有方法 {m!r}"
+                         f"(候选:{[x.id for x in cap.methods] if cap else []})")
+            if "params" in change and not isinstance(change["params"], dict):
+                raise HTTPException(400, f"changes[{sid}].params 必须是 JSON 对象")
+        try:
+            plan = fork_run(store, run["run_id"], registry=d.registry,
+                            changes=changes, probe=d.probe())
+        except ValueError as exc:  # cap.validate_params 拒绝(未声明参数/越界)
+            raise HTTPException(400, str(exc))
         return {"runId": plan.run_id,
                 "steps": [{"id": p.step_id, "state": p.state, "method": p.method}
                           for p in plan.steps]}
@@ -282,25 +453,19 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.get("/api/provenance")
     def provenance(session: str, run_id: str | None = None):
-        run = store.get_run(run_id) if run_id else store.latest_run(session)
-        if run is None:
-            raise HTTPException(404, "no run")
+        run = resolve_run(session, run_id)
         return export_provenance(store, run["run_id"], contract=contract,
                                  workspace=driver_of(session).workspace)
 
     @app.get("/api/run.sh")
     def run_script(session: str, run_id: str | None = None):
-        run = store.get_run(run_id) if run_id else store.latest_run(session)
-        if run is None:
-            raise HTTPException(404, "no run")
+        run = resolve_run(session, run_id)
         return PlainTextResponse(
             export_run_script(store, run["run_id"], driver_of(session).workspace))
 
     @app.get("/api/methods.md")
     def methods(session: str, run_id: str | None = None):
-        run = store.get_run(run_id) if run_id else store.latest_run(session)
-        if run is None:
-            raise HTTPException(404, "no run")
+        run = resolve_run(session, run_id)
         doc = export_provenance(store, run["run_id"], contract=contract,
                                 workspace=driver_of(session).workspace)
         md, source = driver_of(session).brain.narrate(doc)
@@ -308,18 +473,16 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.get("/api/trace")
     def trace(session: str, run_id: str | None = None):
-        run = store.get_run(run_id) if run_id else store.latest_run(session)
+        run = resolve_run(session, run_id, required=False)
         if run is None:
             return []
         return store.trace_of(run["run_id"])
 
     @app.get("/api/logs")
-    def logs(session: str, step: int, run_id: str | None = None,
-             tail_kb: int = Query(64, ge=1, le=1024)):
+    def logs(session: str, step: int = Query(ge=0, le=_STEP_ID_MAX),
+             run_id: str | None = None, tail_kb: int = Query(64, ge=1, le=1024)):
         """步骤日志尾部(面板 8「终端」):读 log_path 末尾 N KB;无 run/步骤/日志文件 → 404。"""
-        run = store.get_run(run_id) if run_id else store.latest_run(session)
-        if run is None:
-            raise HTTPException(404, "no run")
+        run = resolve_run(session, run_id)
         step_row = store.load_step(run["run_id"], step)
         if step_row is None:
             raise HTTPException(404, "no step")
