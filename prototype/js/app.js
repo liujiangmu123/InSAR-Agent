@@ -73,6 +73,7 @@ function boot() {
     on: {
       changeMethod: (id, m) => applyMethod(id, m),
       changeParams: (id, p) => applyParams(id, p),
+      runSteps: (ids) => run(ids),   // 流水线面板「重跑影响确认」→ 现有执行链路
       lightbox: (fig) => Stream.openLightbox(fig, { onDock: () => Dock.openImages() }),
       export: doExport,
     },
