@@ -169,8 +169,9 @@ def test_stripmap_threads_param_controls_env(workspace):
 def test_stripmap_range_per_capability(workspace):
     """区间表中各 capability 的 --start/--end 正确落进脚本。
 
-    cap6(解缠)的 stripmap 方法尚未在 registry 声明,此处直接驱动构建器,
-    验证实测得到的分段(filter_low_band 起,教训 2)已固化。
+    此处统一用 cap3 的方法名直接驱动构建器,只验证分段落进脚本
+    (filter_low_band 起,教训 2);cap4/5/6 已在 registry 声明专属 stripmap 方法,
+    其方法 id 映射与 CommandPlan 由 tests/test_stripmap_scenario.py 验收。
     """
     for cap_id, (start, end) in _STRIPMAP_RANGES.items():
         plan = _stripmap_plan(workspace, cap_id=cap_id)

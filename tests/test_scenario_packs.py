@@ -74,7 +74,10 @@ EXPECTED = {
 # ---------------- 三场景等价性 ----------------
 
 def test_three_scenarios_equivalent_to_hardcoded():
-    assert tuple(sc.key for sc in SCENARIOS) == ("quake", "permafrost", "landslide")
+    # stripmap_coseismic(priority=5)是后加的第四包,排最前;原三包等价性逐字段锁定,
+    # 新包字段由 tests/test_stripmap_scenario.py 单独验收
+    assert tuple(sc.key for sc in SCENARIOS) == (
+        "stripmap_coseismic", "quake", "permafrost", "landslide")
     for key, want in EXPECTED.items():
         sc = scenario_of(key)
         assert sc is not None, key

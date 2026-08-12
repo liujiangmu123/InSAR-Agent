@@ -84,8 +84,8 @@ PIPELINE: tuple[Capability, ...] = (
             Method("isce2_tops_geom_esd", "isce2_tops_geom_esd", "isce2",
                    why="S1 IW 标准路径:几何配准 + ESD 精化", recommend=True, requires_engines=("isce2",)),
             Method("isce2_stripmap_xcorr", "isce2_stripmap_xcorr", "isce2",
-                   why="条带模式(ALOS-2/TSX)", requires_engines=("isce2",),
-                   scenario_only=("stripmap",)),
+                   why="条带模式(ALOS raw,2026-08 WSL 实测全链通过)", requires_engines=("isce2",),
+                   scenario_only=("stripmap_coseismic",)),
             Method("snap_backgeocoding", "snap_backgeocoding", "snap",
                    why="走 SNAP 链,需换 layout", requires_engines=("snap",)),
         ),
@@ -132,6 +132,15 @@ PIPELINE: tuple[Capability, ...] = (
                    requires_engines=("isce2",)),
             Method("snap_interferogram", "snap_interferogram", "snap", why="SNAP 链对应步骤",
                    requires_engines=("snap",)),
+            # 条带链(ALOS raw):stripmapApp 分段 split_range_spectrum→filter,
+            # 分频谱占位步不可跳过(pickle 链约束,engines/isce2.py _STRIPMAP_RANGES)。
+            # 耗时/磁盘按 docs/VALIDATION-isce2-wsl.md 实测:全链 33 min、峰值 32 GB,
+            # 本段落在阶段 1(startup→filter 约 20 min,两景聚焦占大头)内,
+            # 均远低于本 capability 的 total 超时与磁盘预算上限
+            Method("isce2_stripmap_ifg", "isce2_stripmap_ifg", "isce2",
+                   why="条带链干涉:stripmapApp 分频谱→干涉→滤波段(ALOS raw)",
+                   requires_engines=("isce2",), scenario_only=("stripmap_coseismic",),
+                   extra="实测(ALOS Baja):阶段1 startup→filter 约 20 min;全链 33 min/32 GB"),
         ),
         default_method="isce2_ifg_multilook",
         params={
@@ -140,7 +149,14 @@ PIPELINE: tuple[Capability, ...] = (
             "pairs": Param(11, kind="science", type="int", min=1, max=5000),
             "threads": Param(8, kind="resource", type="int", min=1, max=32),
         },
-        artifacts=(ArtifactSpec("ifg", ("data/ifg",), kind="IFG_WRAPPED", layout="isce2"),),
+        artifacts=(
+            # 候选按声明序匹配,tops 布局在前(首候选不变,simulate 仍写 data/ifg);
+            # 条带链产物在 isce2/interferogram/ 下(run 脚本 cd isce2 后执行 stripmapApp,
+            # 路径按 VALIDATION 报告实测:干涉步产 topophase.flat,段尾 filter 产 filt_ 版本)
+            ArtifactSpec("ifg", ("data/ifg", "isce2/interferogram/topophase.flat",
+                                 "isce2/interferogram/filt_topophase.flat"),
+                         kind="IFG_WRAPPED", layout="isce2"),
+        ),
         inputs=("coreg",),
         run_ok=(RunOkCheck("exit_code", equals=0), RunOkCheck("artifact_exists", id="ifg")),
         timeouts=Timeouts(idle=3600, total=8 * 3600),
@@ -159,13 +175,24 @@ PIPELINE: tuple[Capability, ...] = (
                    requires_engines=("isce2",)),
             Method("boxcar", "boxcar", "isce2", why="简单快速,但边缘模糊", requires_engines=("isce2",)),
             Method("none", "none", "-", why="不滤波,保留全部细节"),
+            # 条带链滤波:stripmapApp filter 单步重跑(前驱 sub_band_interferogram 的
+            # pickle 在干涉段已生成);filter_strength 沿实测形态用 stripmapApp 默认,
+            # XML 不渲染该属性(docs/VALIDATION-isce2-wsl.md)
+            Method("isce2_stripmap_filter", "isce2_stripmap_filter", "isce2",
+                   why="条带链滤波:stripmapApp filter 单步(ALOS raw)",
+                   requires_engines=("isce2",), scenario_only=("stripmap_coseismic",),
+                   extra="单步重跑,分钟级(实测全链 33 min 内占比很小)"),
         ),
         default_method="goldstein",
         params={
             "alpha": Param(0.4, kind="science", min=0, max=1, hint="Goldstein alpha 0-1"),
             "filter_strength": Param(0.5, kind="science", min=0, max=1),
         },
-        artifacts=(ArtifactSpec("ifg_filt", ("data/ifg_filt",), kind="IFG_WRAPPED", layout="isce2"),),
+        artifacts=(
+            # 条带链滤波产物:isce2/interferogram/filt_topophase.flat(VALIDATION 报告实测路径)
+            ArtifactSpec("ifg_filt", ("data/ifg_filt", "isce2/interferogram/filt_topophase.flat"),
+                         kind="IFG_WRAPPED", layout="isce2"),
+        ),
         inputs=("ifg",),
         run_ok=(RunOkCheck("exit_code", equals=0), RunOkCheck("artifact_exists", id="ifg_filt")),
         timeouts=Timeouts(idle=1800, total=4 * 3600),
@@ -188,6 +215,15 @@ PIPELINE: tuple[Capability, ...] = (
                    requires_engines=("isce2",)),
             Method("3D_FULL", "3D_FULL", "unw3d", why="需 3D 相位解缠工具链,输出格式与下游不兼容",
                    requires_engines=("unw3d",)),
+            # 条带链解缠:snaphu 由 stripmapApp 内置驱动(XML 里 do unwrap=True/
+            # unwrapper name=snaphu),不需要独立 snaphu 可执行,故只依赖 isce2;
+            # 分段必须从 filter_low_band 续起补齐 pickle 链(实测教训 2:直接从
+            # unwrap 起,前驱 filter_high_band 占位步 pickle 缺失,恢复空状态必崩),
+            # 段尾含 geocode 地理编码 —— docs/VALIDATION-isce2-wsl.md
+            Method("isce2_stripmap_unwrap_snaphu", "isce2_stripmap_unwrap_snaphu", "isce2",
+                   why="条带链解缠:stripmapApp 内置 snaphu + 地理编码(ALOS raw)",
+                   requires_engines=("isce2",), scenario_only=("stripmap_coseismic",),
+                   extra="实测 filter_low_band→geocode 约 13 min(snaphu 约 10 min)"),
         ),
         default_method="snaphu_mcf",
         params={
@@ -196,7 +232,12 @@ PIPELINE: tuple[Capability, ...] = (
             "threads": Param(8, kind="resource", type="int", min=1, max=32),
         },
         artifacts=(
-            ArtifactSpec("unw", ("data/unw", "data/unw/geo"), kind="IFG_UNWRAPPED", layout="isce2"),
+            # 条带链解缠产物按 VALIDATION 报告实测:filt_topophase.unw(+.conncomp)
+            # 与 .geo 地理编码版本,均在 isce2/interferogram/ 下
+            ArtifactSpec("unw", ("data/unw", "data/unw/geo",
+                                 "isce2/interferogram/filt_topophase.unw",
+                                 "isce2/interferogram/filt_topophase.unw.geo"),
+                         kind="IFG_UNWRAPPED", layout="isce2"),
             ArtifactSpec("unwrap_cfg", ("params/unwrap.yaml",), kind="CONFIG", policy="content",
                          required=False),
         ),

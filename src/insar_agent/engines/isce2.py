@@ -108,8 +108,10 @@ _STRIPMAP_XML_HEAD = """\
 # 恢复要找 unwrap 的直接前驱 filter_high_band(分频谱占位步、从未跑过)的 pickle,
 # 结果空状态 NoneType 崩溃;正确做法是从上次终点的下一步 filter_low_band 续起,
 # 让空转占位步补齐 pickle 链 —— 即 cap6 区间的由来。
-# cap6(解缠)当前 registry 尚无 stripmap 方法,此分段是实测验证过的声明,
-# 供后续接入;连续性由 tests/test_isce2_stripmap.py 断言。
+# 方法 id 映射(registry 声明,stripmap_coseismic 场景包覆写 3-6 步):
+#   3=isce2_stripmap_xcorr,4=isce2_stripmap_ifg,5=isce2_stripmap_filter,
+#   6=isce2_stripmap_unwrap_snaphu;路由按方法名含 "stripmap" + cap.id 查本表,
+# 连续性与映射核对由 tests/test_isce2_stripmap.py、tests/test_stripmap_scenario.py 断言。
 _STRIPMAP_RANGES: dict[int, tuple[str, str]] = {
     3: ("startup", "fine_resample"),        # 配准:raw→SLC→精配准(含 rubber sheet)
     4: ("split_range_spectrum", "filter"),  # 干涉:分频谱占位步不可跳过
