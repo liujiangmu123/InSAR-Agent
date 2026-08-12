@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from insar_agent.runtime.jobs import JobBackend
+from insar_agent.runtime.jobs import JobBackend, JobState
 
 LineSink = Callable[[str], None] | Callable[[str], Awaitable[None]]
 
@@ -69,9 +69,26 @@ async def follow_job(
     last_output = started
     orphan_strikes = 0  # 孤儿判定需连续两次命中:消除心跳文件的瞬时竞态
 
+    def probe_state() -> JobState | None:
+        """判活探测;瞬时 IO 失败返回 None,本轮跳过状态分支,由双超时兜底。
+
+        触发场景(tests/test_chaos_runtime.py):Windows 杀软/索引器短暂独占
+        job.hb/job.rc,或作业目录被外部清理 —— 修复前一次 OSError 会让长时间
+        运行的 follow 直接崩溃,offset 进度与取消能力一起丢失。
+        """
+        try:
+            return backend.state(job_dir)
+        except OSError:
+            return None
+
     async def drain() -> None:
         nonlocal offset, last_output
-        lines, new_offset = backend.read_new_lines(job_dir, offset)
+        try:
+            lines, new_offset = backend.read_new_lines(job_dir, offset)
+        except OSError:
+            # 日志被外部独占/删除竞态:本轮视为无新输出,下一轮重试;
+            # 持续不可读时 idle_timeout 兜底,follow 不因瞬时 IO 失败崩溃
+            return
         if lines:
             last_output = time.monotonic()
             for line in lines:
@@ -82,12 +99,15 @@ async def follow_job(
                 on_offset(offset)
 
     async def cancel_and_wait(kind: str) -> JobOutcome:
-        backend.cancel(job_dir)
+        try:
+            backend.cancel(job_dir)
+        except OSError:
+            pass  # 作业目录已被外部清掉:照走宽限观察,超时后按 orphaned 交上层处置
         deadline = time.monotonic() + cancel_grace
         while time.monotonic() < deadline:
             await drain()
-            st = backend.state(job_dir)
-            if st.kind == "finished":
+            st = probe_state()
+            if st is not None and st.kind == "finished":
                 await drain()
                 return JobOutcome(kind, st.exit_code, offset)
             await asyncio.sleep(min(poll, 0.2))
@@ -100,21 +120,22 @@ async def follow_job(
         if token is not None and token.cancelled:
             return await cancel_and_wait("cancelled")
 
-        st = backend.state(job_dir)
-        if st.kind == "finished":
-            await drain()
-            return JobOutcome("finished", st.exit_code, offset)
-        if st.kind == "orphaned":
-            orphan_strikes += 1
-            if orphan_strikes >= 2:
+        st = probe_state()
+        if st is not None:
+            if st.kind == "finished":
                 await drain()
+                return JobOutcome("finished", st.exit_code, offset)
+            if st.kind == "orphaned":
+                orphan_strikes += 1
+                if orphan_strikes >= 2:
+                    await drain()
+                    return JobOutcome("orphaned", None, offset)
+                await asyncio.sleep(min(poll, 0.3))
+                continue
+            orphan_strikes = 0
+            if st.kind == "unknown" and now - started > startup_grace:
+                # wrapper 迟迟没起来:按 orphaned 处置(保留现场,可重试)
                 return JobOutcome("orphaned", None, offset)
-            await asyncio.sleep(min(poll, 0.3))
-            continue
-        orphan_strikes = 0
-        if st.kind == "unknown" and now - started > startup_grace:
-            # wrapper 迟迟没起来:按 orphaned 处置(保留现场,可重试)
-            return JobOutcome("orphaned", None, offset)
 
         if now - last_output > idle_timeout:
             return await cancel_and_wait("idle_timeout")
