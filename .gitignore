@@ -15,6 +15,7 @@ __pycache__/
 venv/
 .pytest_cache/
 .pytest_tmp/
+.bench_tmp/
 .ruff_cache/
 *.egg-info/
 
