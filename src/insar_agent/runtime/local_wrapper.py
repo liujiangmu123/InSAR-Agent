@@ -122,7 +122,22 @@ def main(job_dir_arg: str) -> int:
                     time.sleep(0.1)
                 if proc.poll() is None:
                     proc.kill()
-                    proc.wait(timeout=GRACE)
+                    try:
+                        proc.wait(timeout=GRACE)
+                    except subprocess.TimeoutExpired:
+                        # 不可杀进程显式化(FOLLOWUPS 2026-08-12 #8):kill 后仍
+                        # 不退出 = 进程卡死在内核态(不可中断 IO / 驱动挂死)。
+                        # 修复前 wrapper 在此裸崩:不写 rc,上层只能等孤儿判定
+                        # (慢,且诊断只在 wrapper.err 里对日志流不可见)。
+                        # 显式化:诊断行进 job.log + 固定 rc=129(128+1,借
+                        # SIGHUP 位表达「终止令已发、进程未退」)快速终局;
+                        # 残留进程交 OS/管理员处置,与计算失败严格区分。
+                        log.write(
+                            f"[wrapper] kill 后进程仍未退出(pid={proc.pid}):"
+                            f"按不可杀进程处置,rc=129,残留进程需人工核查\n".encode())
+                        log.flush()
+                        _write_rc(job, 129)
+                        return 129
                 _write_rc(job, 143)  # 128+15
                 return 143
             time.sleep(POLL)

@@ -78,6 +78,9 @@ class Driver:
         self.bus = EventBus()
         self._probe = probe
         self._tokens: dict[str, CancelToken] = {}
+        # 本 run 用过的自带保活的后端实例(WslJobBackend),run 收尾统一释放
+        # keepalive(WSL P2:此前 sleep infinity 随 run 数量堆积泄漏)
+        self._run_backends: dict[str, list[JobBackend]] = {}
         self._poll = poll
         self._startup_grace = startup_grace
         self._idle_override = idle_timeout_override
@@ -108,9 +111,21 @@ class Driver:
 
     def _backend_for(self, run: dict, cap: Capability, method_id: str) -> JobBackend:
         m = cap.method(method_id)
-        return backend_for_step(engine=m.engine if m else "-",
-                                simulated=bool(run.get("simulated")),
-                                override=self.backend)
+        backend = backend_for_step(engine=m.engine if m else "-",
+                                   simulated=bool(run.get("simulated")),
+                                   override=self.backend)
+        # keepalive 释放钩子:登记本 run 用过的可释放后端(WslJobBackend 每步
+        # 新建、不跨 run 共享 → 无需引用计数,run 收尾各释放各的;取舍:并发
+        # run 各持一个 sleep infinity,多一两个空转进程可忽略,换来零共享状态。
+        # 注入 override(backend is self.backend)可能跨 run 共享,生命周期归
+        # 注入方,绝不代为释放。
+        rid = str(run.get("run_id") or "")
+        if (rid and backend is not self.backend
+                and callable(getattr(backend, "release_keepalive", None))):
+            bucket = self._run_backends.setdefault(rid, [])
+            if all(b is not backend for b in bucket):
+                bucket.append(backend)
+        return backend
 
     def _exec_ctx(self, backend: JobBackend | None = None, emit=None) -> ExecContext:
         return ExecContext(
@@ -286,6 +301,17 @@ class Driver:
                 yield event
         finally:
             store.release_lease(lease, holder)
+            # run 收尾(含 done/failed/interrupted/paused 与异常/断流)统一释放
+            # 本 run 的 WSL keepalive:暂停/中断后 VM 允许空闲回收,续跑的
+            # launch 会重新 ensure_keepalive(§4.8)
+            self._release_run_backends(run_id)
+
+    def _release_run_backends(self, run_id: str) -> None:
+        for backend in self._run_backends.pop(run_id, []):
+            try:
+                backend.release_keepalive()
+            except Exception:
+                pass  # 释放失败不影响 run 收尾;残留保活进程随宿主进程退出而消亡
 
     async def _execute_run(self, run_id: str, step_ids: list[int] | None,
                            token: CancelToken, *, lease: str, holder: str

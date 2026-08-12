@@ -14,6 +14,10 @@
   6. 日志被外部删除/独占 → follow 不崩溃(独占场景曾是真实 bug,见下)
   7. wrapper 启动即失败(可执行文件不存在 / cmd.json 缺失损坏)→ rc=127
      快速失败,诊断行进入日志流(cmd.json 场景曾是真实 bug,见下)
+  8. state() 的 exists→read/stat TOCTOU 窗口(FOLLOWUPS #6)→ unknown 不抛
+  9. finished 终读冲刷无换行尾行(FOLLOWUPS #7)→ 尾部余量不丢
+ 10. 取消分支遇不可杀进程(FOLLOWUPS #8)→ 诊断进日志 + rc=129 显式终局
+ 11. 高成本判活(WSL)自适应节流 → 探测降频且孤儿双击语义不放大
 
 所有场景用 tmp_path 作业目录 + 真实 LocalJobBackend;子进程一律秒级
 python 小脚本(sys.executable),长睡脚本都带自灭上限并在断言后清理。
@@ -23,9 +27,11 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -503,3 +509,263 @@ def test_bad_cmd_json_fails_fast(tmp_path, mode):
     assert out.kind == "finished" and out.exit_code == 127
     assert time.monotonic() - t0 < 15         # 不吃满 startup_grace
     assert any("[wrapper] bad cmd.json" in ln for ln in lines)
+
+
+# ================ 场景 8:判活 exists→read/stat TOCTOU 窗口(#6) ================
+
+class _TocFile:
+    """exists() 说在、随后的 stat()/read_text() 已被删/被独占:
+    精确复现 exists→read 之间的 TOCTOU 窗口(确定性,不靠线程时序)。"""
+
+    def __init__(self, exists: bool = True, error: type[OSError] = FileNotFoundError):
+        self._exists = exists
+        self._error = error
+
+    def exists(self) -> bool:
+        return self._exists
+
+    def stat(self):
+        raise self._error("gone between exists() and stat()")
+
+    def read_text(self, *a, **kw):
+        raise self._error("gone between exists() and read_text()")
+
+
+class _TocJobDir:
+    """鸭子类型作业目录:state() 只用 `/` 与文件方法,按名字给预设文件桩。"""
+
+    def __init__(self, files: dict):
+        self._files = files
+
+    def __truediv__(self, name: str):
+        return self._files[name]
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
+def test_state_rc_vanishes_between_exists_and_read(error):
+    """job.rc 在 exists→read 窗口被删/被独占 → unknown,不抛异常。
+
+    修复前(FOLLOWUPS #6)异常直接抛给调用方:stream 侧有兜底,但 executor
+    的认领判活(state(prev_dir))与 admin 外部判活会被探测本身打崩。
+    """
+    st = LocalJobBackend().state(_TocJobDir({"job.rc": _TocFile(error=error)}))
+    assert st.kind == "unknown" and st.exit_code is None
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
+def test_state_hb_vanishes_between_exists_and_stat(error):
+    """job.hb 在 exists→stat 窗口消失/被独占 → unknown(单轮不判定,下一轮
+    自然重试;孤儿判定连续两次命中的语义不受影响)。"""
+    st = LocalJobBackend().state(_TocJobDir({
+        "job.rc": _TocFile(exists=False),
+        "job.pid": _TocFile(),           # 只被 exists() 询问,不读内容
+        "job.hb": _TocFile(error=error),
+    }))
+    assert st.kind == "unknown"
+
+
+def test_state_survives_concurrent_file_flapping(tmp_path):
+    """真线程竞态:后台线程高频创建/删除 job.hb 与 job.rc,state() 全程只返回
+    契约内四态、绝不抛异常(命中窗口与否取决于时序,断言的是「绝不崩」)。"""
+    backend = LocalJobBackend(hb_stale=5.0)
+    job = tmp_path / "job"
+    job.mkdir()
+    (job / "job.pid").write_text("12345", encoding="utf-8")
+    stop = threading.Event()
+
+    def flap():
+        while not stop.is_set():
+            for name, content in (("job.hb", ""), ("job.rc", "0")):
+                f = job / name
+                try:
+                    f.write_text(content, encoding="utf-8")
+                    f.unlink()
+                except OSError:
+                    pass  # 竞态制造者自身的冲突无关紧要
+
+    t = threading.Thread(target=flap, daemon=True)
+    t.start()
+    try:
+        kinds = set()
+        for _ in range(400):
+            st = backend.state(job)  # 修复前:窗口命中即 FileNotFoundError 冒泡
+            kinds.add(st.kind)
+        assert kinds <= {"alive", "finished", "orphaned", "unknown"}
+    finally:
+        stop.set()
+        t.join(timeout=5)
+
+
+# ================ 场景 9:finished 终读冲刷无换行尾行(#7) ================
+
+def test_read_new_lines_final_mode_contract(tmp_path):
+    """后端契约:常规读半行不提交;终读交付余量并把 offset 推进到 EOF;
+    终读幂等(再读无新内容)。"""
+    backend = LocalJobBackend()
+    (tmp_path / "job.log").write_bytes(b"a\nhalf")
+    lines, off = backend.read_new_lines(tmp_path, 0)
+    assert (lines, off) == (["a"], 2)          # 常规:半行不提交
+    lines, off2 = backend.read_new_lines(tmp_path, off, final=True)
+    assert (lines, off2) == (["half"], 6)      # 终读:余量交付,offset 到 EOF
+    assert backend.read_new_lines(tmp_path, off2, final=True) == ([], off2)
+
+
+def test_final_drain_flushes_unterminated_tail(tmp_path):
+    """作业 finished(rc 落盘)后,无换行的尾部余量必须交付(FOLLOWUPS #7)。
+
+    修复前 read_new_lines 只提交完整行:不少引擎最后一行诊断不带换行
+    (如 'Killed'、进度行),rc 落盘后这半行永久丢失。
+    """
+    backend = LocalJobBackend(hb_stale=5.0)
+    job = tmp_path / "job"
+    _fake_alive_job(job, log_text="line-1\n")
+
+    async def scenario():
+        lines: list[str] = []
+        task = asyncio.create_task(
+            follow_job(backend, job, idle_timeout=10, total_timeout=15,
+                       on_line=lines.append, poll=0.05))
+        await _await_until(lambda: lines == ["line-1"], msg="首行未读到")
+        with open(job / "job.log", "ab") as f:
+            f.write(b"tail-no-newline")        # 结尾没有换行符
+        (job / "job.rc").write_text("0", encoding="utf-8")
+        return await task, lines
+
+    out, lines = run_async(scenario())
+    assert out.kind == "finished" and out.exit_code == 0
+    assert lines == ["line-1", "tail-no-newline"]  # 尾行在 rc 落盘后仍被交付
+    assert out.offset == (job / "job.log").stat().st_size  # offset 推进到 EOF
+
+
+def test_final_drain_flushes_tail_on_cancelled_finished(tmp_path):
+    """取消与正常退出竞态(rc 先落盘)走 cancel_and_wait 收口:终读同样生效。"""
+    backend = LocalJobBackend(hb_stale=5.0)
+    job = tmp_path / "job"
+    job.mkdir()
+    (job / "job.pid").write_text("99999", encoding="utf-8")
+    (job / "job.hb").touch()
+    (job / "job.log").write_bytes(b"done-without-newline")
+    (job / "job.rc").write_text("0", encoding="utf-8")
+    token = CancelToken()
+    token.cancel()
+
+    lines: list[str] = []
+    out = run_async(follow_job(backend, job, idle_timeout=5, total_timeout=10,
+                               token=token, on_line=lines.append, poll=0.05))
+    assert out.kind == "cancelled" and out.exit_code == 0
+    assert lines == ["done-without-newline"]
+
+
+# ================ 场景 10:取消分支遇不可杀进程(#8) ================
+
+def test_cancel_unkillable_child_finalizes_rc_129(tmp_path, monkeypatch):
+    """kill 后 wait 仍超时(进程卡内核态:不可中断 IO / 驱动挂死)→ wrapper
+    不再裸崩:诊断行进 job.log、固定 rc=129 落盘、返回 129(FOLLOWUPS #8)。
+
+    修复前 TimeoutExpired 未捕获,wrapper 崩溃不写 rc,上层只能等孤儿判定
+    (慢),诊断埋在 wrapper.err 对日志流不可见。真实不可杀进程无法稳定
+    构造(需要内核态卡死),用假 Popen 演这个角色。
+    """
+    from insar_agent.runtime import local_wrapper
+
+    job = tmp_path / "job"
+    job.mkdir()
+    (job / "cmd.json").write_text(json.dumps(
+        {"argv": ["unkillable"], "cwd": str(job), "env": {}}), encoding="utf-8")
+    (job / "job.cancel").touch()               # 进循环立即走取消分支
+
+    class _UnkillableProc:
+        pid = 4242
+
+        def poll(self):
+            return None                        # 永不退出
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired("unkillable", timeout)
+
+    monkeypatch.setattr(local_wrapper.subprocess, "Popen",
+                        lambda *a, **kw: _UnkillableProc())
+    monkeypatch.setattr(local_wrapper, "GRACE", 0.2)  # 缩短宽限,测试秒级完成
+
+    rc = local_wrapper.main(str(job))
+    assert rc == 129
+    assert (job / "job.rc").read_text().strip() == "129"
+    log_text = (job / "job.log").read_text(encoding="utf-8")
+    assert "[wrapper]" in log_text and "129" in log_text  # 诊断随日志流可见
+
+
+# ================ 场景 11:高成本判活(WSL)自适应节流 ================
+
+class _ScriptedBackend:
+    """内存态假后端:按时间线给状态,记录每次 state() 的时刻供节流断言。
+    expensive=True 时声明 state_probe_expensive(WslJobBackend 同款标记)。"""
+
+    def __init__(self, outcome_after: float, outcome: str = "finished",
+                 expensive: bool = True):
+        if expensive:
+            self.state_probe_expensive = True
+        self._t0 = time.monotonic()
+        self._after = outcome_after
+        self._outcome = outcome
+        self.probe_times: list[float] = []
+
+    def state(self, job_dir) -> JobState:
+        self.probe_times.append(time.monotonic() - self._t0)
+        if time.monotonic() - self._t0 >= self._after:
+            if self._outcome == "finished":
+                return JobState("finished", 0)
+            return JobState(self._outcome)
+        return JobState("alive")
+
+    def cancel(self, job_dir) -> None:
+        pass
+
+    def read_new_lines(self, job_dir, offset, *, final: bool = False):
+        return [], offset
+
+
+def test_expensive_probe_throttled_after_dense_window(tmp_path):
+    """声明 state_probe_expensive 的后端(WSL 每次判活 spawn 一次 wsl.exe):
+    密集窗口过后探测降频;同参数下未声明的后端仍每轮探测。日志 drain 的
+    调用节奏不属于 state(),不受影响。"""
+    expensive = _ScriptedBackend(outcome_after=999, expensive=True)
+    cheap = _ScriptedBackend(outcome_after=999, expensive=False)
+    common = dict(idle_timeout=30, total_timeout=1.5, poll=0.05, cancel_grace=0.05,
+                  probe_dense_window=0.25, probe_idle_interval=10.0)
+    out_e = run_async(follow_job(expensive, tmp_path, **common))
+    out_c = run_async(follow_job(cheap, tmp_path, **common))
+    assert out_e.kind == "total_timeout" and out_c.kind == "total_timeout"
+    assert len(expensive.probe_times) >= 2            # 密集窗口内确实探测过
+    # 同样时间线下,节流后端探测显著更少(idle 间隔 10s 远大于总时长)
+    assert len(expensive.probe_times) < len(cheap.probe_times) / 2
+
+
+def test_throttled_probe_still_detects_finished(tmp_path):
+    """节流不改变结局:finished 仍被发现(延迟上限为 idle 探测间隔)。"""
+    backend = _ScriptedBackend(outcome_after=0.3, outcome="finished")
+    out = run_async(follow_job(backend, tmp_path, idle_timeout=30, total_timeout=30,
+                               poll=0.05, probe_dense_window=0.1,
+                               probe_idle_interval=0.5))
+    assert out.kind == "finished" and out.exit_code == 0
+
+
+def test_orphan_confirmation_bypasses_throttle(tmp_path):
+    """孤儿双击语义在节流下不放大:一击后的确认探测绕过节流间隔。
+
+    idle 间隔故意设 2s:若确认探测也被节流,末两次探测间隔必然 ≈2s;
+    绕过后应保持 ~0.3s(strike 后的短睡重试)。
+    """
+    backend = _ScriptedBackend(outcome_after=0.2, outcome="orphaned")
+    out = run_async(follow_job(backend, tmp_path, idle_timeout=30, total_timeout=30,
+                               poll=0.05, probe_dense_window=0.1,
+                               probe_idle_interval=2.0))
+    assert out.kind == "orphaned"
+    assert len(backend.probe_times) >= 2
+    confirm_gap = backend.probe_times[-1] - backend.probe_times[-2]
+    assert confirm_gap < 1.0  # 确认探测未被 2s 节流间隔拖慢

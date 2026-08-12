@@ -362,3 +362,51 @@ def test_metrics_extracted_from_qa_report(store, workspace):
     run_async(execute_step(ctx, "r1", cap.id))
     metrics = {m["name"]: m for m in store.metrics_of("r1")}
     assert "gate_metric" in metrics and metrics["gate_metric"]["value"] == 0.5
+
+
+# ---------------- 后端 prepare/launch 失败分诊(WSL P2) ----------------
+
+class _PrepareBoomBackend(LocalJobBackend):
+    def prepare(self, job_dir, plan):
+        raise RuntimeError("WSL 侧创建作业目录失败(rc=1):mount failed")
+
+
+class _LaunchBoomBackend(LocalJobBackend):
+    def launch(self, job_dir):
+        raise RuntimeError("WSL 侧启动 wrapper 失败(rc=127):setsid not found")
+
+
+class _LaunchOsErrorBackend(LocalJobBackend):
+    def launch(self, job_dir):
+        raise OSError("spawn failed: interpreter missing")
+
+
+@pytest.mark.parametrize("backend_cls,expected_class", [
+    (_PrepareBoomBackend, "wsl_orphaned"),
+    (_LaunchBoomBackend, "wsl_orphaned"),
+    (_LaunchOsErrorBackend, "tool_missing"),
+])
+def test_backend_prepare_launch_failure_is_triaged(store, workspace,
+                                                   backend_cls, expected_class):
+    """后端 prepare/launch 抛错 → execute_step 正常返回 failed + 分类合理,
+    绝不裸冒泡(WSL P2:修复前 WslJobBackend 的 RuntimeError 直接穿透
+    execute_step,driver 的 exec_task.result() 重抛,崩断整个执行回合流)。
+
+    RuntimeError(WSL 环境不可用)→ wsl_orphaned:环境事件、修复环境后续跑;
+    OSError(宿主 spawn/写盘失败)→ tool_missing:宿主环境问题,停链报修。
+    """
+    cap = custom_cap()
+    registry = {cap.id: cap}
+    make_step(store, cap)
+    ctx = make_ctx(store, workspace, registry,
+                   builder=script_builder("print('never runs', flush=True)\n"))
+    ctx.backend = backend_cls(hb_stale=3.0)
+
+    result = run_async(execute_step(ctx, "r1", cap.id))  # 正常返回,不抛异常
+    assert result.outcome == "failed"
+    assert "prepare/launch" in result.detail or "作业启动失败" in result.detail
+    step = store.load_step("r1", cap.id)
+    assert step.state == "failed" and step.failure_class == expected_class
+    # 审计 try/finally 真触发(§1.6):错误类型进 trace
+    trace = store.trace_of("r1")
+    assert trace and trace[-1]["error_type"] == expected_class
