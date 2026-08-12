@@ -258,9 +258,10 @@ html { scrollbar-color: var(--border-strong) transparent; }
 
 /* ---- 动画 ---- */
 @keyframes breathe { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+/* 环色跟随 --accent(a11y 调深后同步,原 rgba 对应 #3b82f6) */
 @keyframes pulseRing {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, .45) }
-  50%      { box-shadow: 0 0 0 5px rgba(59, 130, 246, 0) }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, .45) }
+  50%      { box-shadow: 0 0 0 5px rgba(37, 99, 235, 0) }
 }
 @keyframes riseIn { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
 @keyframes blip { 0%, 80%, 100% { opacity: .22 } 40% { opacity: 1 } }
@@ -322,3 +323,46 @@ html { scrollbar-color: var(--border-strong) transparent; }
   .main .composer { padding: 8px 10px 10px; }
   .composer .cmeta { display: none; }
 }
+
+/* ============================================================
+   可达性专段(a11y):对比度覆写 + 快捷键帮助浮层
+   ============================================================ */
+/* 按钮文字改用 --text-inv 而非硬编码白色:深色主题的语义底色偏亮
+   (#60a5fa/#fb923c/#f87171),白字只有 2.2–2.6:1;--text-inv 在暗主题
+   是深色,两套主题都能到 4.6:1 以上。浅色主题下取值仍是 #fff,视觉不变。 */
+.btn-pri, .btn-wrn, .btn-dng { color: var(--text-inv); }
+[data-theme='dark'] .cbtn.send, [data-theme='dark'] .cbtn.stop { color: var(--text-inv); }
+[data-theme='dark'] .u-msg .body { color: var(--text-inv); }
+
+/* ---- 快捷键帮助浮层(a11y.js 渲染:按 ? 打开,Esc 关闭,Tab 圈定) ---- */
+.kbd-help {
+  position: fixed; inset: 0; z-index: 400;
+  display: flex; align-items: center; justify-content: center;
+}
+.kbd-help[hidden] { display: none; }
+.kbd-help .mask {
+  position: absolute; inset: 0;
+  background: rgba(10, 15, 28, .45);
+}
+.kbd-help .panel {
+  position: relative; width: min(440px, calc(100vw - 48px));
+  max-height: min(72vh, 540px); overflow-y: auto;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: var(--r-lg);
+  box-shadow: var(--sh-3); padding: 14px 16px 15px;
+}
+.kbd-help .hd { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 8px; }
+.kbd-help .hd h2 { font-size: var(--fs-md); font-weight: 700; flex: 1; }
+.kbd-help .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 2px; border-bottom: 1px dashed var(--border);
+}
+.kbd-help .row:last-child { border-bottom: 0; }
+.kbd-help .keys { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-width: 138px; }
+.kbd-help kbd {
+  font-family: var(--mono); font-size: 11px;
+  border: 1px solid var(--border-strong); border-bottom-width: 2px;
+  border-radius: 4px; padding: 1px 6px; background: var(--bg-sub);
+}
+.kbd-help .lbl { color: var(--text-2); font-size: var(--fs-sm); min-width: 0; }
+.kbd-help .ft { margin-top: 9px; font-size: var(--fs-xs); color: var(--text-3); }
