@@ -6,10 +6,18 @@
   - 路径穿越(../../、绝对路径)→ 404 且不泄露磁盘路径;
   - 非图像扩展名 → 400;
   - 跨会话取他人 run → 404(与 resolve_run 口径一致);
-  - 无 run / 未知产物 → 空列表 / 404。
+  - 无 run / 未知产物 → 空列表 / 404;
+  - 三档尺寸契约(_browse/_thumb 归并进基图条目,url 优先 browse)
+    与元数据 sidecar(<name>.json 并入 meta,坏文件容忍);
+  - engines/figures.py 出图脚本冒烟(编译 + 合成数据真跑,秒级)。
 """
 
 from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -238,3 +246,158 @@ def test_artifact_file_dir_member_non_image_400_and_file_on_file_404(env):
         "session": "sess-a", "run_id": RUN_ID, "step": 10, "art_id": "vel_png",
         "file": "velocity.png"})
     assert r2.status_code == 404
+
+
+# ---------------- 三档尺寸契约 + 元数据 sidecar(2026-08-12 图件浏览进阶) ----------------
+# engines/figures.py 的产物目录约定:<name>_browse.png(2048px 浏览档)/
+# <name>_thumb.png(320px 缩略档)归并进基图条目;<name>.json 为元数据 sidecar。
+
+VEL_META = {
+    "title": "InSAR LOS velocity", "units": "mm/yr", "cmap": "vik",
+    "vlim": [-23.4, 23.4], "date_range": ["20190610", "20190815"],
+    "ref_point": [35.8, -117.5], "step": 10,
+    "params": {"dpi": 600, "cmap": "vik", "format": "png+pdf"},
+}
+
+
+def _add_tiered_artifact(env):
+    """目录型产物:完整三档 + sidecar、无档普通图、孤档、坏 sidecar 各一份。"""
+    figdir = env["ws"] / "products" / "tiered"
+    figdir.mkdir(parents=True, exist_ok=True)
+    (figdir / "velocity.png").write_bytes(PNG_BYTES)
+    (figdir / "velocity_browse.png").write_bytes(PNG_BYTES + b"browse")
+    (figdir / "velocity_thumb.png").write_bytes(PNG_BYTES + b"thumb")
+    (figdir / "velocity.json").write_text(
+        json.dumps(VEL_META, ensure_ascii=False), encoding="utf-8")
+    (figdir / "plain.png").write_bytes(PNG_BYTES)            # 无三档无 sidecar
+    (figdir / "orphan_browse.png").write_bytes(PNG_BYTES)    # 孤档:基图缺失
+    (figdir / "bad.png").write_bytes(PNG_BYTES)
+    (figdir / "bad.json").write_text("{ 这不是 JSON", encoding="utf-8")   # 坏 sidecar
+    env["store"].record_artifact(RUN_ID, 10, "tiered_dir", path="products/tiered",
+                                 kind="FIGURE", layout="", policy="stat",
+                                 fp="stat:sha256:feedface")
+
+
+def _tiered_figures(env):
+    figs = env["client"].get("/api/figures", params={"session": "sess-a"}).json()["figures"]
+    return {f["name"]: f for f in figs if f["artId"] == "tiered_dir"}
+
+
+def test_figures_tier_priority(env):
+    """三档归并:_browse/_thumb 不单独成条目;url 优先 browse,缺档回退原图。"""
+    _add_tiered_artifact(env)
+    by_name = _tiered_figures(env)
+    # 基图存在的 _browse/_thumb 被归并;孤档(orphan_browse)仍单独列出
+    assert sorted(by_name) == ["bad.png", "orphan_browse.png", "plain.png", "velocity.png"]
+
+    vel = by_name["velocity.png"]
+    assert "file=velocity_browse.png" in vel["url"]         # 灯箱:浏览档优先
+    assert "file=velocity.png" in vel["fullUrl"]            # 查看原图:原图
+    assert "file=velocity_thumb.png" in vel["thumbUrl"]     # 网格:缩略档
+    assert vel["size"] == len(PNG_BYTES)                    # 尺寸/mtime 取原图实测
+
+    plain = by_name["plain.png"]                            # 缺档回退:三个 url 同源
+    assert plain["url"] == plain["fullUrl"] == plain["thumbUrl"]
+    assert "file=plain.png" in plain["url"]
+
+
+def test_figures_tier_urls_fetchable(env):
+    """列表给出的三档 url 都能直接用作 <img src>(两个端点自洽)。"""
+    _add_tiered_artifact(env)
+    c = env["client"]
+    vel = _tiered_figures(env)["velocity.png"]
+    for key in ("url", "fullUrl", "thumbUrl"):
+        r = c.get(vel[key])
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("image/")
+    # 三档内容确实是不同文件
+    assert c.get(vel["url"]).content != c.get(vel["fullUrl"]).content
+
+
+def test_figures_sidecar_meta_merged_and_bad_json_tolerated(env):
+    """sidecar 存在且可解析 → 并入 meta;坏 JSON/缺失 → 无 meta 且列表不 500。"""
+    _add_tiered_artifact(env)
+    by_name = _tiered_figures(env)
+    assert by_name["velocity.png"]["meta"] == VEL_META
+    assert by_name["plain.png"].get("meta") is None      # 无 sidecar:现状
+    assert by_name["bad.png"].get("meta") is None        # 坏 sidecar:容忍不并入
+
+
+def test_figures_file_artifact_sidecar_merged(env):
+    """文件型产物同样并入同名 sidecar;三档 url 回退到自身。"""
+    ws = env["ws"]
+    (ws / "products/figures/velocity.json").write_text(
+        json.dumps({"title": "vel", "units": "mm/yr"}), encoding="utf-8")
+    c = env["client"]
+    figs = c.get("/api/figures", params={"session": "sess-a"}).json()["figures"]
+    vel = next(f for f in figs if f["artId"] == "vel_png")
+    assert vel["meta"] == {"title": "vel", "units": "mm/yr"}
+    assert vel["url"] == vel["fullUrl"] == vel["thumbUrl"]
+
+
+# ---------------- engines/figures.py 出图脚本冒烟(合成数据,秒级) ----------------
+
+def _figure_plan(workspace, params):
+    from insar_agent.engines.figures import build
+    from insar_agent.registry.capabilities import REGISTRY
+    return build(cap=REGISTRY[10], method="figure_journal", params=params,
+                 run={}, workspace=workspace)
+
+
+def test_figure_script_compiles_with_tier_and_sidecar_contract(tmp_path):
+    """渲染脚本语法编译通过,且三档 + sidecar 契约已落在脚本里(无残留 token)。"""
+    plan = _figure_plan(tmp_path, {"dpi": 300, "cmap": "roma"})
+    script = plan.files[".report/make_figures.py"]
+    compile(script, "make_figures.py", "exec")
+    for token in ("__DPI__", "__CMAP__", "__PARAMS__"):
+        assert token not in script
+    assert "_browse.png" in script and "_thumb.png" in script
+    assert "write_sidecar" in script and "save_tiers" in script
+    # params 摘要以 Python 字面量注入(roma 已升级为 vik)
+    assert "{'dpi': 300, 'cmap': 'vik', 'format': 'png+pdf'}" in script
+
+
+def test_figure_script_renders_tiers_and_sidecar(tmp_path):
+    """宿主真跑合成 velocity.h5(60×80):三档 PNG 宽度达标,sidecar 字段真实。"""
+    pytest.importorskip("matplotlib")
+    h5py = pytest.importorskip("h5py")
+    np = pytest.importorskip("numpy")
+    from PIL import Image   # matplotlib 依赖 pillow,importorskip 之后必在
+
+    ws = tmp_path / "ws"
+    (ws / ".report").mkdir(parents=True)
+    vel = np.random.default_rng(0).normal(0, 0.005, (60, 80)).astype("f4")
+    with h5py.File(ws / "velocity.h5", "w") as f:
+        f.create_dataset("velocity", data=vel)
+        f.attrs.update({"X_FIRST": "-117.8", "Y_FIRST": "36.0", "X_STEP": "0.005",
+                        "Y_STEP": "-0.005", "REF_LON": "-117.5", "REF_LAT": "35.8",
+                        "HEADING": "-166.5", "PLATFORM": "Sentinel-1",
+                        "START_DATE": "20190610", "END_DATE": "20190815"})
+
+    plan = _figure_plan(ws, {"dpi": 150, "cmap": "roma"})
+    (ws / ".report/make_figures.py").write_text(
+        plan.files[".report/make_figures.py"], encoding="utf-8")
+    r = subprocess.run([sys.executable, "-u", ".report/make_figures.py"], cwd=ws,
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=300)
+    assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
+
+    out = ws / "products" / "figures"
+    for name in ("velocity.png", "velocity.pdf",
+                 "velocity_browse.png", "velocity_thumb.png", "velocity.json",
+                 "velocity_hist.png", "velocity_hist_browse.png",
+                 "velocity_hist_thumb.png", "velocity_hist.json"):
+        assert (out / name).exists(), f"缺产物 {name}"
+
+    # 三档宽度契约:browse 2048px / thumb 320px 定宽(matplotlib 取整容差 ±2)
+    assert abs(Image.open(out / "velocity_browse.png").size[0] - 2048) <= 2
+    assert abs(Image.open(out / "velocity_thumb.png").size[0] - 320) <= 2
+    assert abs(Image.open(out / "velocity_hist_browse.png").size[0] - 2048) <= 2
+
+    meta = json.loads((out / "velocity.json").read_text(encoding="utf-8"))
+    assert meta["units"] == "mm/yr" and meta["step"] == 10
+    assert meta["date_range"] == ["20190610", "20190815"]
+    assert meta["ref_point"] == [35.8, -117.5]
+    assert meta["params"] == {"dpi": 150, "cmap": "vik", "format": "png+pdf"}
+    assert isinstance(meta["cmap"], str) and meta["cmap"]   # 实际所用(可能兜底 RdBu_r)
+    assert meta["vlim"][1] > 0 and meta["vlim"][0] == -meta["vlim"][1]

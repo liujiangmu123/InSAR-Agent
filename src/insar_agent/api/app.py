@@ -78,6 +78,30 @@ _IMAGE_MEDIA_TYPES = {
     ".gif": "image/gif", ".webp": "image/webp",
 }
 
+#: 三档尺寸契约(HyP3 式,engines/figures.py 的产物目录约定):
+#: <name>_browse.* / <name>_thumb.* 是 <name>.* 的浏览/缩略档,
+#: 列表时归并进基图条目(url/thumbUrl),不单独成条目。
+_TIER_SUFFIXES = ("_browse", "_thumb")
+
+#: 元数据 sidecar(<name>.json)的读取上限:防坏文件/误命名的大 JSON 拖垮列表
+_SIDECAR_MAX_BYTES = 64 * 1024
+
+
+def read_sidecar_meta(image: Path) -> dict | None:
+    """读图件同名 .json sidecar(engines/figures.py 随图落盘的元数据)。
+
+    容忍一切失败:缺文件/超限/坏 JSON/顶层非对象都返回 None,
+    列表端点绝不因一个坏 sidecar 而 500。
+    """
+    sidecar = image.with_suffix(".json")
+    try:
+        if not sidecar.is_file() or sidecar.stat().st_size > _SIDECAR_MAX_BYTES:
+            return None
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # ValueError 覆盖 JSONDecodeError/UnicodeDecodeError
+        return None
+    return data if isinstance(data, dict) else None
+
 
 def check_session_id(session_id: str) -> str:
     """校验 session_id 可安全用作目录名;不合法直接 400(结构化 detail)。"""
@@ -557,25 +581,42 @@ def create_app(home: Path | None = None) -> FastAPI:
     def figures(session: str, run_id: str | None = None):
         """该 run 全部图像类产物的清单(按扩展名闭集过滤,文件已缺失的行不列)。
 
-        条目含 step/artId/文件名/尺寸/mtime 与可直接用作 <img src> 的 url;
-        尺寸与 mtime 取落盘文件实测值,不信 DB 记录(可能已被覆写)。
+        条目含 step/artId/文件名/尺寸/mtime 与三档 url(三档尺寸契约,
+        engines/figures.py 的产物目录约定):
+          - url      浏览档(_browse 存在时优先,灯箱用)
+          - fullUrl  原图(「查看原图」/下载)
+          - thumbUrl 缩略档(_thumb 存在时优先,网格用)
+        三档缺档一律回退原图;_browse/_thumb 文件不单独成条目。
+        同名 .json sidecar 存在且可解析时并入 meta 字段(坏文件容忍不并入)。
+        尺寸与 mtime 取落盘原图实测值,不信 DB 记录(可能已被覆写)。
         """
         run = resolve_run(session, run_id, required=False)
         if run is None:
             return {"run": None, "figures": []}
 
-        def entry(art: dict, target: Path, member: str | None = None) -> dict:
-            st = target.stat()
+        def file_url(art: dict, member: str | None = None) -> str:
             q = {"session": session, "run_id": run["run_id"],
                  "step": art["step_id"], "art_id": art["art_id"]}
             if member:
                 q["file"] = member
-            return {
+            return "/api/artifact-file?" + urlencode(q)
+
+        def entry(art: dict, target: Path, member: str | None = None,
+                  browse: str | None = None, thumb: str | None = None) -> dict:
+            st = target.stat()
+            full = file_url(art, member)
+            item = {
                 "step": art["step_id"], "artId": art["art_id"],
                 "name": target.name, "path": art["path"], "kind": art["kind"],
                 "size": st.st_size, "mtime": st.st_mtime,
-                "url": "/api/artifact-file?" + urlencode(q),
+                "url": file_url(art, browse) if browse else full,
+                "fullUrl": full,
+                "thumbUrl": file_url(art, thumb) if thumb else full,
             }
+            meta = read_sidecar_meta(target)
+            if meta is not None:
+                item["meta"] = meta
+            return item
 
         items = []
         for art in store.artifacts_of(run["run_id"]):
@@ -592,8 +633,21 @@ def create_app(home: Path | None = None) -> FastAPI:
                 children = sorted(p for p in target.iterdir()
                                   if p.is_file()
                                   and p.suffix.lower() in _IMAGE_MEDIA_TYPES)
-                for child in children[:100]:
-                    items.append(entry(art, child, member=child.name))
+                by_stem = {p.stem: p.name for p in children}
+                listed = 0
+                for child in children:
+                    stem = child.stem
+                    # 基图存在的 _browse/_thumb 档并入基图条目,不单独列;
+                    # 孤档(基图缺失)仍按普通图件列出,列表不吞真实文件
+                    if any(stem.endswith(sfx) and stem[:-len(sfx)] in by_stem
+                           for sfx in _TIER_SUFFIXES):
+                        continue
+                    items.append(entry(art, child, member=child.name,
+                                       browse=by_stem.get(stem + "_browse"),
+                                       thumb=by_stem.get(stem + "_thumb")))
+                    listed += 1
+                    if listed >= 100:
+                        break
         items.sort(key=lambda x: (x["step"], x["artId"], x["name"]))
         return {"run": run["run_id"], "figures": items}
 

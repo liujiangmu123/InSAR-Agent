@@ -8,6 +8,18 @@
 在案)、参考点/LOS 箭头/比例尺等 InSAR 领域惯例、图角 provenance 小字。
 模板用 __TOKEN__ 替换而非 str.format:生成脚本里大量 f-string/字典花括号,
 format 转义极易出错。
+
+产物目录约定(products/figures/,HyP3 式三档尺寸 + 元数据 sidecar,
+依据 RESEARCH-insar-viewer-ux-2026-08-12.md §4.6):
+  <name>.png          原图(dpi=params.dpi,默认 600)——「查看原图」/报告用
+  <name>.pdf          矢量原稿(投稿用,不进影像面板)
+  <name>_browse.png   2048px 定宽浏览档 —— /api/figures 条目 url 优先取它(灯箱)
+  <name>_thumb.png    320px 定宽缩略档 —— 画廊网格用(条目 thumbUrl)
+  <name>.json         元数据 sidecar(title/units/cmap/vlim/date_range/
+                      ref_point/step/params)—— /api/figures 读到即并入 meta 字段
+三档由同一 Figure 只改 dpi 连续 savefig 得到:版式/字号与原图严格一致
+(RESEARCH-raster-viewer-tech §1.10);_browse/_thumb 不单独入 artifacts 表,
+由 /api/figures 枚举目录时按命名约定归并到基图条目。
 """
 
 from __future__ import annotations
@@ -21,6 +33,7 @@ from insar_agent.runtime.jobs import CommandPlan
 
 _FIGURE_PY = '''\
 # insar-agent 论文级出图脚本(数据不造假:直接读 velocity.h5)
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +46,26 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LightSource
 
 WS = Path(".").resolve()
+STEP_ID = 10          # 流水线步骤号(出图导出)
+PARAMS = __PARAMS__   # 本次出图参数摘要(build() 注入),原样写进 sidecar
+
+
+def save_tiers(fig_obj, base_png):
+    """三档尺寸契约(HyP3 式):原图旁另存 _browse(2048px 定宽)与 _thumb(320px 定宽)。
+
+    同一 Figure 只改 dpi 二次渲染,版式/字号与原图严格一致;
+    不用 bbox_inches="tight",保证像素宽度可预知(卷帘对比也要求像素对齐)。
+    """
+    w_in = float(fig_obj.get_figwidth())
+    fig_obj.savefig(base_png.with_name(base_png.stem + "_browse.png"), dpi=2048 / w_in)
+    fig_obj.savefig(base_png.with_name(base_png.stem + "_thumb.png"), dpi=320 / w_in)
+
+
+def write_sidecar(base_png, fields):
+    """图件元数据 sidecar(<name>.json):字段全部取自脚本内已有变量,不造假。"""
+    base_png.with_suffix(".json").write_text(
+        json.dumps(fields, ensure_ascii=False, indent=1), encoding="utf-8")
+
 MM = 1 / 25.4  # mm -> inch:按最终物理尺寸设计,所见即所得
 PUB_RC = {  # 四刊安全交集:无衬线、正文 7-8pt、线宽 0.6pt、Type42 嵌字
     "font.family": "sans-serif",
@@ -132,17 +165,39 @@ meta = {"Title": "InSAR LOS velocity", "Software": "insar-agent",
 
 out_dir = WS / "products" / "figures"
 out_dir.mkdir(parents=True, exist_ok=True)
-fig.savefig(out_dir / "velocity.png", metadata=meta)              # 600dpi 栅格:预览/报告
+vel_png = out_dir / "velocity.png"
+fig.savefig(vel_png, metadata=meta)                               # 600dpi 栅格:预览/报告
 fig.savefig(out_dir / "velocity.pdf", metadata={"Title": meta["Title"]})  # 矢量:投稿
-print(f"OK velocity.png|pdf  cmap={cmap_name}  vlim=+-{lim:.1f} mm/yr", flush=True)
+save_tiers(fig, vel_png)                                          # browse/thumb 两档
+write_sidecar(vel_png, {                                          # 元数据随图落盘
+    "title": meta["Title"],
+    "units": "mm/yr",
+    "cmap": cmap_name,                                            # 实际所用(含兜底)
+    "vlim": [round(-lim, 2), round(lim, 2)],
+    "date_range": [atr.get("START_DATE"), atr.get("END_DATE")],
+    "ref_point": ([float(atr["REF_LAT"]), float(atr["REF_LON"])]
+                  if "REF_LAT" in atr and "REF_LON" in atr else None),
+    "step": STEP_ID,
+    "params": PARAMS,
+})
+print(f"OK velocity.png|pdf|_browse|_thumb|json  cmap={cmap_name}  vlim=+-{lim:.1f} mm/yr",
+      flush=True)
 
 # 速度直方图(质检辅助,非投稿图件,保持简装)
 fig2, ax2 = plt.subplots(figsize=(6, 4))
 ax2.hist(finite, bins=100)
 ax2.set_xlabel("LOS velocity (mm/yr)")
 ax2.set_ylabel("count")
-fig2.savefig(out_dir / "velocity_hist.png", dpi=150, bbox_inches="tight")
-print("OK velocity_hist.png", flush=True)
+hist_png = out_dir / "velocity_hist.png"
+fig2.savefig(hist_png, dpi=150, bbox_inches="tight")
+save_tiers(fig2, hist_png)
+write_sidecar(hist_png, {  # 直方图无色标/值域语义,只写确有依据的字段
+    "title": "LOS velocity histogram",
+    "units": "mm/yr",
+    "step": STEP_ID,
+    "params": PARAMS,
+})
+print("OK velocity_hist.png|_browse|_thumb|json", flush=True)
 print("出图完成", flush=True)
 '''
 
@@ -154,9 +209,14 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
     # 旧默认 roma 升级为速率图推荐色标 vik(发散、CVD 安全,RESEARCH-pub-figures §二);
     # 其余值直通 pub_cmap(cmcrameri 名字空间),缺包时脚本内退 RdBu_r 并记录在案
     cmap = {"roma": "vik"}.get(cmap, cmap)
+    dpi = int(params.get("dpi", 600))
+    # sidecar 的 params 摘要:只放本步骤声明过的展示参数(repr 注入为 Python 字面量)
+    params_summary = {"dpi": dpi, "cmap": cmap,
+                      "format": str(params.get("format", "png+pdf"))}
     content = (_FIGURE_PY
-               .replace("__DPI__", str(int(params.get("dpi", 600))))
-               .replace("__CMAP__", repr(cmap)))
+               .replace("__DPI__", str(dpi))
+               .replace("__CMAP__", repr(cmap))
+               .replace("__PARAMS__", repr(params_summary)))
     return CommandPlan(
         argv=[engine_python(), "-u", script_rel],
         cwd=str(workspace),

@@ -71,7 +71,7 @@
   pointer-events: none;
 }
 
-/* 每格下方一行元数据:产物名 / 步骤 / 日期 */
+/* 每格下方一行元数据:产物名(或 sidecar 标题)/ 步骤 / 日期 */
 .glx-meta {
   display: flex;
   align-items: baseline;
@@ -96,6 +96,16 @@
   white-space: nowrap;
 }
 
+/* sidecar 元数据行:单位 / 色标+值域 / 日期区间 */
+.glx-meta2 {
+  padding: 0 8px 6px;
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------------- 灯箱 ---------------- */
 
 .glx-lb {
@@ -108,34 +118,236 @@
   background: rgba(8, 11, 18, .82);
 }
 
+/* 台面:固定盒(canvas / 对比容器需要确定尺寸);
+   顶部让位工具条(56px),底部让位胶片条 + 状态条(约 150px)。 */
 .glx-lb-stage {
+  position: relative;
+  width: min(92vw, 1280px);
+  height: calc(100vh - 210px);
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Canvas 查看器:铺满台面,高 DPI 位图由 JS 维护 */
+.glx-lb-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-sm);
+  background: #fff;
+  box-shadow: var(--sh-3);
+  cursor: grab;
+}
+.glx-lb-canvas:active { cursor: grabbing; }
+
+/* 演示 SVG 台面:contain 语义,viewBox 自适应 */
+.glx-demo-host {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  max-width: min(92vw, 1280px);
-  max-height: 82vh;
+  width: 100%;
+  height: 100%;
 }
-.glx-lb-stage img,
-.glx-lb-stage svg {
-  max-width: min(92vw, 1280px);
-  max-height: 82vh;
-  width: auto;
-  height: auto;
-  object-fit: contain;
+.glx-demo-host svg {
+  max-width: 100%;
+  max-height: 100%;
+  width: 100%;
   border-radius: var(--r-sm);
   background: #fff;
   box-shadow: var(--sh-3);
 }
-/* 演示 SVG 只有 viewBox 无固有尺寸:显式给宽,高度按 viewBox 比例推导 */
-.glx-lb-stage svg {
-  width: min(92vw, 1280px);
-}
-/* 演示 SVG 的 display:contents 包裹层在灯箱里正常成盒 */
-.glx-lb-stage > div { display: block !important; max-width: min(92vw, 1280px); max-height: 82vh; }
-.glx-lb-stage .glx-demo { position: absolute; left: 10px; bottom: 10px; }
+/* 演示 SVG 的 display:contents 包裹层在台面里正常成盒 */
+.glx-demo-host > div { display: block !important; max-width: 100%; max-height: 100%; }
+.glx-demo-host .glx-demo { position: absolute; left: 10px; bottom: 10px; }
 
-/* 底部条:文件名 + 所属步骤 + 序号 */
+/* ---------------- 工具条(左上) ---------------- */
+
+.glx-lb-tools {
+  position: fixed;
+  top: 14px;
+  left: 16px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: calc(100vw - 140px);
+  z-index: 1;
+}
+.glx-lb-btn {
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 255, 255, .22);
+  border-radius: var(--r-pill);
+  background: rgba(20, 24, 31, .65);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  text-decoration: none;
+}
+.glx-lb-btn:hover { background: rgba(50, 58, 72, .85); }
+.glx-lb-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.glx-lb-btn[aria-pressed="true"] {
+  background: #2563eb;
+  border-color: #3b82f6;
+}
+.glx-lb-btn[disabled] { opacity: .45; cursor: default; }
+.glx-lb-exit { border-style: dashed; }
+
+/* 工具条滑杆(混合不透明度 / 闪烁间隔) */
+.glx-lb-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, .22);
+  border-radius: var(--r-pill);
+  background: rgba(20, 24, 31, .65);
+  color: #cfd6df;
+  font-size: 11px;
+}
+.glx-lb-slider input[type="range"] { width: 110px; margin: 0; }
+.glx-lb-sliderval { font-family: var(--mono); min-width: 44px; text-align: right; }
+
+/* ---------------- 对比台面 ---------------- */
+
+.glx-cmp {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-sm);
+  background: #fff;
+  box-shadow: var(--sh-3);
+  overflow: hidden;
+}
+.glx-cmp-layer,
+.glx-cmp-top { position: absolute; inset: 0; }
+.glx-cmp-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;   /* 两图同容器 contain:同尺寸图像素级对齐 */
+  display: block;
+}
+.glx-cmp-node {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.glx-cmp-node > div { display: block !important; width: 100%; height: 100%; }
+.glx-cmp-node svg { width: 100%; height: 100%; }
+
+/* 卷帘:上层只露出左侧 --pos 的部分;透明 range 铺满承接拖拽/键盘 */
+.glx-cmp-swipe .glx-cmp-top {
+  clip-path: inset(0 calc(100% - var(--pos)) 0 0);
+}
+.glx-cmp-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--pos);
+  width: 2px;
+  background: #fff;
+  box-shadow: 0 0 4px rgba(0, 0, 0, .6);
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+.glx-cmp-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ew-resize;
+}
+
+/* 混合 / 闪烁:上层透明度由滑杆 / 定时器驱动(过渡让闪烁更柔和) */
+.glx-cmp-blend .glx-cmp-top { transition: opacity .08s linear; }
+.glx-cmp-flicker .glx-cmp-top { transition: opacity .06s linear; }
+
+/* A/B 标签角标 */
+.glx-cmp-chip {
+  position: absolute;
+  top: 8px;
+  max-width: 44%;
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
+  background: rgba(8, 11, 18, .72);
+  color: #e6e9ee;
+  font-size: 11px;
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.glx-cmp-chip.a { left: 8px; }
+.glx-cmp-chip.b { right: 8px; }
+
+/* 并排同步:双画布各占一半 */
+.glx-cmp-side {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+}
+.glx-side-cell { position: relative; }
+
+/* ---------------- 胶片条(底部) ---------------- */
+
+.glx-lb-strip {
+  position: fixed;
+  left: 50%;
+  bottom: 46px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  max-width: 92vw;
+  padding: 6px 8px;
+  border-radius: var(--r);
+  background: rgba(20, 24, 31, .72);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.glx-strip-item {
+  position: relative;
+  flex: none;
+  width: 72px;
+  height: 50px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--r-sm);
+  background: #fff;
+  overflow: hidden;
+  cursor: pointer;
+  opacity: .78;
+}
+.glx-strip-item:hover { opacity: 1; }
+.glx-strip-item:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.glx-strip-item img,
+.glx-strip-item svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.glx-strip-item > div { position: absolute; inset: 0; display: block !important; }
+.glx-strip-item.is-cur { border-color: #7cc0ff; opacity: 1; }
+.glx-strip-item.is-b { border-color: #ffb84d; opacity: 1; }
+/* 选择对比图模式:非当前项呼吸提示 */
+.glx-lb-strip.is-picking .glx-strip-item:not(.is-cur) { opacity: 1; }
+.glx-lb-strip.is-picking .glx-strip-item:not(.is-cur):hover { border-color: #ffb84d; }
+
+/* ---------------- 底部状态条 ---------------- */
+
 .glx-lb-bar {
   position: fixed;
   left: 0;
@@ -151,6 +363,14 @@
 }
 .glx-lb-name { font-family: var(--mono); }
 .glx-lb-step { color: #a2acbb; }
+.glx-lb-metaline { color: #8fd0a8; }
+.glx-lb-hint {
+  color: #7f8a99;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .glx-lb-count { margin-left: auto; font-family: var(--mono); color: #a2acbb; }
 
 .glx-lb-nav,
