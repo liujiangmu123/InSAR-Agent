@@ -1,31 +1,38 @@
 // InSAR-Agent 桌面壳:Rust/Tauri 只做「壳」—— 窗口 + sidecar 生命周期管理,
 // 业务 100% 留在 Python 后端(FastAPI + prototype/ 静态 UI),后端零改动。
-// 架构决策见 docs/OPTIMIZATION.md §4。
+// 架构决策见 docs/OPTIMIZATION.md §4;sidecar 进程/日志细节在 src/sidecar.rs。
 //
-// 启动流程:读 INSAR_PORT → 探测 Python → spawn `python -m insar_agent.api.app`
-//           → 轮询 /api/health(30 秒超时)→ 打开 WebView 窗口指向后端。
+// 启动流程:读 INSAR_PORT → 端口裁决(已有健康后端 → 复用;被占且非本后端 →
+//           从 8873 起找空闲端口)→ 探测 Python(INSAR_PYTHON > 仓库根 .venv >
+//           PATH)→ spawn `python -m insar_agent.api.app`(CREATE_NO_WINDOW,
+//           stdout/stderr 走 5MB 滚动日志)→ 轮询 /api/health(30 秒超时)
+//           → 打开 WebView 窗口指向后端。
+// 运行期:sidecar 意外退出 → 指数退避自动重启(最多 3 次,窗口标题实时提示),
+//         仍未恢复 → 弹诊断页。
 // 退出语义:直接 kill sidecar 子进程即可 —— 后端自带 orphan 检测与 reattach
 //           语义,「桌面关闭 → 重开」等价于「断点续跑」,这正是产品语义,
 //           无需优雅停机协商。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::fs::File;
+mod sidecar;
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 const DEFAULT_PORT: u16 = 8873;
 const HEALTH_TIMEOUT_SECS: u64 = 30;
-const DEFAULT_WINDOWS_PYTHON: &str = r"C:\Python314\python.exe";
-
-/// sidecar 子进程句柄;应用退出时统一 kill(见 `kill_sidecar`)。
-static SIDECAR: Mutex<Option<Child>> = Mutex::new(None);
+/// INSAR_PORT 被占且不是本后端时,从这里起向上扫描空闲端口。
+const PORT_SCAN_START: u16 = 8873;
+const PORT_SCAN_SPAN: u16 = 100;
+/// sidecar 意外退出后的最大连续自动重启次数,超过即弹诊断页。
+const MAX_RESTARTS: u32 = 3;
+/// 重启后稳定运行满该时长,重启预算清零(区分「崩溃循环」与「偶发崩溃」)。
+const STABLE_UPTIME_SECS: u64 = 60;
 
 // ---------------- 配置解析 ----------------
 
@@ -39,92 +46,38 @@ fn insar_port() -> u16 {
     parse_port(std::env::var("INSAR_PORT").ok())
 }
 
-/// 探测 Python:INSAR_PYTHON > C:\Python314\python.exe > PATH。
-/// 返回(解释器路径,来源说明——用于日志与诊断页)。
-fn find_python() -> Result<(PathBuf, String), String> {
-    if let Some(v) = std::env::var_os("INSAR_PYTHON") {
-        let p = PathBuf::from(&v);
-        if p.is_file() {
-            return Ok((p, "环境变量 INSAR_PYTHON".into()));
-        }
-        return Err(format!("INSAR_PYTHON 指向的文件不存在:{}", p.display()));
+// ---------------- 端口裁决 ----------------
+
+enum PortPlan {
+    /// 端口上已有健康后端:直接连接,不 spawn、不接管生命周期。
+    Reuse(u16),
+    /// 在该端口 spawn sidecar(可能是期望端口,也可能是冲突后的回退端口)。
+    Spawn(u16),
+}
+
+fn port_is_free(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// 端口裁决:健康后端 → 复用;空闲 → 用之;被占且 /api/health 非 200 →
+/// 从 PORT_SCAN_START 起向上找第一个空闲端口。
+fn resolve_port(desired: u16) -> Result<PortPlan, String> {
+    if health_ok(desired) {
+        return Ok(PortPlan::Reuse(desired));
     }
-    let default = PathBuf::from(DEFAULT_WINDOWS_PYTHON);
-    if default.is_file() {
-        return Ok((default, format!("默认宿主 {DEFAULT_WINDOWS_PYTHON}")));
+    if port_is_free(desired) {
+        return Ok(PortPlan::Spawn(desired));
     }
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            if dir.as_os_str().is_empty() {
-                continue;
-            }
-            for name in ["python.exe", "python3.exe", "python", "python3"] {
-                let cand = dir.join(name);
-                if cand.is_file() {
-                    return Ok((cand, "PATH".into()));
-                }
-            }
+    let end = PORT_SCAN_START.saturating_add(PORT_SCAN_SPAN);
+    for p in PORT_SCAN_START..end {
+        if p != desired && port_is_free(p) {
+            return Ok(PortPlan::Spawn(p));
         }
     }
     Err(format!(
-        "未找到 Python 解释器(依次尝试:INSAR_PYTHON、{DEFAULT_WINDOWS_PYTHON}、PATH)"
+        "端口 {desired} 已被其他进程占用(/api/health 非 200),且 {PORT_SCAN_START}-{} 范围内没有空闲端口",
+        end - 1
     ))
-}
-
-/// sidecar 工作目录 = 仓库根。
-/// dev 模式(cargo build/run):CARGO_MANIFEST_DIR 是 desktop/,其父目录即仓库根
-/// (编译期烙入)。打包分发后该路径不存在,回退到当前工作目录 —— 打包模式的
-/// 正式方案(应用数据目录)见 README「打包路线」。
-fn repo_root() -> PathBuf {
-    if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
-        if root.join("src").join("insar_agent").is_dir() {
-            return root.to_path_buf();
-        }
-    }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
-
-// ---------------- sidecar 生命周期 ----------------
-
-fn sidecar_log_path(port: u16) -> PathBuf {
-    std::env::temp_dir().join(format!("insar-agent-sidecar-{port}.log"))
-}
-
-fn spawn_sidecar(python: &Path, port: u16, workdir: &Path) -> Result<(), String> {
-    let log_path = sidecar_log_path(port);
-    let log = File::create(&log_path)
-        .map_err(|e| format!("无法创建 sidecar 日志 {}:{e}", log_path.display()))?;
-    let log_err = log
-        .try_clone()
-        .map_err(|e| format!("日志句柄复制失败:{e}"))?;
-
-    let mut cmd = Command::new(python);
-    cmd.args(["-m", "insar_agent.api.app"])
-        .current_dir(workdir)
-        .env("INSAR_PORT", port.to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log_err));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000; // 避免弹出黑色控制台窗
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("启动 sidecar 失败({}):{e}", python.display()))?;
-    *SIDECAR.lock().unwrap() = Some(child);
-    Ok(())
-}
-
-/// 直接 kill sidecar:后端有 orphan 检测与 reattach 语义,
-/// 「桌面关闭 → 重开」= 断点续跑(SQLite 中 run/step 状态完整保留)。
-fn kill_sidecar() {
-    if let Some(mut child) = SIDECAR.lock().unwrap().take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
 }
 
 // ---------------- 极简 HTTP(健康检查不为此引 reqwest 等重依赖) ----------------
@@ -177,10 +130,8 @@ fn wait_health(port: u16, timeout: Duration) -> Result<(), String> {
         if health_ok(port) {
             return Ok(());
         }
-        if let Some(child) = SIDECAR.lock().unwrap().as_mut() {
-            if let Ok(Some(status)) = child.try_wait() {
-                return Err(format!("sidecar 进程提前退出({status})"));
-            }
+        if let Some(status) = sidecar::child_exit_status() {
+            return Err(format!("sidecar 进程提前退出({status})"));
         }
         if Instant::now() >= deadline {
             return Err(format!(
@@ -192,7 +143,7 @@ fn wait_health(port: u16, timeout: Duration) -> Result<(), String> {
     }
 }
 
-// ---------------- 诊断页(启动失败时展示,绝不静默退出) ----------------
+// ---------------- 诊断页(启动失败/自愈失败时展示,绝不静默退出) ----------------
 
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -213,7 +164,7 @@ fn read_log_tail(path: &Path, max_bytes: usize) -> String {
 }
 
 fn diagnostics_html(error: &str, python_desc: &str, port: u16, workdir: &Path) -> String {
-    let log_path = sidecar_log_path(port);
+    let log_path = sidecar::log_path(port);
     format!(
         r#"<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>InSAR-Agent 启动失败</title>
@@ -231,15 +182,17 @@ td{{padding:.25rem .75rem .25rem 0;vertical-align:top}} .k{{color:#8b98a5;white-
 <tr><td class="k">启动命令</td><td><code>python -m insar_agent.api.app</code></td></tr>
 <tr><td class="k">端口</td><td><code>{port}</code>(环境变量 <code>INSAR_PORT</code> 可改)</td></tr>
 <tr><td class="k">工作目录</td><td><code>{workdir}</code></td></tr>
-<tr><td class="k">sidecar 日志</td><td><code>{log}</code></td></tr>
+<tr><td class="k">sidecar 日志</td><td><code>{log}</code>(滚动历史在同名 <code>.1</code> 文件)</td></tr>
 </table>
 <h2>日志尾部</h2>
 <pre>{log_tail}</pre>
 <h2>排查建议</h2>
 <ul>
-<li>确认该解释器已安装本项目:<code>pip install -e .</code>,并能手动运行
-<code>python -m insar_agent.api.app</code></li>
-<li>用 <code>INSAR_PYTHON</code> 显式指定解释器;用 <code>INSAR_PORT</code> 避开端口冲突</li>
+<li>项目约定使用仓库内虚拟环境:若 <code>.venv</code> 不存在,在仓库根执行
+<code>py -m venv .venv</code>,再 <code>.venv\Scripts\python.exe -m pip install -r requirements.txt</code></li>
+<li>确认该解释器已装本项目依赖,并能手动运行 <code>python -m insar_agent.api.app</code></li>
+<li>用 <code>INSAR_PYTHON</code> 显式指定解释器;用 <code>INSAR_PORT</code> 指定端口
+(被占用时壳会自动从 8873 起改用空闲端口)</li>
 <li>修复后关闭本窗口重开应用即可 —— 后端支持断点续跑,不会丢进度</li>
 </ul>
 </body></html>"#,
@@ -312,6 +265,16 @@ fn open_main_window(handle: &AppHandle, port: u16) {
     );
 }
 
+/// 设置主窗口标题(任意线程可调;窗口尚不存在时静默忽略)。
+fn set_main_title(handle: &AppHandle, title: String) {
+    let handle_ = handle.clone();
+    let _ = handle.run_on_main_thread(move || {
+        if let Some(win) = handle_.get_webview_window("main") {
+            let _ = win.set_title(&title);
+        }
+    });
+}
+
 fn show_diagnostics(handle: &AppHandle, error: &str, python_desc: &str, port: u16, workdir: &Path) {
     eprintln!("[desktop] 启动失败:{error}");
     match serve_html(diagnostics_html(error, python_desc, port, workdir)) {
@@ -331,19 +294,32 @@ fn show_diagnostics(handle: &AppHandle, error: &str, python_desc: &str, port: u1
 
 // ---------------- 启动编排 ----------------
 
-/// 后台启动流程:探测 → spawn → 健康检查 → 开窗;任何失败都开诊断窗。
-fn boot(handle: AppHandle, port: u16) {
-    let workdir = repo_root();
+/// 后台启动流程:端口裁决 → 探测 → spawn → 健康检查 → 开窗 → 转入运行期看护;
+/// 任何启动失败都开诊断窗。
+fn boot(handle: AppHandle, desired_port: u16) {
+    let workdir = sidecar::repo_root();
 
-    // 端口上已有健康后端(如手动起的 dev server):直接复用,
-    // 不 spawn、也不接管其生命周期(退出时 SIDECAR 为空,不会误杀)
-    if health_ok(port) {
-        println!("[desktop] 端口 {port} 已有健康后端,直接连接(不 spawn sidecar)");
-        open_main_window(&handle, port);
-        return;
-    }
+    let port = match resolve_port(desired_port) {
+        Ok(PortPlan::Reuse(p)) => {
+            println!("[desktop] 端口 {p} 已有健康后端,直接连接(不 spawn sidecar)");
+            open_main_window(&handle, p);
+            return;
+        }
+        Ok(PortPlan::Spawn(p)) => {
+            if p != desired_port {
+                println!(
+                    "[desktop] 端口 {desired_port} 被其他进程占用(/api/health 非 200),自动改用空闲端口 {p}"
+                );
+            }
+            p
+        }
+        Err(e) => {
+            show_diagnostics(&handle, &e, "(未探测)", desired_port, &workdir);
+            return;
+        }
+    };
 
-    let (python, python_src) = match find_python() {
+    let (python, python_src) = match sidecar::find_python(&workdir) {
         Ok(v) => v,
         Err(e) => {
             show_diagnostics(&handle, &e, "(未找到)", port, &workdir);
@@ -355,10 +331,10 @@ fn boot(handle: AppHandle, port: u16) {
     println!(
         "[desktop] spawn sidecar:cwd={},log={}",
         workdir.display(),
-        sidecar_log_path(port).display()
+        sidecar::log_path(port).display()
     );
 
-    if let Err(e) = spawn_sidecar(&python, port, &workdir) {
+    if let Err(e) = sidecar::spawn(&python, port, &workdir) {
         show_diagnostics(&handle, &e, &python_desc, port, &workdir);
         return;
     }
@@ -366,21 +342,105 @@ fn boot(handle: AppHandle, port: u16) {
         Ok(()) => {
             println!("[desktop] /api/health = 200,打开主窗口");
             open_main_window(&handle, port);
+            std::thread::spawn(move || supervise(handle, python, python_desc, port, workdir));
         }
         Err(e) => show_diagnostics(&handle, &e, &python_desc, port, &workdir),
     }
 }
 
+/// 运行期看护:sidecar 意外退出 → 指数退避(1s/2s/4s)自动重启,最多
+/// MAX_RESTARTS 次;稳定运行满 STABLE_UPTIME_SECS 后预算清零。重启期间
+/// 窗口标题实时提示;重启预算耗尽仍未恢复 → 弹诊断页并停止看护。
+fn supervise(handle: AppHandle, python: PathBuf, python_desc: String, port: u16, workdir: PathBuf) {
+    let mut attempts: u32 = 0;
+    let mut spawned_at = Instant::now();
+    loop {
+        let exit_desc = match sidecar::wait_exit_or_shutdown() {
+            sidecar::WaitOutcome::Shutdown => return,
+            sidecar::WaitOutcome::Exited(desc) => desc,
+        };
+        if spawned_at.elapsed() >= Duration::from_secs(STABLE_UPTIME_SECS) {
+            attempts = 0;
+        }
+        eprintln!("[desktop] sidecar 意外退出({exit_desc}),尝试自动重启");
+
+        let mut recovered = false;
+        while attempts < MAX_RESTARTS {
+            attempts += 1;
+            let backoff = Duration::from_secs(1u64 << (attempts - 1)); // 1s/2s/4s
+            set_main_title(
+                &handle,
+                format!(
+                    "InSAR-Agent — 后端已退出,{}s 后自动重启({attempts}/{MAX_RESTARTS})",
+                    backoff.as_secs()
+                ),
+            );
+            if sidecar::sleep_unless_shutdown(backoff) {
+                return;
+            }
+            set_main_title(
+                &handle,
+                format!("InSAR-Agent — 后端重启中({attempts}/{MAX_RESTARTS})…"),
+            );
+            spawned_at = Instant::now();
+            if let Err(e) = sidecar::spawn(&python, port, &workdir) {
+                eprintln!("[desktop] 第 {attempts} 次重启 spawn 失败:{e}");
+                continue;
+            }
+            match wait_health(port, Duration::from_secs(HEALTH_TIMEOUT_SECS)) {
+                Ok(()) => {
+                    recovered = true;
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("[desktop] 第 {attempts} 次重启后健康检查失败:{e}");
+                    sidecar::kill_current();
+                }
+            }
+        }
+
+        if recovered {
+            println!("[desktop] sidecar 已自动恢复(第 {attempts} 次重启)");
+            set_main_title(&handle, "InSAR-Agent".into());
+            continue;
+        }
+        set_main_title(
+            &handle,
+            format!("InSAR-Agent — 后端已停止(自动重启 {MAX_RESTARTS} 次失败)"),
+        );
+        show_diagnostics(
+            &handle,
+            &format!("sidecar 意外退出({exit_desc}),自动重启 {MAX_RESTARTS} 次均未恢复"),
+            &python_desc,
+            port,
+            &workdir,
+        );
+        return;
+    }
+}
+
 /// 无 GUI 自检(`--smoke` 或 INSAR_DESKTOP_SMOKE=1):
 /// spawn sidecar → 等健康检查 → kill → 退出码 0/1。无人值守/CI 验证用。
-fn run_smoke(port: u16) -> i32 {
-    println!("[smoke] 端口 {port}");
-    if health_ok(port) {
-        println!("[smoke] OK:端口已有健康后端(跳过 spawn)");
-        return 0;
-    }
-    let workdir = repo_root();
-    let (python, src) = match find_python() {
+fn run_smoke(desired_port: u16) -> i32 {
+    println!("[smoke] 期望端口 {desired_port}");
+    let port = match resolve_port(desired_port) {
+        Ok(PortPlan::Reuse(p)) => {
+            println!("[smoke] OK:端口 {p} 已有健康后端(跳过 spawn)");
+            return 0;
+        }
+        Ok(PortPlan::Spawn(p)) => {
+            if p != desired_port {
+                println!("[smoke] 端口 {desired_port} 被占用,改用空闲端口 {p}");
+            }
+            p
+        }
+        Err(e) => {
+            eprintln!("[smoke] FAIL:{e}");
+            return 1;
+        }
+    };
+    let workdir = sidecar::repo_root();
+    let (python, src) = match sidecar::find_python(&workdir) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("[smoke] FAIL:{e}");
@@ -392,12 +452,12 @@ fn run_smoke(port: u16) -> i32 {
         python.display(),
         workdir.display()
     );
-    if let Err(e) = spawn_sidecar(&python, port, &workdir) {
+    if let Err(e) = sidecar::spawn(&python, port, &workdir) {
         eprintln!("[smoke] FAIL:{e}");
         return 1;
     }
     let result = wait_health(port, Duration::from_secs(HEALTH_TIMEOUT_SECS));
-    kill_sidecar();
+    sidecar::shutdown();
     match result {
         Ok(()) => {
             println!("[smoke] OK:/api/health = 200,sidecar 已终止");
@@ -406,7 +466,7 @@ fn run_smoke(port: u16) -> i32 {
         Err(e) => {
             eprintln!(
                 "[smoke] FAIL:{e}(日志:{})",
-                sidecar_log_path(port).display()
+                sidecar::log_path(port).display()
             );
             1
         }
@@ -433,7 +493,7 @@ fn main() {
 
     app.run(|_handle, event| {
         if let RunEvent::Exit = event {
-            kill_sidecar(); // 窗口全关/应用退出 → 终止 sidecar(断点续跑语义)
+            sidecar::shutdown(); // 窗口全关/应用退出 → 停止看护并终止 sidecar(断点续跑语义)
         }
     });
 }
@@ -512,5 +572,12 @@ mod tests {
             l.local_addr().unwrap().port()
         };
         assert!(!health_ok(port));
+    }
+
+    #[test]
+    fn port_is_free_detects_bound_listener() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(!port_is_free(port));
     }
 }
