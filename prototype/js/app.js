@@ -9,6 +9,7 @@ import * as Stream from './stream.js';
 import * as Dock from './dock.js';
 import * as API from './backend.sse.js';   // 真实后端;file:// 或后端不可达时自动回退 mock
 import { demoLongTaskEvents } from './backend.mock.js';   // §7.4 新条目静态演示（仅 mock）
+import * as Notify from './notify.js';     // 桌面/网页通知 + 会话状态归组（机制 #4/#8）
 
 /* ---------------- 元素引用 ---------------- */
 const el = {};
@@ -79,6 +80,7 @@ function boot() {
   });
 
   renderSessions();
+  Notify.init({ onAdminRuns: (runs) => { adminRuns = runs; renderSessions(); } });   // 通知接线：标题角标复原 + 30s 运维视图轮询
   renderHero();
   wireChrome();
   wireKeys();
@@ -426,9 +428,32 @@ function wireKeys() {
   });
 }
 
-function renderSessions() {
-  el.sessions.replaceChildren(...SESSIONS.map((s) => h('button', {
+/* ============================================================
+   会话侧栏：按状态分组（机制 #8，Devin Kanban / Copilot agents 面板式）
+   四组闭集：进行中 / 需要你 / 已完成 / 空闲（归类逻辑在 notify.js，纯函数可单测）。
+   分组来源：本地 SESSIONS.tone + 当前会话实时状态（S.busy / S.phase）
+   + /api/admin/runs 运维视图（notify.js 每 30s 轮询回写；不可达 → null 只按本地状态）。
+   点击切换会话的行为与分组前完全一致。
+   ============================================================ */
+let adminRuns = null;   // { sessionId: 最新 run 状态 } | null=运维视图不可达
+
+/* 状态徽标沿用现有 tone 色板：进行中=accent、需要你=stale、已完成=ok、空闲=border */
+const GROUP_LED = {
+  active: 'var(--accent)', attention: 'var(--stale)',
+  done: 'var(--ok)', idle: 'var(--border-strong)',
+};
+/* 运维视图 run 状态 → 徽标中文（没有运维数据时只显示组色圆点） */
+const ADMIN_STATUS_ZH = {
+  running: '运行中', planning: '规划中', ready: '待审批',
+  failed: '失败', paused: '已暂停', interrupted: '已中断', done: '已完成',
+};
+
+/** 单条会话行：状态圆点（组色）+ 可选运维徽标 + 原有名称/副标题。 */
+function sessionRow(s, groupKey) {
+  const adminZh = adminRuns ? ADMIN_STATUS_ZH[adminRuns[s.id]] : null;
+  return h('button', {
     class: 'sess', type: 'button', 'aria-current': String(s.id === S.sessionId),
+    dataset: { group: groupKey },
     onclick: () => {
       if (s.id === S.sessionId) return;
       S.sessionId = s.id;
@@ -442,12 +467,37 @@ function renderSessions() {
   },
     h('span', { class: 'nm' }, s.name),
     h('span', { class: 'mt' },
-      h('span', { class: 'led', style: {
-        width: '6px', height: '6px', borderRadius: '50%',
-        background: s.tone === 'run' ? 'var(--accent)' : s.tone === 'stale' ? 'var(--stale)' : 'var(--border-strong)',
+      h('span', { class: 'led', title: Notify.GROUP_LABEL[groupKey], style: {
+        width: '6px', height: '6px', borderRadius: '50%', flexShrink: '0',
+        background: GROUP_LED[groupKey] || 'var(--border-strong)',
       } }),
-      s.sub))));
+      adminZh ? h('span', { class: 'badge', style: {
+        padding: '0 5px', borderRadius: '999px', border: '1px solid var(--border)',
+        fontSize: '10px', color: 'var(--text-2)', flexShrink: '0',
+      } }, adminZh) : null,
+      s.sub));
 }
+
+function renderSessions() {
+  const groups = Notify.groupSessions(
+    SESSIONS, { currentId: S.sessionId, busy: S.busy, phase: S.phase }, adminRuns);
+  el.sessions.replaceChildren(...groups.flatMap((g) => [
+    h('div', {
+      class: 'sess-group', dataset: { group: g.key },
+      role: 'heading', 'aria-level': '3',
+      style: {
+        display: 'flex', alignItems: 'center', gap: '6px',
+        padding: '10px 10px 4px', fontSize: '11px', fontWeight: '600',
+        color: 'var(--text-3)', letterSpacing: '.02em',
+      },
+    },
+      h('span', { class: 'lbl' }, g.label),
+      h('span', { class: 'cnt', style: { fontWeight: '400' } }, String(g.items.length))),
+    ...g.items.map((s) => sessionRow(s, g.key)),
+  ]));
+}
+// 步骤状态 / 回合结束会改变当前会话的分组归属 → 跟随重绘（仅数条会话，代价可忽略）
+St.on('steps', () => renderSessions());
 
 function paintStatus() {
   const { stale, pending, all } = St.workSummary();
@@ -1052,11 +1102,13 @@ function askRerun() {
       } },
     ],
   });
+  if (card) Notify.approvalNeeded('流水线执行需要你的确认（审批卡已就绪）');   // 审批卡出现：页面不可见时提醒（机制 #4；同族自动通过无卡不扰）
   refineApprovalCard(card, sum);   // 本地估算先行，服务端权威影响预估到达后原位更新
 }
 
 async function run(ids) {
   expireUndos();   // 开始执行后旧参数不可再撤销（撤销窗口只在静止态有效）
+  Notify.ensurePermission();   // 通知权限惰性申请：首次执行流水线时才问，拒绝后不再骚扰
   setBusy(true);
   S.phase = 'running';
   token = new API.Cancel();
@@ -1071,6 +1123,7 @@ async function run(ids) {
   } catch (err) {
     if (err?.name !== 'CancelledError') Stream.note('bad', `执行失败：${err.message}`);
   } finally {
+    Notify.runEnded(S.phase);   // 页面不可见时通知：完成 / 失败暂停 / 异常中断（机制 #4）
     await syncStepsFromServer();   // 执行结束:以服务端终态为准刷新步骤镜像
     setBusy(false);
     paintStatus();
