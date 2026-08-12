@@ -440,68 +440,100 @@ function filePreview(path, tree) {
    审计视图：证据阶梯 + provenance 树 + 指标契约
    ============================================================ */
 function auditView() {
-  const ladder = h('div', { class: 'ladder', role: 'list' },
-    ...LADDER.map((lv, i) => h('div', {
-      class: `lv${i <= S.evidenceLevel ? ' on' : ''}${i === S.evidenceLevel ? ' cur' : ''}`,
-      role: 'listitem',
-      title: i <= S.evidenceLevel ? '已达成' : '未达成',
-    }, lv)));
+  /* 真实化(/api/provenance 权威证据链 + /api/env 阈值台账,经 auditlive.js
+     拉取与 30s 缓存):run 存在即渲染服务端证据级 —— 级别词汇严格用后端
+     六级(evidence.ladder),不再展示本地 LADDER 自算的级别;
+     无 run(404)/后端不可达 → 回落本地演示渲染并顶部醒目标注「演示数据」
+     (横幅与 env 面板同款)。auditlive.js 走动态 import,不新增模块级
+     import(与并行分支的 dock.js 改动解耦)。 */
+  const root = h('div', null,
+    h('p', { class: 'blurb' }, '正在读取证据链(GET /api/provenance)…'));
 
-  const s6 = st_(6), s9 = st_(9), s11 = st_(11);
-  // 面板联动 §7.3 第 4 条：每个节点标注来源步骤，点击跳流水线并选中该步
-  const tree = h('div', { class: 'tree' },
-    ...[
-      ['产物', `velocity.h5 · ${s9.fingerprint}`, 9],
-      ['└ 命令', `timeseries2velocity.py --method ${s9.method}`, 9],
-      ['　└ 输入', `timeseries_corrected.h5 · ${st_(8).fingerprint}`, 8],
-      ['　　└ 命令', `smallbaselineApp.py --dostep invert_network --method ${st_(7).method}`, 7],
-      ['　　　└ 输入', `data/unw · ${s6.fingerprint}`, 6],
-      ['　　　　└ 命令', `snaphu.py --method ${s6.method}`, 6],
-      ['　　　　　└ 输入', `data/ifg_filt · ${st_(5).fingerprint}`, 5],
-    ].map(([k, v, sid]) => h('button', {
-      class: 'ln', type: 'button',
-      title: `第 ${sid} 步 · ${def_(sid)?.name || ''} —— 点击跳到流水线`,
-      'aria-label': `跳转到流水线第 ${sid} 步 ${def_(sid)?.name || ''}`,
-      onclick: () => gotoStep(sid),
-    },
-      h('span', { class: 'k' }, k), h('span', { class: 'v' }, v))));
+  // ---- 演示回落:state.js 本地演示逻辑(仅离线/无 run 时展示) ----
+  const demoBody = (AUD) => {
+    const ladder = h('div', { class: 'ladder', role: 'list' },
+      ...LADDER.map((lv, i) => h('div', {
+        class: `lv${i <= S.evidenceLevel ? ' on' : ''}${i === S.evidenceLevel ? ' cur' : ''}`,
+        role: 'listitem',
+        title: i <= S.evidenceLevel ? '已达成' : '未达成',
+      }, lv)));
 
-  const contract = h('div', { class: 'contract' },
-    metricRow('ps_count', 'preferred', 'ps_plot.h5 : n_ps', 'ok', '重解析一致'),
-    metricRow('mean_velocity', 'preferred', 'velocity.h5 : velocity', 'ok', '重解析一致'),
-    metricRow('gnss_correlation', 'preferred', 'crossval.json : pearson_r', 'ok', '重解析一致'),
-    metricRow('seasonal_amplitude', 'forbidden', '12 天采样不足以解析', 'bad', '硬 gate'),
-    metricRow('ps_count', 'forbidden', 'log 文件（叙述非数据）', 'bad', '硬 gate'));
+    const s6 = st_(6), s9 = st_(9);
+    // 面板联动 §7.3 第 4 条：每个节点标注来源步骤，点击跳流水线并选中该步
+    const tree = h('div', { class: 'tree' },
+      ...[
+        ['产物', `velocity.h5 · ${s9.fingerprint}`, 9],
+        ['└ 命令', `timeseries2velocity.py --method ${s9.method}`, 9],
+        ['　└ 输入', `timeseries_corrected.h5 · ${st_(8).fingerprint}`, 8],
+        ['　　└ 命令', `smallbaselineApp.py --dostep invert_network --method ${st_(7).method}`, 7],
+        ['　　　└ 输入', `data/unw · ${s6.fingerprint}`, 6],
+        ['　　　　└ 命令', `snaphu.py --method ${s6.method}`, 6],
+        ['　　　　　└ 输入', `data/ifg_filt · ${st_(5).fingerprint}`, 5],
+      ].map(([k, v, sid]) => h('button', {
+        class: 'ln', type: 'button',
+        title: `第 ${sid} 步 · ${def_(sid)?.name || ''} —— 点击跳到流水线`,
+        'aria-label': `跳转到流水线第 ${sid} 步 ${def_(sid)?.name || ''}`,
+        onclick: () => gotoStep(sid),
+      },
+        h('span', { class: 'k' }, k), h('span', { class: 'v' }, v))));
 
-  const partial = STEP_DEFS.some((d) => st_(d.id).state === 'failed');
+    const contract = h('div', { class: 'contract' },
+      metricRow('ps_count', 'preferred', 'ps_plot.h5 : n_ps', 'ok', '重解析一致'),
+      metricRow('mean_velocity', 'preferred', 'velocity.h5 : velocity', 'ok', '重解析一致'),
+      metricRow('gnss_correlation', 'preferred', 'crossval.json : pearson_r', 'ok', '重解析一致'),
+      metricRow('seasonal_amplitude', 'forbidden', '12 天采样不足以解析', 'bad', '硬 gate'),
+      metricRow('ps_count', 'forbidden', 'log 文件（叙述非数据）', 'bad', '硬 gate'));
 
-  const { pending } = evidenceCeiling();
+    const partial = STEP_DEFS.some((d) => st_(d.id).state === 'failed');
 
-  // 阈值台账：来源与标定状态显式可见（§4.13）
-  const thr = h('div', { class: 'contract' }, ...THRESHOLDS.map((t) => h('div', { class: 'm' },
-    h('span', { class: 'nm' }, t.key),
-    h('span', { class: 'mono', style: { color: 'var(--text)' } }, String(t.value)),
-    h('span', { class: `tag is-${t.status === 'OK' ? 'ok' : 'stale'}` },
-      t.status === 'OK' ? 'A 上游默认' : '⚠ PENDING'),
-    h('span', { class: 'src' }, t.ref))));
+    const { pending } = evidenceCeiling();
 
-  return h('div', null,
-    h('h3', { class: 'sect' }, `六级证据阶梯 · 当前 ${LADDER[S.evidenceLevel]}`),
-    ladder,
-    pending.length ? h('div', { class: 'note is-stale', style: { marginTop: '9px' } },
-      icon('warn'), h('span', null, h('b', null, `${pending.length} 个阈值未标定`),
-        '，证据级别封顶 audited。validated 需先完成阈值标定。')) : null,
-    h('p', { class: 'blurb' },
-      `已达 ${LADDER[S.evidenceLevel]}：处理链跑通、QA 指标经复核、artifact 与 provenance 已记录。` +
-      'validated 需双链交叉验证阈值完成标定；calibrated 需 GNSS 标定 —— 两者均属 next-milestone scope。'),
-    h('h3', { class: 'sect' }, 'Provenance 上游数据流'),
-    tree,
-    h('h3', { class: 'sect' }, '质量门阈值台账'),
-    thr,
-    h('h3', { class: 'sect' }, '指标来源契约'),
-    contract,
-    partial ? h('div', { class: 'note is-bad', style: { marginTop: '10px' } },
-      icon('warn'), 'Partial evidence is still useful evidence. 失败步骤已同样触发审计。') : null);
+    // 阈值台账：来源与标定状态显式可见（§4.13）
+    const thr = h('div', { class: 'contract' }, ...THRESHOLDS.map((t) => h('div', { class: 'm' },
+      h('span', { class: 'nm' }, t.key),
+      h('span', { class: 'mono', style: { color: 'var(--text)' } }, String(t.value)),
+      h('span', { class: `tag is-${t.status === 'OK' ? 'ok' : 'stale'}` },
+        t.status === 'OK' ? 'A 上游默认' : '⚠ PENDING'),
+      h('span', { class: 'src' }, t.ref))));
+
+    return [
+      AUD.demoBanner('审计为本地演示逻辑(state.js 自算),非服务端证据链;完成一次运行后自动接入真实账本。', {
+        onRetry: () => { AUD.invalidate(); refresh(); },
+      }),
+      h('h3', { class: 'sect' }, `六级证据阶梯 · 当前 ${LADDER[S.evidenceLevel]}`),
+      ladder,
+      pending.length ? h('div', { class: 'note is-stale', style: { marginTop: '9px' } },
+        icon('warn'), h('span', null, h('b', null, `${pending.length} 个阈值未标定`),
+          '，证据级别封顶 audited。validated 需先完成阈值标定。')) : null,
+      h('p', { class: 'blurb' },
+        `已达 ${LADDER[S.evidenceLevel]}：处理链跑通、QA 指标经复核、artifact 与 provenance 已记录。` +
+        'validated 需双链交叉验证阈值完成标定；calibrated 需 GNSS 标定 —— 两者均属 next-milestone scope。'),
+      h('h3', { class: 'sect' }, 'Provenance 上游数据流'),
+      tree,
+      h('h3', { class: 'sect' }, '质量门阈值台账'),
+      thr,
+      h('h3', { class: 'sect' }, '指标来源契约'),
+      contract,
+      partial ? h('div', { class: 'note is-bad', style: { marginTop: '10px' } },
+        icon('warn'), 'Partial evidence is still useful evidence. 失败步骤已同样触发审计。') : null,
+    ];
+  };
+
+  (async () => {
+    const AUD = await import('./auditlive.js');
+    if (!root.isConnected) return;
+    root.replaceChildren(AUD.skeleton());          // 骨架屏:等待证据链读取
+    const data = await AUD.fetchAuditLive();
+    if (!root.isConnected) return;                 // 面板已切走,丢弃过期结果
+    root.replaceChildren(...(data
+      ? AUD.renderLive(data, {
+          onRefresh: () => { AUD.invalidate(); refresh(); },
+          gotoStep,
+        })
+      : demoBody(AUD)));
+  })();
+
+  return root;
 }
 
 function metricRow(name, role, src, tone, verdict) {
