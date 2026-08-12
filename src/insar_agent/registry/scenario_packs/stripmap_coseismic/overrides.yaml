@@ -1,0 +1,15 @@
+# 机器读:步骤覆写(与 SKILL.md 正文的领域知识对应)。
+# 3-6 步全覆写为 stripmapApp 分段方法(ALOS raw 条带链,pickle 链分段见 SKILL.md);
+# 无 cloud_completed:全链本机(WSL 引擎)执行,无云端已完成步骤。
+step_overrides:
+  3:
+    method: isce2_stripmap_xcorr
+  4:
+    method: isce2_stripmap_ifg
+  5:
+    method: isce2_stripmap_filter
+  6:
+    method: isce2_stripmap_unwrap_snaphu
+  # 单干涉对无 PS/SBAS 双链,交叉验证不可行 —— 诚实降级为真实统计质检(对齐 quake 包)
+  11:
+    method: coherence_mask
