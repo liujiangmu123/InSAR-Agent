@@ -1,0 +1,14 @@
+[package]
+name = "insar-agent-desktop"
+version = "0.1.0"
+description = "InSAR-Agent 桌面壳:Tauri 2 窗口 + Python sidecar 生命周期管理"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 唯一运行时依赖:壳的全部业务(健康检查 HTTP、诊断页托管)手写在 std 上,
+# 不引 reqwest/tokio 等重依赖
+tauri = { version = "2", features = [] }
