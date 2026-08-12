@@ -1,18 +1,22 @@
 /* ============================================================
-   环境 / 终端 / 轨迹 三个 Dock 面板的 mock 数据（DEMO 模式）
-   数据口径对齐 AGENT-DESIGN：
-   - §0.5 环境事实基线（WSL 未装发行版、磁盘实测、Ridgecrest 11 对）
-   - §4.13 阈值来源纪律（PENDING 只记 warning，不作硬 gate）
-   - §7.7 三个新面板细化（cmd.sh 现场可见、失败并恢复的轨迹）
-   后端接入后：环境由 runtime/probe.py 实测、日志从 log_path 读取、
-   轨迹从 SQLite 的 OpenDiscoveryTrace 表导出 —— 本文件整体废弃。
+   环境 / 终端 / 轨迹 三个 Dock 面板的静态回落数据 —— 仅离线演示用。
+
+   真实数据源已接入，本文件只在后端不可达（file:// 打开、服务未启动）
+   时被使用，且 UI 必须醒目标注「演示数据（后端未连接）」：
+   - 环境：GET /api/env（runtime/probe.py 实测 + WSL 合并探测）与
+     GET /api/setup/status（就绪检查），经 envlive.js 拉取缓存；
+   - 终端：GET /api/state + GET /api/logs（步骤 log_path 尾部）；
+   - 轨迹：GET /api/trace（SQLite 的 OpenDiscoveryTrace 表）。
+
+   本文件内一切数值为静态示意（口径对齐 AGENT-DESIGN §0.5 / §4.13 /
+   §7.7 撰写时的实测基线），与当前真机状态无关，勿当真实环境读。
    ============================================================ */
 import { STEP_DEFS } from './state.js';
 
 /* ============================================================
    环境面板（§0.5 实测基线 + 引擎示意值）
    ============================================================ */
-export const ENV_NOTE = '引擎探测结果为示意值 · 后端未接入（probe.py 就绪前，真实状态为「全部未探测」）';
+export const ENV_NOTE = '引擎探测结果为静态示意值（仅离线演示）· 后端连接恢复后自动切换为 /api/env 实测数据';
 
 export const WSL = {
   ok: false,

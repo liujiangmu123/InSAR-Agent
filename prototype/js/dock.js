@@ -679,92 +679,234 @@ function cachedFetch(key, loader, ttlMs = 3000) {
    运行环境 / 磁盘 / 候选收窄原因 / 质量门阈值 —— 可行性可解释
    ============================================================ */
 function envView() {
-  // ---- 1. 运行环境：WSL 状态 + 工作区 + 引擎表 ----
-  const okN = ENGINES.filter((e) => e.ok).length;
-  const runCard = h('div', { class: 'envcard' },
-    h('div', { class: 'erow' },
-      h('span', { class: 'k' }, 'WSL2'),
-      h('span', { class: 'v' }, h('span', { class: 'tag is-bad' }, icon('x'), WSL.text)),
-      h('button', {
-        class: 'btn btn-gho btn-sm', type: 'button', 'aria-label': 'WSL 安装指引',
-        onclick: () => toast('演示模式：真实版本将引导 wsl --install，并把发行版导入 E: 盘（C: 仅剩 36 G，勿装于此）', 3400),
-      }, '安装指引')),
-    h('div', { class: 'sub' }, WSL.detail),
-    h('div', { class: 'erow' },
-      h('span', { class: 'k' }, '工作区'),
-      h('span', { class: 'v' }, WORKSPACE.path || '—',
-        h('span', { class: 'hint' }, `　${WORKSPACE.hint}`))),
-    h('div', { class: 'erow' },
-      h('span', { class: 'k' }, '引擎'),
-      h('span', { class: 'v' }, `${okN} 可用 · ${ENGINES.length - okN} 缺失`)),
-    ...ENGINES.map((e) => h('div', { class: 'eng' },
-      h('span', { class: 'nm' }, e.name),
-      h('span', { class: 'ver' }, e.ver),
-      h('span', { class: `st ${e.ok ? 'ok' : 'bad'}` }, icon(e.ok ? 'check' : 'x')),
-      h('span', { class: 'enote' }, e.note || ''))),
-    h('div', { class: 'sub' }, ENV_NOTE));
+  /* 真实化（/api/env + /api/setup/status，经 envlive.js 拉取与 30s 缓存）：
+     加载中骨架屏 → 实测渲染；后端不可达 → 回落 envdata.js 静态数据并
+     顶部醒目标注「演示数据（后端未连接）」。envlive.js 走动态 import，
+     不新增模块级 import（与并行分支的 dock.js 改动解耦）。 */
+  const root = h('div', null, h('p', { class: 'blurb' }, '正在探测环境（GET /api/env）…'));
 
-  // ---- 2. 磁盘（§0.5.3 实测）：进度条 = 已用占比，颜色 = 剩余语义 ----
-  const diskCard = h('div', { class: 'envcard' },
-    ...DISKS.map((dk) => {
-      const usedPct = Math.round((1 - dk.free / dk.total) * 100);
-      const tight = dk.free / dk.total < 0.3;   // 剩余 < 30% 记「紧张」
-      return h('div', { class: 'drow' },
-        h('div', { class: 'top' },
-          h('span', { class: 'lbl' }, dk.label),
-          dk.warn ? h('span', { class: 'tag is-stale' }, icon('warn'), dk.warn) : null,
-          h('span', { class: 'mono val' }, `${dk.free} G 可用 / ${dk.total} G`)),
-        h('div', {
-          class: `diskbar${tight ? ' tight' : ''}`,
-          role: 'img', 'aria-label': `${dk.label} 已用 ${usedPct}%，剩余 ${dk.free} G`,
-        }, h('i', { style: { width: `${usedPct}%` } })),
-        dk.note ? h('div', { class: 'sub2' }, dk.note) : null);
-    }),
-    h('div', { class: 'sub' }, '预计中间产物 ~180 GB（示意值）· E: 可用 483 GB ✓ 满足磁盘预算前置检查（§4.10）'));
+  // ---- 两种模式共用：候选收窄（本地状态派生）/ 阈值台账 / 证据上限 ----
+  const narrowedRows = () => {
+    const narrowed = [];
+    for (const d of STEP_DEFS) {
+      for (const m of d.methods) if (!m.ok) narrowed.push({ d, m });
+    }
+    return h('div', { class: 'envcard' },
+      ...narrowed.map(({ d, m }) => h('div', { class: 'erow' },
+        h('span', { class: 'ban' }, icon('x')),
+        h('span', { class: 'mono m2' }, m.label),
+        h('span', { class: 'why' }, m.blocked),
+        h('span', { class: 'at' }, `第 ${d.id} 步 · ${d.name}`))));
+  };
 
-  // ---- 3. 候选收窄原因：从 STEP_DEFS 派生，与流水线面板天然一致 ----
-  const narrowed = [];
-  for (const d of STEP_DEFS) {
-    for (const m of d.methods) if (!m.ok) narrowed.push({ d, m });
-  }
-  const narrowCard = h('div', { class: 'envcard' },
-    ...narrowed.map(({ d, m }) => h('div', { class: 'erow' },
-      h('span', { class: 'ban' }, icon('x')),
-      h('span', { class: 'mono m2' }, m.label),
-      h('span', { class: 'why' }, m.blocked),
-      h('span', { class: 'at' }, `第 ${d.id} 步 · ${d.name}`))));
-
-  // ---- 4. 质量门阈值（§4.13 来源纪律的 UI 落地）----
-  const thr = h('div', { class: 'contract' }, ...THRESHOLDS.map((t) => {
-    const okThr = t.status === 'OK';
-    const label = okThr ? (t.ref.includes('实测') ? 'A 实测配置' : 'A 上游默认') : '⚠ PENDING 未标定';
+  const thresholdRows = (rows, labelOf) => h('div', { class: 'contract' }, ...rows.map((t) => {
+    const okThr = String(t.status).toUpperCase() === 'OK';
     return h('div', { class: 'm' },
       h('span', { class: 'nm' }, t.key),
       h('span', { class: 'mono', style: { color: 'var(--text)' } }, String(t.value)),
-      h('span', { class: `tag is-${okThr ? 'ok' : 'stale'}` }, label),
+      h('span', { class: `tag is-${okThr ? 'ok' : 'stale'}` }, labelOf(t)),
       h('span', { class: 'src' }, t.ref));
   }));
 
-  const { level, pending } = evidenceCeiling();
-  const ceiling = h('div', { class: 'note is-stale ceiling', role: 'status' },
-    icon('warn'),
-    h('span', null, h('b', null, `当前证据上限：${LADDER[level]}`), `（${pending.length} 项阈值待标定）`),
-    h('span', { class: 'law' }, '§4.13 没有依据就不给数'));
+  const ceilingNote = () => {
+    const { level, pending } = evidenceCeiling();
+    return h('div', { class: 'note is-stale ceiling', role: 'status' },
+      icon('warn'),
+      h('span', null, h('b', null, `当前证据上限：${LADDER[level]}`), `（${pending.length} 项阈值待标定）`),
+      h('span', { class: 'law' }, '§4.13 没有依据就不给数'));
+  };
 
-  return h('div', null,
-    h('h3', { class: 'sect' }, '运行环境'),
-    runCard,
-    h('h3', { class: 'sect' }, '磁盘'),
-    diskCard,
+  const tailSections = (thrNode) => [
     h('h3', { class: 'sect' }, '候选收窄原因'),
-    narrowCard,
+    narrowedRows(),
     h('p', { class: 'blurb' },
       '规则引擎在规划前探测环境，把不可行方法从候选集移除 —— 每一条禁用都能回答「为什么」。'),
     h('h3', { class: 'sect' }, '质量门阈值'),
-    thr,
-    ceiling,
+    thrNode,
+    ceilingNote(),
     h('p', { class: 'blurb' },
-      'WSL 未就绪时，这个面板是首屏该看的东西 —— 而不是点了「运行」才发现跑不起来。'));
+      'WSL 未就绪时，这个面板是首屏该看的东西 —— 而不是点了「运行」才发现跑不起来。'),
+  ];
+
+  // ---- 演示回落：envdata.js 静态数据（仅离线演示用），顶部醒目标注 ----
+  const demoBody = (LIVE) => {
+    const okN = ENGINES.filter((e) => e.ok).length;
+    const runCard = h('div', { class: 'envcard' },
+      h('div', { class: 'erow' },
+        h('span', { class: 'k' }, 'WSL2'),
+        h('span', { class: 'v' }, h('span', { class: 'tag is-bad' }, icon('x'), WSL.text)),
+        h('button', {
+          class: 'btn btn-gho btn-sm', type: 'button', 'aria-label': 'WSL 安装指引',
+          onclick: () => toast('演示模式：真实版本将引导 wsl --install，并把发行版导入 E: 盘（C: 仅剩 36 G，勿装于此）', 3400),
+        }, '安装指引')),
+      h('div', { class: 'sub' }, WSL.detail),
+      h('div', { class: 'erow' },
+        h('span', { class: 'k' }, '工作区'),
+        h('span', { class: 'v' }, WORKSPACE.path || '—',
+          h('span', { class: 'hint' }, `　${WORKSPACE.hint}`))),
+      h('div', { class: 'erow' },
+        h('span', { class: 'k' }, '引擎'),
+        h('span', { class: 'v' }, `${okN} 可用 · ${ENGINES.length - okN} 缺失`)),
+      ...ENGINES.map((e) => h('div', { class: 'eng' },
+        h('span', { class: 'nm' }, e.name),
+        h('span', { class: 'ver' }, e.ver),
+        h('span', { class: `st ${e.ok ? 'ok' : 'bad'}` }, icon(e.ok ? 'check' : 'x')),
+        h('span', { class: 'enote' }, e.note || ''))),
+      h('div', { class: 'sub' }, ENV_NOTE));
+
+    const diskCard = h('div', { class: 'envcard' },
+      ...DISKS.map((dk) => {
+        const usedPct = Math.round((1 - dk.free / dk.total) * 100);
+        const tight = dk.free / dk.total < 0.3;   // 剩余 < 30% 记「紧张」
+        return h('div', { class: 'drow' },
+          h('div', { class: 'top' },
+            h('span', { class: 'lbl' }, dk.label),
+            dk.warn ? h('span', { class: 'tag is-stale' }, icon('warn'), dk.warn) : null,
+            h('span', { class: 'mono val' }, `${dk.free} G 可用 / ${dk.total} G`)),
+          h('div', {
+            class: `diskbar${tight ? ' tight' : ''}`,
+            role: 'img', 'aria-label': `${dk.label} 已用 ${usedPct}%，剩余 ${dk.free} G`,
+          }, h('i', { style: { width: `${usedPct}%` } })),
+          dk.note ? h('div', { class: 'sub2' }, dk.note) : null);
+      }),
+      h('div', { class: 'sub' }, '预计中间产物 ~180 GB（示意值）· E: 可用 483 GB ✓ 满足磁盘预算前置检查（§4.10）'));
+
+    const demoLabel = (t) => (t.status === 'OK'
+      ? (t.ref.includes('实测') ? 'A 实测配置' : 'A 上游默认') : '⚠ PENDING 未标定');
+
+    return [
+      LIVE.demoBanner('环境为静态示意数据（envdata.js），非本机实测。', {
+        onRetry: () => { LIVE.invalidate(); refresh(); },
+      }),
+      h('h3', { class: 'sect' }, '运行环境'),
+      runCard,
+      h('h3', { class: 'sect' }, '磁盘'),
+      diskCard,
+      ...tailSections(thresholdRows(THRESHOLDS, demoLabel)),
+    ];
+  };
+
+  // ---- 实测渲染：引擎（宿主徽标）/ 凭据 / 磁盘·CPU·内存 / WSL / 就绪检查 ----
+  const liveBody = (LIVE, data) => {
+    const hostBadge = (host) => h('span', {
+      class: 'mono', 'aria-label': host === 'wsl' ? 'WSL 内探测' : '本机探测',
+      style: {
+        fontSize: '9px', padding: '0 5px', marginLeft: '6px', borderRadius: '999px',
+        border: '1px solid var(--border-strong)',
+        color: host === 'wsl' ? 'var(--accent)' : 'var(--text-2)',
+      },
+    }, host);
+
+    // 现状：后端仅在 WSL 可达时透出 engine_probe（不可达原因不下发），
+    // 所以 probed=false 统一按「不可达或未安装」渲染；error 分支为前向兼容保留。
+    const wslTag = data.wsl.ok
+      ? h('span', { class: 'tag is-ok' }, icon('check'), `发行版 ${data.wsl.distro} 可达`)
+      : data.wsl.probed
+      ? h('span', { class: 'tag is-bad' }, icon('x'), '发行版不可达')
+      : h('span', { class: 'tag is-bad' }, icon('x'), '不可达或未安装');
+    const wslDetail = data.wsl.ok
+      ? (data.wsl.enginePrefix ? `WSL 内 conda 引擎环境：${data.wsl.enginePrefix}`
+                               : 'WSL 发行版可达，但未发现 conda 引擎环境')
+      : (data.wsl.error
+          || '未检测到可达的 WSL 发行版（wsl.exe 缺失、未装发行版，或本次未探测）· 引擎清单仅含本机探测结果');
+
+    const time = new Date(data.fetchedAt).toLocaleTimeString('zh-CN', { hour12: false });
+
+    const runCard = h('div', { class: 'envcard' },
+      h('div', { class: 'erow' },
+        h('span', { class: 'k' }, 'WSL'),
+        h('span', { class: 'v' }, wslTag),
+        h('button', {
+          class: 'btn btn-gho btn-sm', type: 'button',
+          'aria-label': '重新探测环境（跳过 30 秒缓存）',
+          onclick: () => { LIVE.invalidate(); refresh(); },
+        }, icon('refresh'), '刷新')),
+      h('div', { class: 'sub' }, wslDetail),
+      h('div', { class: 'erow' },
+        h('span', { class: 'k' }, '宿主'),
+        h('span', { class: 'v' }, `${data.host.platform} · Python ${data.host.python}`)),
+      h('div', { class: 'erow' },
+        h('span', { class: 'k' }, '引擎'),
+        h('span', { class: 'v' }, `${data.engineOk} 可用 · ${data.engineMissing} 缺失`,
+          h('span', { class: 'hint' }, '　徽标 = 探测宿主（local / wsl）'))),
+      ...data.engines.map((e) => h('div', { class: 'eng' },
+        h('span', { class: 'nm' }, e.name, hostBadge(e.host)),
+        h('span', { class: 'ver' }, e.ok ? (e.ver === 'present' ? '已装' : e.ver) : '—'),
+        h('span', { class: `st ${e.ok ? 'ok' : 'bad'}` }, icon(e.ok ? 'check' : 'x')),
+        h('span', { class: 'enote' }, e.ok ? '' : '未探测到'))),
+      h('div', { class: 'sub' }, `实测数据 · GET /api/env · ${time} 更新（缓存 30 s，「刷新」强制重探）`));
+
+    const credCard = h('div', { class: 'envcard' },
+      ...data.credentials.map((c) => h('div', { class: 'erow' },
+        h('span', { class: 'k mono' }, c.id),
+        h('span', { class: 'v' }, c.label),
+        h('span', { class: `tag is-${c.ok ? 'ok' : 'bad'}` },
+          icon(c.ok ? 'check' : 'x'), c.ok ? '已配置' : '缺失'))));
+
+    const { diskFreeGb, diskTotalGb, cpuCount, memGb } = data.host;
+    const usedPct = diskTotalGb ? Math.round((1 - diskFreeGb / diskTotalGb) * 100) : 0;
+    const tight = diskTotalGb ? diskFreeGb / diskTotalGb < 0.3 : false;
+    const diskCard = h('div', { class: 'envcard' },
+      h('div', { class: 'drow' },
+        h('div', { class: 'top' },
+          h('span', { class: 'lbl' }, '工作区磁盘'),
+          tight ? h('span', { class: 'tag is-stale' }, icon('warn'), '余量紧张') : null,
+          h('span', { class: 'mono val' }, `${diskFreeGb} G 可用 / ${diskTotalGb} G`)),
+        h('div', {
+          class: `diskbar${tight ? ' tight' : ''}`,
+          role: 'img', 'aria-label': `工作区磁盘已用 ${usedPct}%，剩余 ${diskFreeGb} G`,
+        }, h('i', { style: { width: `${usedPct}%` } }))),
+      h('div', { class: 'erow' },
+        h('span', { class: 'k' }, 'CPU'),
+        h('span', { class: 'v' }, cpuCount != null ? `${cpuCount} 逻辑核` : '未知')),
+      h('div', { class: 'erow' },
+        h('span', { class: 'k' }, '内存'),
+        h('span', { class: 'v' }, memGb != null ? `${memGb} GB` : '未知')));
+
+    // 就绪检查（/api/setup/status）：该端点单独失败不拖垮面板，只降级本卡
+    const checkMark = (ok) => h('span', {
+      style: { display: 'flex', flexShrink: '0', color: ok ? 'var(--ok)' : 'var(--bad)' },
+    }, icon(ok ? 'check' : 'x', 12));
+    const setupCard = data.setup
+      ? h('div', { class: 'envcard' },
+          h('div', { class: 'erow' },
+            h('span', { class: 'k' }, '总评'),
+            h('span', { class: 'v' },
+              h('span', { class: `tag is-${data.setup.ready ? 'ok' : 'stale'}` },
+                icon(data.setup.ready ? 'check' : 'warn'),
+                data.setup.ready ? '就绪：必选项全部通过' : '未就绪：存在未通过的必选项'))),
+          ...data.setup.checks.map((c) => h('div', { class: 'erow' },
+            checkMark(c.ok),
+            h('span', { class: 'v' }, c.message,
+              c.required ? null : h('span', { class: 'hint' }, '　可选'),
+              !c.ok && c.fixHint ? h('div', { class: 'hint' }, `处置：${c.fixHint}`) : null))))
+      : h('div', { class: 'envcard' },
+          h('div', { class: 'sub' },
+            'GET /api/setup/status 不可用 —— 就绪检查暂缺（不影响其余实测数据）。'));
+
+    return [
+      h('h3', { class: 'sect' }, '运行环境'),
+      runCard,
+      h('h3', { class: 'sect' }, '凭据'),
+      credCard,
+      h('h3', { class: 'sect' }, '磁盘 / CPU / 内存'),
+      diskCard,
+      h('h3', { class: 'sect' }, '就绪检查'),
+      setupCard,
+      ...tailSections(thresholdRows(data.thresholds, LIVE.thresholdSourceLabel)),
+    ];
+  };
+
+  (async () => {
+    const LIVE = await import('./envlive.js');
+    if (!root.isConnected) return;
+    root.replaceChildren(LIVE.skeleton());       // 骨架屏：等待探测结果
+    const data = await LIVE.fetchEnvLive();
+    if (!root.isConnected) return;                // 面板已切走，丢弃过期结果
+    root.replaceChildren(...(data ? liveBody(LIVE, data) : demoBody(LIVE)));
+  })();
+
+  return root;
 }
 
 /* ============================================================
@@ -778,7 +920,22 @@ const termLive = { step: null, filter: '' };
 function termView() {
   const body = h('div', null,
     h('p', { class: 'blurb' }, '正在读取运行状态（GET /api/state）…'));
-  loadTermView(body);
+  /* 后端可达 → loadTermView 沿用实时路径（/api/state 选步骤 + /api/logs 读日志）；
+     不可达 → 回落 envdata.js 的 TERM_LOGS 演示日志，顶部醒目标注「演示数据」。
+     state 有 3 秒短缓存（cachedFetch），紧随其后的 loadTermView 同键读取直接复用。 */
+  (async () => {
+    const state = await cachedFetch(`state:${S.sessionId}`, () => API.fetchState());
+    if (!body.isConnected) return;                    // 面板已切走，丢弃过期结果
+    if (state === null) {
+      const LIVE = await import('./envlive.js');
+      if (!body.isConnected) return;
+      body.replaceChildren(
+        LIVE.demoBanner('以下为离线示意日志（envdata.js 的 TERM_LOGS），非真实运行输出。'),
+        termDemoView());
+      return;
+    }
+    loadTermView(body);
+  })();
   return body;
 }
 
