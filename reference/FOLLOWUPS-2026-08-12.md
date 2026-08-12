@@ -1,5 +1,23 @@
 # 深测波次跟踪清单(2026-08-12)
 
+## 第三波(16 代理,晚间)闭环记录
+
+- UI-DETAILS-AUDIT #1-4 全部闭环:审计面板消费服务端证据链、files/report 面板
+  真实化(/api/artifacts、/api/methods.md)、产物 chip 跳转联动。
+- state.js 两处中危 + 空值校验 + params 镜像 → 修复(JS 测试 46→60→76+)。
+- REVIEW-r2 五项接缝 P1 → 主线全部修复(5a58fd4,4 项回归锁;P1-5 租约自停
+  的确定性测试难构造,语义注释说明)。
+- 回合三条含混语义(末步 steer/done 空转/待重跑明示)→ 设计落地。
+- contract.yaml:min_coherence 与 max_temporal_baseline 解除 PENDING(5→3)。
+- 工程化:CI 三 job + ruff + pre-commit + 依赖审计零漏洞;首个 NSIS 安装包
+  实测闭环(28.9MB,装/起/卸全绿)。
+- 新增能力:时序点查询(点图出曲线)、灯箱对比四模式、依赖轨道/失效
+  popover/重跑影响确认、桌面通知与会话分组、工具卡聚合、排队 chip。
+- Baja 代理编排:预检 25 项全绿,--launch 待用户批准(33 分钟重型计算)。
+- 遗留(下一波):REVIEW-r2 的 14 项 P2;done-run-可含-pending 已由 W8 决策三
+  处理(收尾明示);ISCE3 路线图按 docs/ROADMAP-isce3.md 分期;WSL isce2
+  2.6.3→2.6.5 升级;正式图标/签名/updater 密钥(RELEASE-CHECKLIST)。
+
 ## 20 代理波次(傍晚)闭环记录
 
 - 清单 #6/#7/#8(jobs TOCTOU/尾行冲刷/wrapper 显式化)与 WSL P2 组(keepalive
