@@ -7,9 +7,9 @@
 //! - 屏幕分辨率/显示器布局变化后自动校正越界位置(见 [`clamp_to_monitors`])。
 //!
 //! 公开接口:
-//! - [`restore`]:窗口创建后调用一次,应用上次保存的几何状态;
-//! - [`track`]:注册 WindowEvent 监听,持续把几何变化写入状态文件;
-//! - [`attach_when_ready`]:便捷入口——main 窗口由 boot() 异步创建,setup 时
+//! - [`restore`][]:窗口创建后调用一次,应用上次保存的几何状态;
+//! - [`track`][]:注册 WindowEvent 监听,持续把几何变化写入状态文件;
+//! - [`attach_when_ready`][]:便捷入口——main 窗口由 boot() 异步创建,setup 时
 //!   还不存在,这里轮询等它出现后自动执行 restore + track。
 //!
 //! 集成方式见 `desktop/INTEGRATION-window.md`。
@@ -165,17 +165,22 @@ fn clamp_to_monitors(state: WindowState, monitors: &[Rect]) -> WindowState {
 
 // ---------------- 公开接口 ----------------
 
+/// 恢复时的尺寸下限保护:损坏/手改的状态文件不至于把窗口缩没。
+fn apply_min_size(s: WindowState) -> WindowState {
+    WindowState {
+        width: s.width.max(MIN_W),
+        height: s.height.max(MIN_H),
+        ..s
+    }
+}
+
 /// 恢复上次窗口状态(位置/尺寸/最大化)。
 ///
 /// 窗口创建后调用一次。状态文件不存在或不可解析时不做任何事,
 /// 保持 main.rs 的默认几何(1440×900)。
 pub fn restore(window: &WebviewWindow) {
     let Some(saved) = load() else { return };
-    let state = WindowState {
-        width: saved.width.max(MIN_W),
-        height: saved.height.max(MIN_H),
-        ..saved
-    };
+    let state = apply_min_size(saved);
     let fixed = clamp_to_monitors(state, &monitor_rects(window));
 
     // 先按普通几何摆好,再最大化:这样用户「还原」时回到的是保存的普通尺寸
@@ -291,4 +296,133 @@ pub fn attach_when_ready(app: &AppHandle) {
             std::thread::sleep(Duration::from_millis(100));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn st(x: i32, y: i32, w: u32, h: u32) -> WindowState {
+        WindowState {
+            x,
+            y,
+            width: w,
+            height: h,
+            maximized: false,
+        }
+    }
+
+    // ---------------- 序列化往返与解析边界(window.json) ----------------
+
+    #[test]
+    fn window_state_json_roundtrip() {
+        let s = WindowState {
+            x: -8,
+            y: 42,
+            width: 1440,
+            height: 900,
+            maximized: true,
+        };
+        let json = serde_json::to_string_pretty(&s).unwrap();
+        let back: WindowState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn window_state_rejects_missing_field() {
+        // 缺 height:解析必须失败 → load() 返回 None → 走默认几何,绝不 panic
+        let r =
+            serde_json::from_str::<WindowState>(r#"{"x":1,"y":2,"width":800,"maximized":false}"#);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn window_state_rejects_bad_json() {
+        assert!(serde_json::from_str::<WindowState>("{半个 json").is_err());
+        assert!(serde_json::from_str::<WindowState>("").is_err());
+        // 字段类型错误(字符串坐标)同样拒绝
+        assert!(serde_json::from_str::<WindowState>(
+            r#"{"x":"abc","y":2,"width":800,"height":600,"maximized":false}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn window_state_tolerates_unknown_fields() {
+        // 前向兼容:未来版本新增字段后,旧版本读新文件不应炸
+        let r: WindowState = serde_json::from_str(
+            r#"{"x":1,"y":2,"width":800,"height":600,"maximized":false,"future_field":1}"#,
+        )
+        .unwrap();
+        assert_eq!(r, st(1, 2, 800, 600));
+    }
+
+    #[test]
+    fn min_size_floor_applies_only_when_too_small() {
+        let tiny = apply_min_size(st(0, 0, 1, 1));
+        assert_eq!((tiny.width, tiny.height), (MIN_W, MIN_H));
+        let normal = apply_min_size(st(0, 0, 1920, 1080));
+        assert_eq!((normal.width, normal.height), (1920, 1080));
+    }
+
+    // ---------------- 越界校正(纯几何逻辑) ----------------
+
+    const MON: Rect = Rect {
+        x: 0,
+        y: 0,
+        w: 1920,
+        h: 1080,
+    };
+
+    #[test]
+    fn clamp_keeps_reachable_window_untouched() {
+        let s = st(100, 100, 800, 600);
+        assert_eq!(clamp_to_monitors(s, &[MON]), s);
+    }
+
+    #[test]
+    fn clamp_without_monitor_info_is_noop() {
+        // 查不到显示器信息:宁可不动,也不瞎猜
+        let s = st(99999, 99999, 800, 600);
+        assert_eq!(clamp_to_monitors(s, &[]), s);
+    }
+
+    #[test]
+    fn clamp_pulls_offscreen_window_back_onto_monitor() {
+        let fixed = clamp_to_monitors(st(5000, 5000, 800, 600), &[MON]);
+        assert!(fixed.x >= MON.x && fixed.y >= MON.y);
+        assert!(fixed.x + fixed.width as i32 <= MON.x + MON.w);
+        assert!(fixed.y + fixed.height as i32 <= MON.y + MON.h);
+        assert_eq!((fixed.width, fixed.height), (800, 600), "尺寸不该被误改");
+    }
+
+    #[test]
+    fn clamp_shrinks_oversized_window_to_monitor() {
+        let fixed = clamp_to_monitors(st(-100, -4000, 4000, 3000), &[MON]);
+        assert_eq!((fixed.x, fixed.y), (0, 0));
+        assert_eq!((fixed.width, fixed.height), (1920, 1080));
+    }
+
+    #[test]
+    fn clamp_picks_nearest_monitor_among_many() {
+        let right = Rect {
+            x: 1920,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        };
+        // 窗口在右屏更远处(与两屏都无重叠)→ 应被夹进中心更近的右屏
+        let fixed = clamp_to_monitors(st(6000, 200, 800, 600), &[MON, right]);
+        assert!(fixed.x >= right.x, "应落在右屏:{fixed:?}");
+        assert!(fixed.x + fixed.width as i32 <= right.x + right.w);
+    }
+
+    #[test]
+    fn clamp_preserves_maximized_flag() {
+        let s = WindowState {
+            maximized: true,
+            ..st(5000, 5000, 800, 600)
+        };
+        assert!(clamp_to_monitors(s, &[MON]).maximized);
+    }
 }

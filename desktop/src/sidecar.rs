@@ -459,6 +459,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 日志路径打不开(父路径被文件占位)时,append 静默吞掉,绝不 panic
+    /// —— 「日志失败不反噬 sidecar」的落地验证。
+    #[test]
+    fn rolling_log_swallows_unwritable_path() {
+        let dir = temp_dir_unique("badlog");
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, b"").unwrap();
+        let mut log = RollingLog::new(blocker.join("sub.log"), 64);
+        log.append(b"x");
+        log.append(&[b'y'; 128]); // 超限触发 roll 路径,同样不该 panic
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn log_path_is_per_port_temp_file() {
+        let p = log_path(8873);
+        assert_eq!(
+            p.file_name().unwrap().to_string_lossy(),
+            "insar-agent-sidecar-8873.log"
+        );
+        assert!(p.starts_with(std::env::temp_dir()));
+        assert_ne!(log_path(8874), p, "不同端口应各有独立日志文件");
+    }
+
     #[test]
     fn find_marker_root_walks_up() {
         let dir = temp_dir_unique("markerroot");

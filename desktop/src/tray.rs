@@ -85,10 +85,15 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
 fn apply_env_config() {
     if let Ok(value) = std::env::var(CLOSE_TO_TRAY_ENV) {
-        let v = value.trim().to_ascii_lowercase();
-        let disabled = matches!(v.as_str(), "0" | "false" | "off" | "no");
-        CLOSE_TO_TRAY.store(!disabled, Ordering::Relaxed);
+        CLOSE_TO_TRAY.store(close_to_tray_flag(&value), Ordering::Relaxed);
     }
+}
+
+/// 环境变量取值 → 是否启用「关闭到托盘」(纯解析,拆出便于单测):
+/// `0` / `false` / `off` / `no`(大小写、首尾空白不敏感)= 关闭;其余 = 开启。
+fn close_to_tray_flag(raw: &str) -> bool {
+    let v = raw.trim().to_ascii_lowercase();
+    !matches!(v.as_str(), "0" | "false" | "off" | "no")
 }
 
 // ---------------- 菜单与托盘事件 ----------------
@@ -193,7 +198,16 @@ fn open_data_dir<R: Runtime>(app: &AppHandle<R>) {
 /// 用系统文件管理器打开目录(不引 opener 插件,保持零额外依赖)。
 fn reveal_in_file_manager(path: &Path) {
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("explorer").arg(path).spawn();
+    let result = {
+        // 与 commands.rs / sidecar.rs 同款约定:壳 spawn 的任何子进程统一带
+        // CREATE_NO_WINDOW(explorer 本是 GUI 程序,此处为风格统一与防呆)
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("explorer")
+            .arg(path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+    };
     #[cfg(target_os = "macos")]
     let result = std::process::Command::new("open").arg(path).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -244,4 +258,23 @@ fn fallback_icon() -> Image<'static> {
         }
     }
     Image::new_owned(rgba, SIZE as u32, SIZE as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_to_tray_flag_recognizes_disable_values() {
+        for v in ["0", "false", "off", "no", " FALSE ", "Off", "  NO"] {
+            assert!(!close_to_tray_flag(v), "{v:?} 应关闭「关闭到托盘」");
+        }
+    }
+
+    #[test]
+    fn close_to_tray_flag_defaults_to_enabled_for_other_values() {
+        for v in ["", "1", "true", "on", "yes", "任意值"] {
+            assert!(close_to_tray_flag(v), "{v:?} 应保持「关闭到托盘」开启");
+        }
+    }
 }
