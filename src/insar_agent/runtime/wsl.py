@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from importlib import resources
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -27,8 +28,13 @@ _HANDLE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{2,63}$")
 Runner = Callable[[list[str], float], subprocess.CompletedProcess]
 
 
+_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+
 def _default_runner(argv: list[str], timeout: float) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    # CREATE_NO_WINDOW:wsl.exe 探测/控制命令在后台执行,不弹控制台
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                          creationflags=_NO_WINDOW)
 
 
 def check_handle(task_id: str) -> str:

@@ -40,8 +40,9 @@ def link_or_copy(a: Path, b: Path) -> str:
     if b.exists():
         return "已存在,跳过"
     if sys.platform == "win32":
+        # CREATE_NO_WINDOW:本脚本运行于无窗进程,cmd 子进程不加此标志会弹黑窗
         r = subprocess.run(["cmd", "/c", "mklink", "/J", str(b), str(a)],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, creationflags=0x08000000)
         if r.returncode == 0:
             return "目录联接(零拷贝)"
     try:

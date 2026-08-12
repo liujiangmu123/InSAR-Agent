@@ -229,7 +229,7 @@ function stepDetail(stepId) {
 
   return h('div', { class: 'pdetail' },
     h('div', { class: 'hd' },
-      h('span', { class: `tag is-${tone}` }, label),
+      h('span', { class: tone ? `tag is-${tone}` : 'tag' }, label),
       `第 ${stepId} 步 · ${d.name}`),
     h('div', { class: 'bd' },
       stateNote,

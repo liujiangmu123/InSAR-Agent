@@ -69,10 +69,14 @@ class ProbeResult:
         }
 
 
+_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0  # 后台探测不弹控制台
+
+
 def _try_version(exe: str) -> str:
     """探测到可执行文件后尽力取版本号;拿不到就标 'present'。"""
     try:
-        cp = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=5)
+        cp = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=5,
+                            creationflags=_NO_WINDOW)
         out = (cp.stdout or cp.stderr or "").strip().splitlines()
         return out[0][:40] if out else "present"
     except Exception:
@@ -144,7 +148,7 @@ def probe_environment(workspace: Path | str = ".", *, with_versions: bool = Fals
             try:
                 cp = subprocess.run(
                     [str(py), "-c", "import mintpy; print(mintpy.__version__)"],
-                    capture_output=True, text=True, timeout=60)
+                    capture_output=True, text=True, timeout=60, creationflags=_NO_WINDOW)
                 if cp.returncode == 0 and cp.stdout.strip():
                     result.engines["mintpy"] = cp.stdout.strip()
             except Exception:

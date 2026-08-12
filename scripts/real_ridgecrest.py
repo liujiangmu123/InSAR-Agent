@@ -4,8 +4,8 @@
 云端(HyP3)已完成 2-6 步;本脚本驱动 agent 执行 1(导入)、7-9(MintPy)、
 10(出图)、11(质检),全程走五阶段执行器 + 作业目录契约 + provenance。
 
-用法:python scripts/real_ridgecrest.py [--fresh]
-环境:INSAR_ENGINE_PREFIX(conda 环境)、INSAR_HYP3_SOURCE(数据源)可覆盖默认值。
+用法:.venv\\Scripts\\python.exe scripts/real_ridgecrest.py [--fresh]
+环境:INSAR_ENGINE_PREFIX(conda 引擎环境)、INSAR_HYP3_SOURCE(数据源)可覆盖默认值。
 """
 
 from __future__ import annotations

@@ -1,0 +1,15 @@
+# insar-agent 运行时依赖(与 pyproject.toml 保持同步)
+# 安装:.venv\Scripts\python.exe -m pip install -r requirements.txt
+#       .venv\Scripts\python.exe -m pip install -e .
+fastapi>=0.110
+uvicorn>=0.29
+jinja2>=3.1
+pyyaml>=6.0
+
+# 栅格校验(run_ok 的 NaN 检查等)
+numpy>=1.26
+h5py>=3.10
+
+# 开发与测试
+pytest>=8.0
+httpx>=0.27

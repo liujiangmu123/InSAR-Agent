@@ -2,8 +2,15 @@
 
 可复现 InSAR 科学工作流 Agent:**参数级失效传播 + 步级断点续跑 + 完整 provenance**。
 
-设计文档:`docs/DESIGN.md`(产品与 novelty)· `docs/AGENT-DESIGN.md`(架构定稿)·
-`reference/PI_FRAMEWORK_ANALYSIS.md`(pi 框架对标与吸收决议)。
+## 文档索引
+
+| 文档 | 内容 |
+|---|---|
+| `docs/DESIGN.md` | 产品定稿:novelty、11 步 × 方法矩阵、桥梁地图、竞品分析 |
+| `docs/AGENT-DESIGN.md` | 架构定稿:七条硬约束 → 分层/五阶段执行器/指纹/SQLite/UI |
+| `reference/AGENT_PRODUCTS_LEARNING.md` | codex/gemini-cli/OpenHands/cline + snakemake/dvc 定向调研(absorb-E~P) |
+| `reference/COMPARISON_LEARNING.md` | redun/aiida/agentic-swmm 等对照学习(absorb-A~D) |
+| `reference/PI_FRAMEWORK_ANALYSIS.md` | pi 框架对标与吸收决议(absorb-E1~E8) |
 
 ## 特性(全部有测试守护)
 
@@ -29,13 +36,25 @@
 ## 快速开始
 
 ```powershell
-pip install -e ".[dev]"
-pytest                                  # 91 项测试
-python -m insar_agent.api.app           # http://127.0.0.1:8873(UI + API)
+# 推荐:虚拟环境 + 可编辑安装
+python -m venv .venv
+.venv\Scripts\pip install -e ".[dev]"
+.venv\Scripts\python -m pytest tests/ -v     # 109 项测试
+.venv\Scripts\python -m insar_agent.api.app  # http://127.0.0.1:8873(UI + API)
+
+# 备选:不安装也能跑(tests/conftest.py 把 src 插入 sys.path;需全局 pytest)
+python -m pytest tests/ -v
 ```
 
 浏览器打开 http://127.0.0.1:8873 ,输入「Ridgecrest 地震同震形变」→ 确认执行。
 后端不可达或 file:// 打开时,前端自动回退到 mock 演示模式。
+
+只看原型(纯静态,零依赖,不起后端):
+
+```powershell
+cd prototype
+python -m http.server 8000              # 浏览器开 http://127.0.0.1:8000
+```
 
 环境变量:
 
@@ -50,6 +69,8 @@ python -m insar_agent.api.app           # http://127.0.0.1:8873(UI + API)
 ## 目录结构
 
 ```
+docs/            设计文档:DESIGN.md(产品)+ AGENT-DESIGN.md(架构)
+reference/       竞品与开源框架学习报告(absorb 决议台账)
 src/insar_agent/
 ├── registry/    纯数据:11 步能力声明(方法/参数分类/产物候选/run_ok/超时/replay)
 ├── planner/     可行性收窄(带理由)→ 打分 → 计划/fork
@@ -63,8 +84,20 @@ src/insar_agent/
 ├── report/      run.sh 等价命令 / 方法章节模板
 └── api/         FastAPI:NDJSON 回合流 + SSE + 干预/预览/fork/导出
 prototype/       Web UI(零依赖);backend.sse.js 接真后端,mock 保留为离线演示
-tests/           91 项:哈希坑/幂等重放/reattach/孤儿/取消/超时/级联标脏/契约纪律/拔除守护/API
+tests/           109 项:哈希坑/幂等重放/reattach/孤儿/取消/超时/级联标脏/契约纪律/拔除守护/API
 ```
+
+## Phase 状态
+
+| Phase | 内容 | 状态 |
+|---|---|---|
+| 0 地基 | schema / normalize / fingerprint / filehash / store / capabilities | **完成**,验收达标:哈希三坑有测试;`should_skip` 幂等重放(同一步执行两次,第二次全跳过);`record_version` 门控(absorb-M);fp 三段编码 `policy:algo:digest`;干预队列 `deliver_as` 双投递 + 未消费可编辑/撤回 |
+| 1 执行层 | 五阶段执行器 / 双超时 / reattach / run_ok | 完成(11 对 HyP3 真实数据验收,见下节) |
+| 2 失效传播 | 级联标脏 + 原因分类 + 干预队列 | 完成 |
+| 3 审计 | contract.yaml / 证据阶梯 / provenance / run.sh | 完成 |
+| 4 Brain | intent/select/triage/narrate(可拔除有守护测试) | 完成 |
+| 5 API + 前端 | FastAPI + NDJSON/SSE + backend.sse.js | 完成 |
+| 6 桥 | isce2_to_pystamps(主 novelty) | **接口边界,未实现**(需真值环境) |
 
 ## 真实数据验收(2026-08-12,Windows 原生,无 WSL)
 
@@ -78,8 +111,8 @@ Phase 1 验收「11 对 HyP3 真实数据跑通 MintPy 链」**已通过**:
   (mean_coherence 0.949 / residual_rms 21.7 mm / vel p2-p98 −309~+828 mm/yr)
 - 顺带验证了 orphaned 续跑:环境事件中断后不带 `--fresh` 续跑到完成
 
-复跑:`python scripts/real_ridgecrest.py [--fresh]`(环境变量 `INSAR_ENGINE_PREFIX`、
-`INSAR_HYP3_SOURCE` 可覆盖默认值)。
+复跑:`.venv\Scripts\python.exe scripts/real_ridgecrest.py [--fresh]`
+(环境变量 `INSAR_ENGINE_PREFIX`、`INSAR_HYP3_SOURCE` 可覆盖默认值)。
 
 ### 环境坑位记录(排障日志)
 

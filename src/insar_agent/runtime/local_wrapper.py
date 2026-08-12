@@ -2,7 +2,7 @@
 
 职责(与 AGENT-DESIGN §4.7 的 bash wrapper 逐条对应):
   1. 读 cmd.json,启动子进程,stdout/stderr 追加到 job.log
-  2. 写 job.pid / job.token;每 0.3s 刷 job.hb 心跳
+  2. 写 job.pid / job.token;守护线程每 0.2s 刷 job.hb 心跳
   3. 轮询 job.cancel:出现即终止子进程(宽限 10s 后强杀),写 rc=143
   4. 子进程退出:把退出码写入 job.rc —— 完成的唯一标志
 
@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -33,12 +34,30 @@ def main(job_dir_arg: str) -> int:
 
     (job / "job.pid").write_text(str(os.getpid()), encoding="utf-8")
     (job / "job.token").write_text(uuid.uuid4().hex, encoding="utf-8")
+    # 心跳走独立守护线程,且先于子进程 spawn:hb 表达的是 wrapper 存活,
+    # 不是子进程存活,也不能被 Popen 阻塞(杀软实时扫描下新进程创建可达秒级)
+    # 拖停 —— 否则判活逻辑(jobs.py state:无 hb / hb 超龄 → orphaned)
+    # 会把慢启动误判为孤儿。wrapper 被 kill -9 时线程随进程死,hb 停更,
+    # 孤儿判定语义不变
+    hb = job / "job.hb"
+    hb.touch()
+
+    def _beat() -> None:
+        while True:
+            try:
+                hb.touch()
+            except OSError:
+                pass
+            time.sleep(POLL)
+
+    threading.Thread(target=_beat, daemon=True).start()
 
     kwargs: dict = {}
     if sys.platform == "win32":
-        # CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL_PRIORITY_CLASS
-        # 低优先级:重型计算不干扰宿主日常使用(工作区重算管控)
-        kwargs["creationflags"] = 0x00000200 | 0x00004000
+        # CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW
+        # 低优先级:重型计算不干扰宿主日常使用(工作区重算管控);
+        # NO_WINDOW:wrapper 本身无控制台,子进程若不加此标志会各自弹出黑窗
+        kwargs["creationflags"] = 0x00000200 | 0x00004000 | 0x08000000
     else:
         kwargs["start_new_session"] = True
 
@@ -50,10 +69,8 @@ def main(job_dir_arg: str) -> int:
             (job / "job.rc").write_text("127", encoding="utf-8")
             return 127
 
-        hb = job / "job.hb"
         cancel_marker = job / "job.cancel"
         while True:
-            hb.touch()
             rc = proc.poll()
             if rc is not None:
                 (job / "job.rc").write_text(str(rc), encoding="utf-8")
@@ -62,7 +79,6 @@ def main(job_dir_arg: str) -> int:
                 proc.terminate()
                 deadline = time.time() + GRACE
                 while proc.poll() is None and time.time() < deadline:
-                    hb.touch()
                     time.sleep(0.1)
                 if proc.poll() is None:
                     proc.kill()

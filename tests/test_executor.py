@@ -98,9 +98,11 @@ def test_happy_path_five_stages(store, workspace):
     step = store.load_step("r1", 6)
     assert step.stage == "VERIFIED" and step.state == "done" and step.run_ok == 1
 
-    # 产物已记录且带指纹
+    # 产物已记录且带三段编码指纹(absorb-M)与记录格式版本
     arts = {a["art_id"]: a for a in store.artifacts_of("r1", 6)}
-    assert "unw" in arts and len(arts["unw"]["fp"]) == 64
+    assert "unw" in arts and arts["unw"]["fp"].startswith("stat:v1:")
+    assert len(arts["unw"]["fp"].split(":", 2)[2]) == 64
+    assert arts["unw"]["record_version"] == 1
     # 命令两段式:意图已结算
     cmds = store.commands_of("r1", 6)
     assert len(cmds) == 1 and cmds[0]["exit_code"] == 0 and cmds[0]["duration"] > 0
@@ -199,7 +201,15 @@ def test_claim_launched_job_before_advance(store, workspace):
                           stdout_path=str(job_dir / "job.log"))
     ctx.backend.prepare(job_dir, plan)
     ctx.backend.launch(job_dir)
-    time.sleep(1.0)  # 让 wrapper 起来
+    # 轮询等 wrapper 真正起来(负载下 python 启动可达秒级,固定 sleep 会
+    # 在「pid 已写、心跳未建」窗口误入 orphaned)—— 认领场景的前提本就是
+    # 「作业确实已在跑」
+    for _ in range(600):
+        if ctx.backend.state(job_dir).kind in ("alive", "finished"):
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("wrapper 未在 30s 内启动")
 
     result = run_async(execute_step(ctx, "r1", cap.id))
     assert result.outcome == "done"
