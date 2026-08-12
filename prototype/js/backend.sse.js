@@ -5,7 +5,7 @@
 
    协议(api/app.py):
      POST /api/turn      {session, text}            → NDJSON 事件流
-     POST /api/pipeline  {session, run_id?, steps?} → NDJSON 事件流
+     POST /api/pipeline  {session, run_id?, step_ids?} → NDJSON 事件流
      POST /api/abort     {session}                  → 202(配合 Cancel)
      POST /api/actions   {...}                      → 202(参数/方法变更走干预队列)
 
