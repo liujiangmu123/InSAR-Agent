@@ -1,9 +1,13 @@
 ﻿<#
 .SYNOPSIS
-    InSAR-Agent 桌面版一键构建:cargo release 编译 +(可选)tauri build 出 NSIS 安装包。
+    InSAR-Agent 桌面版一键构建:后端冻结(PyInstaller)+ cargo release 编译
+    +(可选)tauri build 出 NSIS 安装包。
 
 .DESCRIPTION
-    步骤:
+    步骤(2026-08-12 首次全量打包实测校准):
+      0. 后端冻结:运行 desktop\backend-bundle\build_backend.ps1(-SkipBackend 可跳过)。
+         注意:tauri.conf.json 的 bundle.resources 已映射 backend-bundle\dist\insar-backend\,
+         该目录缺失时 tauri-build 会在 cargo 编译阶段直接报错 —— 冻结必须先行。
       1. 前置检查:
          - cargo 必须存在,否则打印获取指引后退出(退出码 1);
          - tauri-cli 可选:按 .tools\tauri-cli\ → PATH 顺序查找,找不到则只编译不打包;
@@ -13,33 +17,50 @@
       3. 若找到 tauri-cli 且未指定 -CargoOnly,继续 tauri build(NSIS 安装包)。
       4. 汇总打印产物路径与大小。
 
+    构建目录:尊重环境变量 CARGO_TARGET_DIR(不设则默认 desktop\target)。
+    本机 C 盘紧张时建议:$env:CARGO_TARGET_DIR = 'E:\cargo-target-desktop-bundle'。
+    日志目录:{target}\build-logs\(target 目录不入库)。
     全程在当前进程内执行(调用运算符 &),不使用 Start-Process,不弹任何新窗口。
-    日志目录:desktop\target\build-logs\(target\ 已被 git 忽略)。
 
 .PARAMETER CargoOnly
     只执行 cargo release 编译;即使 tauri-cli 存在也跳过安装包打包。
 
+.PARAMETER SkipBackend
+    跳过后端冻结步骤(要求 desktop\backend-bundle\dist\insar-backend\ 已存在,
+    否则 cargo 编译会因 bundle.resources 源缺失而失败)。
+
+.PARAMETER SkipDeps
+    透传给 build_backend.ps1:跳过 pip 依赖安装,直接 PyInstaller(依赖已装好时提速)。
+
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_desktop.ps1
 .EXAMPLE
-    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_desktop.ps1 -CargoOnly
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_desktop.ps1 -SkipBackend -CargoOnly
 
 .NOTES
     tauri-cli 获取(不要 cargo install,本地编译要 20-60 分钟):
       powershell -NoProfile -ExecutionPolicy Bypass -File scripts\fetch_tauri_cli.ps1
+    国内网络实测 Invoke-WebRequest 直连/反代均易涓流卡死,curl.exe 断点续传兜底见
+    docs\RELEASE-CHECKLIST.md §5;NSIS 工具链首次下载设
+    $env:TAURI_BUNDLER_TOOLS_GITHUB_MIRROR = 'https://ghfast.top/'。
     完整打包方案见 desktop\bundle\BUNDLING.md。
-    退出码:0 成功;1 前置缺失;2 cargo 编译失败;3 tauri build 失败(cargo 部分已成功)。
+    退出码:0 成功;1 前置缺失;2 cargo 编译失败;3 tauri build 失败(cargo 部分已成功);
+            4 后端冻结失败。
 #>
 [CmdletBinding()]
 param(
-    [switch]$CargoOnly
+    [switch]$CargoOnly,
+    [switch]$SkipBackend,
+    [switch]$SkipDeps
 )
 
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot   = Split-Path -Parent $PSScriptRoot
 $DesktopDir = Join-Path $RepoRoot 'desktop'
-$LogDir     = Join-Path $DesktopDir 'target\build-logs'
+# 尊重 CARGO_TARGET_DIR(cargo 与 tauri-cli 都认它),产物汇总与日志跟着走
+$TargetDir  = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $DesktopDir 'target' }
+$LogDir     = Join-Path $TargetDir 'build-logs'
 $Stamp      = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 if (-not (Test-Path (Join-Path $DesktopDir 'Cargo.toml'))) {
@@ -81,6 +102,32 @@ function Show-LogTail {
     }
 }
 
+# ---------- 0. 后端冻结(PyInstaller onedir) ----------
+$BackendDist = Join-Path $DesktopDir 'backend-bundle\dist\insar-backend'
+if ($SkipBackend) {
+    if (-not (Test-Path (Join-Path $BackendDist 'insar-backend.exe'))) {
+        Write-Host "[错误] 指定了 -SkipBackend 但冻结产物不存在:$BackendDist" -ForegroundColor Red
+        Write-Host '  tauri.conf.json 的 bundle.resources 引用该目录,缺失会让 cargo 编译直接失败。'
+        Write-Host '  先运行:powershell -NoProfile -ExecutionPolicy Bypass -File desktop\backend-bundle\build_backend.ps1'
+        exit 4
+    }
+    Write-Host "[后端] 已指定 -SkipBackend,复用现有冻结产物:$BackendDist"
+} else {
+    Write-Host '[后端] 冻结 Python 后端(build_backend.ps1,日志 desktop\backend-bundle\build.log)…'
+    $backendArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', (Join-Path $DesktopDir 'backend-bundle\build_backend.ps1'))
+    if ($SkipDeps) { $backendArgs += '-SkipDeps' }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & powershell @backendArgs 2>&1 | ForEach-Object { Write-Host "  $_" }
+    $backendExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($backendExit -ne 0 -or -not (Test-Path (Join-Path $BackendDist 'insar-backend.exe'))) {
+        Write-Host "[错误] 后端冻结失败(退出码 $backendExit),详见 desktop\backend-bundle\build.log" -ForegroundColor Red
+        exit 4
+    }
+}
+
 # ---------- 1. 前置检查 ----------
 $cargoCmd = Get-Command cargo -ErrorAction SilentlyContinue
 if (-not $cargoCmd) {
@@ -91,6 +138,7 @@ if (-not $cargoCmd) {
     exit 1
 }
 Write-Host "[前置] cargo:$($cargoCmd.Source)"
+Write-Host "[前置] 构建目录:$TargetDir$(if ($env:CARGO_TARGET_DIR) { '(来自 CARGO_TARGET_DIR)' })"
 
 # tauri-cli 查找:仓库 .tools\tauri-cli\ 优先(scripts\fetch_tauri_cli.ps1 的落点),其次 PATH
 $tauriExe = $null
@@ -164,7 +212,7 @@ if ($CargoOnly) {
     $tauriExit = Invoke-LoggedCommand -Exe $tauriExe -CmdArgs @('build') -LogFile $tauriLog -WorkDir $DesktopDir
     $sw.Stop()
     if ($tauriExit -ne 0) {
-        Write-Host ("[警告] tauri build 失败(退出码 {0})。常见原因:tauri.conf.json 未合入 bundle 配置(bundle.active 仍为 false)、NSIS 工具链首次自动下载失败(国内网络)、icons 缺失。排查见 desktop\bundle\BUNDLING.md §3/§7。" -f $tauriExit) -ForegroundColor Yellow
+        Write-Host ("[警告] tauri build 失败(退出码 {0})。常见原因:NSIS 工具链首次自动下载失败(国内网络,设 TAURI_BUNDLER_TOOLS_GITHUB_MIRROR 镜像变量重试)、backend-bundle\dist 缺失、icons 缺失。排查见 desktop\bundle\BUNDLING.md §3/§7。" -f $tauriExit) -ForegroundColor Yellow
         Show-LogTail $tauriLog
     } else {
         Write-Host ("[打包] tauri build 成功,耗时 {0}s" -f [int]$sw.Elapsed.TotalSeconds)
@@ -174,7 +222,7 @@ if ($CargoOnly) {
 # ---------- 4. 产物汇总 ----------
 Write-Host ''
 Write-Host '===== 产物汇总 ====='
-$releaseDir = Join-Path $DesktopDir 'target\release'
+$releaseDir = Join-Path $TargetDir 'release'
 $bareExes = @(Get-ChildItem -Path $releaseDir -Filter '*.exe' -File -ErrorAction SilentlyContinue)
 if ($bareExes.Count -gt 0) {
     foreach ($exe in $bareExes) {
@@ -182,6 +230,11 @@ if ($bareExes.Count -gt 0) {
     }
 } else {
     Write-Host "  (无裸 exe?检查 $releaseDir)"
+}
+$backendExe = Join-Path $BackendDist 'insar-backend.exe'
+if (Test-Path $backendExe) {
+    $backendBytes = (Get-ChildItem -Recurse -File $BackendDist | Measure-Object -Sum Length).Sum
+    Write-Host ("  {0,8:N1} MB  {1}  <- 冻结后端(onedir 整目录)" -f ($backendBytes / 1MB), $BackendDist)
 }
 $nsisDir = Join-Path $releaseDir 'bundle\nsis'
 $setupExes = @(Get-ChildItem -Path $nsisDir -Filter '*.exe' -File -ErrorAction SilentlyContinue)

@@ -9,8 +9,11 @@
 环境变量:
   INSAR_PORT    监听端口,缺省 8873
   INSAR_HOST    监听地址,缺省 127.0.0.1
-  INSAR_HOME    数据目录;冻结态缺省 %LOCALAPPDATA%\\insar-agent\\workspace
-                (app.py 的相对缺省 workspace/ 会落到 cwd,安装目录可能只读)
+  INSAR_HOME    数据目录;冻结态缺省 %LOCALAPPDATA%\\insar-agent-data\\workspace
+                (app.py 的相对缺省 workspace/ 会落到 cwd,安装目录可能只读)。
+                目录名带 -data 后缀:NSIS 安装目录是 %LOCALAPPDATA%\\InSAR-Agent,
+                Windows 路径大小写不敏感,曾用的 insar-agent 与它是同一物理目录,
+                用户数据会寄生进安装目录(卸载残留/手动清理误删,首次打包实测)
   INSAR_UI_DIR  静态 UI 目录;显式设置则完全尊重,否则自动探测:
                 exe 旁 prototype/ 优先(便于不重打包热改 UI),
                 其次 _internal 内打包副本(spec datas 的缺省落点)
@@ -48,7 +51,7 @@ def _resolve_env() -> None:
                 break
     if _frozen() and not os.environ.get("INSAR_HOME"):
         base = os.environ.get("LOCALAPPDATA") or str(Path.home())
-        os.environ["INSAR_HOME"] = str(Path(base) / "insar-agent" / "workspace")
+        os.environ["INSAR_HOME"] = str(Path(base) / "insar-agent-data" / "workspace")
 
 
 def _ensure_streams() -> None:
@@ -76,7 +79,7 @@ def _log_crash() -> None:
 
         base = os.environ.get("INSAR_HOME") or os.environ.get("LOCALAPPDATA") or "."
         log_dir = Path(base) / "logs" if os.environ.get("INSAR_HOME") \
-            else Path(base) / "insar-agent" / "logs"
+            else Path(base) / "insar-agent-data" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         with open(log_dir / "backend-crash.log", "a", encoding="utf-8") as fh:
             fh.write(f"\n[{datetime.datetime.now().isoformat()}]\n")
