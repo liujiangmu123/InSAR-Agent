@@ -24,7 +24,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from insar_agent.audit.contract import Threshold, load_contract
 from insar_agent.audit.runok import evaluate_run_ok

@@ -1,5 +1,8 @@
 # insar-agent
 
+<!-- CI 徽章占位:推送到 GitHub 后把 OWNER/REPO 换成真实仓库路径即点亮(工作流已就位:ci.yml / desktop.yml) -->
+[![ci](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+
 可复现 InSAR 科学工作流 Agent:**参数级失效传播 + 步级断点续跑 + 完整 provenance**。
 
 ## 文档索引
@@ -43,6 +46,10 @@ python -m venv .venv
 .venv\Scripts\python -m pytest tests/ -q     # 215 项测试(2026-08-12 全绿)
 .venv\Scripts\python scripts\test_js.py      # 前端 state.js 单测(node --test,零 npm 依赖)
 .venv\Scripts\python -m insar_agent.api.app  # http://127.0.0.1:8873(UI + API)
+
+# 可选:装 pre-commit 提交钩子(ruff / 尾空格 / EOF / YAML / CSS 质检,配置见 .pre-commit-config.yaml)
+.venv\Scripts\python.exe -m pip install pre-commit
+.venv\Scripts\pre-commit.exe install
 
 # 备选:不安装也能跑(tests/conftest.py 把 src 插入 sys.path;需全局 pytest)
 python -m pytest tests/ -q

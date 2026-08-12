@@ -1,3 +1,4 @@
+from insar_agent.registry.capabilities import PIPELINE, REGISTRY, capability_of, step_def
 from insar_agent.registry.model import (
     ArtifactSpec,
     Capability,
@@ -7,7 +8,6 @@ from insar_agent.registry.model import (
     RunOkCheck,
     Timeouts,
 )
-from insar_agent.registry.capabilities import PIPELINE, REGISTRY, capability_of, step_def
 
 __all__ = [
     "ArtifactSpec",

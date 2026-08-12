@@ -28,6 +28,7 @@ from insar_agent.runtime.executor import ExecContext, execute_step
 from insar_agent.runtime.jobs import CommandPlan, LocalJobBackend
 from insar_agent.runtime.stream import CancelToken
 
+
 def run_async(coro):
     return asyncio.run(coro)
 

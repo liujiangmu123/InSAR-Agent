@@ -15,7 +15,6 @@ import ctypes
 import ctypes.wintypes as wt
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

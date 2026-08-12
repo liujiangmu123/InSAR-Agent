@@ -1,0 +1,32 @@
+# pre-commit 提交钩子(可选装,不装不影响任何现有流程):
+#   .venv\Scripts\python.exe -m pip install pre-commit
+#   .venv\Scripts\pre-commit.exe install
+# 钩子只作用于本次提交暂存的文件;rev 过期时可用 pre-commit autoupdate 刷新。
+
+repos:
+  # ruff:与 pyproject.toml [tool.ruff] 同一套配置;只检查不自动改写
+  # (rev 与 dev extra 钉的 ruff 版本保持一致)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.2
+    hooks:
+      - id: ruff
+
+  # 通用卫生钩子:尾随空格 / 文件末尾换行 / YAML 语法
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Markdown 的行尾双空格是合法换行语法,保留
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+
+  # 本仓自有门禁:CSS 括号配平 + @media 断点清单一致性(纯 stdlib,零依赖)
+  - repo: local
+    hooks:
+      - id: check-css-syntax
+        name: CSS 语法与断点清单检查(scripts/check_css_syntax.py)
+        entry: python scripts/check_css_syntax.py
+        language: system
+        files: ^prototype/css/.*\.css$
+        pass_filenames: false

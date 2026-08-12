@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from insar_agent.engines import resolve_builder
 from insar_agent.engines import isce2 as isce2_engine
+from insar_agent.engines import resolve_builder
 from insar_agent.engines.isce2 import (
     _STEP_RANGES,
     _STRIPMAP_RANGES,

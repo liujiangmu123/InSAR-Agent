@@ -27,7 +27,12 @@ import pytest
 from insar_agent.registry.model import Capability, Method
 from insar_agent.runtime import backend_select
 from insar_agent.runtime.backend_select import (
-    WSL_ENGINES, backend_for_step, select_backend, wsl_distro, wsl_reachable)
+    WSL_ENGINES,
+    backend_for_step,
+    select_backend,
+    wsl_distro,
+    wsl_reachable,
+)
 from insar_agent.runtime.executor import _job_dir
 from insar_agent.runtime.jobs import CommandPlan, LocalJobBackend
 from insar_agent.runtime.wsl import WslJobBackend, WslPaths, wsl_status

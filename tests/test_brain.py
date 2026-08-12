@@ -1,6 +1,5 @@
 """Phase 4 验收(brain):规则优先、闭集约束、越界拒绝、截断整体拒绝、全职责可降级。"""
 
-import pytest
 
 from insar_agent.brain.facade import Brain
 from insar_agent.brain.provider import BrainTruncated, BrainUnavailable, LLMProvider, LLMRoute

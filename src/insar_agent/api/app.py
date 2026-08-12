@@ -22,11 +22,13 @@ from urllib.parse import urlencode
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse,
-                               StreamingResponse)
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from insar_agent.api.admin_router import create_admin_router
+from insar_agent.api.setup_router import create_setup_router
+from insar_agent.api.version_router import router as version_router
 from insar_agent.audit.contract import load_contract
 from insar_agent.brain.facade import Brain
 from insar_agent.brain.provider import LLMProvider
@@ -38,11 +40,7 @@ from insar_agent.core.store import DELIVER_AS, Store
 from insar_agent.loop.driver import Driver
 from insar_agent.planner.feasibility import narrow_methods
 from insar_agent.planner.plan import fork_run
-from insar_agent.api.admin_router import create_admin_router
-from insar_agent.api.setup_router import create_setup_router
-from insar_agent.api.version_router import router as version_router
 from insar_agent.registry.capabilities import PIPELINE, REGISTRY
-from insar_agent.report.methods import methods_markdown
 from insar_agent.report.script import export_run_script
 
 # INSAR_UI_DIR:静态 UI 目录的唯一环境变量覆盖点(桌面冻结版由

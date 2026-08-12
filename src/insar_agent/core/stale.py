@@ -19,8 +19,8 @@ import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from insar_agent.core.fingerprint import step_hashes
 from insar_agent.core.filehash import fingerprint_target
+from insar_agent.core.fingerprint import step_hashes
 from insar_agent.core.store import Store
 from insar_agent.registry.model import Capability
 

@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import re
 
+from tests.test_isce2_stripmap import assert_ranges_contiguous
+
 from insar_agent.brain.facade import Brain
-from insar_agent.engines import resolve_builder
 from insar_agent.engines import isce2 as isce2_engine
+from insar_agent.engines import resolve_builder
 from insar_agent.engines.isce2 import _STRIPMAP_RANGES, STRIPMAP_STEPS
 from insar_agent.planner.feasibility import narrow_methods
 from insar_agent.planner.plan import make_plan
@@ -19,8 +21,6 @@ from insar_agent.registry.capabilities import REGISTRY
 from insar_agent.registry.scenarios import SCENARIOS, classify_text, scenario_of
 from insar_agent.runtime.discover import discover_artifacts
 from insar_agent.runtime.probe import ProbeResult
-
-from tests.test_isce2_stripmap import assert_ranges_contiguous
 
 RUN = {"simulated": 0}
 
