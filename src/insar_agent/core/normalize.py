@@ -7,15 +7,21 @@
                         (aiida hashing.py:197-202/310-320)。0.3 与 0.1+0.2 同哈希。
   坑三  嵌套结构歧义 —— 类型标签 + 长度前缀 + 容器闭合标记(redun bencode tag 前缀
                         路线,hashing.py:47-54;不引入 blake2b,sha256 够用)。
+
+实现说明(2026-08 性能改造,输出逐字节不变,由 tests/test_hash_semantics_lock.py
+金样钉死):pre-image 累积进共享 bytearray(旧版 bytes += 在大容器上是 O(n²) 拷贝);
+精确类型直接分派,子类走 _write_fallback 的 isinstance 链保持旧语义(IntEnum、
+OrderedDict 等仍按旧路径编码)。dict/set 的子元素因需排序仍各自物化 pre-image。
 """
 
 from __future__ import annotations
 
 import hashlib
-import math
 from typing import Any
 
 _FLOAT_SIG_DIGITS = 12
+_FLOAT_FMT = f".{_FLOAT_SIG_DIGITS}g"
+_INT_EXACT_LIMIT = 2 ** 53  # 浮点可精确表示整数的上界
 
 
 class UnrepresentableError(TypeError):
@@ -40,58 +46,162 @@ _T_END = b"E"  # 容器闭合,防 [[1],[2]] 与 [[1,2]] 同像
 
 
 def _normalize_float(x: float) -> str:
-    if math.isnan(x):
+    # x != x 即 NaN(免 math.isnan 调用);±inf 不必单列:'.12g' 对无穷输出
+    # 恰为 "inf"/"-inf",与旧显式分支逐字符一致(金样锁定)
+    if x != x:
         return "nan"
-    if math.isinf(x):
-        return "inf" if x > 0 else "-inf"
     if x == 0.0:  # 同时覆盖 -0.0(-0.0 == 0.0 为 True)
         return "0"
-    return f"{x:.{_FLOAT_SIG_DIGITS}g}"
+    return format(x, _FLOAT_FMT)
+
+
+def _scalar_pre(value: Any) -> bytes | None:
+    """标量的独立 pre-image;容器/子类返回 None(走 normalize_value 通路)。
+
+    dict/set 的子元素必须物化成独立字节串才能排序,此函数免去 bytearray
+    往返;各分支输出与 _write 的对应标量分支逐字节一致(金样锁保证不漂移)。
+    """
+    t = value.__class__
+    if t is str:
+        b = value.encode("utf-8")
+        return b"S%d:" % len(b) + b
+    if t is int:
+        s = str(value)
+        return b"I%d:" % len(s) + s.encode()
+    if t is float:
+        if value.is_integer() and -_INT_EXACT_LIMIT < value < _INT_EXACT_LIMIT:
+            s = str(int(value))
+            return b"I%d:" % len(s) + s.encode()
+        s = _normalize_float(value)
+        return b"F%d:" % len(s) + s.encode()
+    if t is bool:
+        return b"B1" if value else b"B0"
+    if value is None:
+        return _T_NULL
+    return None
+
+
+def _write(buf: bytearray, value: Any) -> None:
+    """把 value 的 pre-image 追加进 buf。热路径:按精确类型分派,频序排列。"""
+    t = value.__class__
+    if t is str:
+        b = value.encode("utf-8")
+        buf += b"S%d:" % len(b)
+        buf += b
+    elif t is int:
+        s = str(value)  # 纯 ASCII,字节长即字符长
+        buf += b"I%d:" % len(s)
+        buf += s.encode()
+    elif t is float:
+        # 整数值浮点(2.0)与整数(2)同像:参数从 YAML/JSON 往返时类型会漂移
+        if value.is_integer() and -_INT_EXACT_LIMIT < value < _INT_EXACT_LIMIT:
+            s = str(int(value))
+            buf += b"I%d:" % len(s)
+        else:
+            s = _normalize_float(value)
+            buf += b"F%d:" % len(s)
+        buf += s.encode()
+    elif t is bool:
+        buf += b"B1" if value else b"B0"
+    elif t is dict:
+        # 坑一:按「已规范化的 key」的字节排序,而非 key 原值;
+        # value pre-image 参与决胜(NaN 键这类同像异值键仍有全序)
+        pairs = []
+        for k, v in value.items():
+            k_pre = _scalar_pre(k)
+            if k_pre is None:
+                k_pre = normalize_value(k)
+            v_pre = _scalar_pre(v)
+            if v_pre is None:
+                v_pre = normalize_value(v)
+            pairs.append((k_pre, v_pre))
+        pairs.sort()
+        buf += _T_DICT
+        for k_pre, v_pre in pairs:
+            buf += k_pre
+            buf += v_pre
+        buf += _T_END
+    elif t is list or t is tuple:
+        buf += _T_LIST
+        for item in value:
+            _write(buf, item)
+        buf += _T_END
+    elif value is None:
+        buf += _T_NULL
+    elif t is bytes:
+        buf += b"Y%d:" % len(value)
+        buf += value
+    elif t is set or t is frozenset:
+        # 集合无序:按元素 pre-image 排序
+        subs = []
+        for v in value:
+            pre = _scalar_pre(v)
+            subs.append(normalize_value(v) if pre is None else pre)
+        subs.sort()
+        buf += _T_LIST
+        for pre in subs:
+            buf += pre
+        buf += _T_END
+    else:
+        _write_fallback(buf, value)
+
+
+def _write_fallback(buf: bytearray, value: Any) -> None:
+    """慢路径:子类与鸭子类型,保持旧版 isinstance 链的判定顺序与编码。"""
+    if isinstance(value, bool):  # 必须在 int 之前(bool 是 int 子类)
+        buf += b"B1" if value else b"B0"
+    elif isinstance(value, int):
+        s = str(value)
+        buf += b"I%d:" % len(s)
+        buf += s.encode()
+    elif isinstance(value, float):
+        if value.is_integer() and abs(value) < _INT_EXACT_LIMIT:
+            s = str(int(value))
+            buf += b"I%d:" % len(s)
+        else:
+            s = _normalize_float(value)
+            buf += b"F%d:" % len(s)
+        buf += s.encode()
+    elif isinstance(value, str):
+        b = value.encode("utf-8")
+        buf += b"S%d:" % len(b)
+        buf += b
+    elif isinstance(value, bytes):
+        buf += b"Y%d:" % len(value)
+        buf += value
+    elif isinstance(value, (list, tuple)):
+        buf += _T_LIST
+        for item in value:
+            _write(buf, item)
+        buf += _T_END
+    elif isinstance(value, (set, frozenset)):
+        subs = [normalize_value(v) for v in value]
+        subs.sort()
+        buf += _T_LIST
+        for pre in subs:
+            buf += pre
+        buf += _T_END
+    elif isinstance(value, dict):
+        pairs = [(normalize_value(k), normalize_value(v)) for k, v in value.items()]
+        pairs.sort()
+        buf += _T_DICT
+        for k_pre, v_pre in pairs:
+            buf += k_pre
+            buf += v_pre
+        buf += _T_END
+    else:
+        raise UnrepresentableError(f"unhashable value type for fingerprint: {type(value)!r}")
 
 
 def normalize_value(value: Any) -> bytes:
     """把任意 JSON 风格值转成确定性字节 pre-image。"""
-    if value is None:
-        return _T_NULL
-    if isinstance(value, bool):  # 必须在 int 之前(bool 是 int 子类)
-        return _T_BOOL + (b"1" if value else b"0")
-    if isinstance(value, int):
-        b = str(value).encode()
-        return _T_INT + str(len(b)).encode() + b":" + b
-    if isinstance(value, float):
-        # 整数值浮点(2.0)与整数(2)同像:参数从 YAML/JSON 往返时类型会漂移
-        if value.is_integer() and abs(value) < 2**53:
-            return normalize_value(int(value))
-        b = _normalize_float(value).encode()
-        return _T_FLOAT + str(len(b)).encode() + b":" + b
-    if isinstance(value, str):
-        b = value.encode("utf-8")
-        return _T_STR + str(len(b)).encode() + b":" + b
-    if isinstance(value, bytes):
-        return _T_BYTES + str(len(value)).encode() + b":" + value
-    if isinstance(value, (list, tuple)):
-        out = _T_LIST
-        for item in value:
-            out += normalize_value(item)
-        return out + _T_END
-    if isinstance(value, (set, frozenset)):
-        # 集合无序:按元素 pre-image 排序
-        out = _T_LIST
-        for pre in sorted(normalize_value(v) for v in value):
-            out += pre
-        return out + _T_END
-    if isinstance(value, dict):
-        # 坑一:按「已规范化的 key」的字节排序,而非 key 原值
-        pairs = sorted(
-            (normalize_value(k), normalize_value(v)) for k, v in value.items()
-        )
-        out = _T_DICT
-        for k_pre, v_pre in pairs:
-            out += k_pre + v_pre
-        return out + _T_END
-    raise UnrepresentableError(f"unhashable value type for fingerprint: {type(value)!r}")
+    buf = bytearray()
+    _write(buf, value)
+    return bytes(buf)
 
 
 def hash_struct(value: Any) -> str:
     """规范化 sha256,返回 64 位十六进制。"""
-    return hashlib.sha256(normalize_value(value)).hexdigest()
+    buf = bytearray()
+    _write(buf, value)
+    return hashlib.sha256(buf).hexdigest()
