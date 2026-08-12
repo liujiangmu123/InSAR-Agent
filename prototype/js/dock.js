@@ -370,28 +370,59 @@ const FILE_TEXT = {
 };
 
 function filesView() {
-  const tree = fileTree();
-  const rows = h('div', { class: 'rows' }, ...tree.map((f) => h('button', {
-    class: 'row', type: 'button',
-    'aria-current': String(S.selectedFile === f.path),
-    onclick: () => { S.selectedFile = f.path; refresh(); },
-  },
-    h('span', { class: 'ic' }, icon(f.isDir ? 'folder' : 'file')),
-    h('span', { class: 'nm' }, f.path),
-    f.hash && !f.isDir ? h('span', { class: 'hs' }, f.hash) : null,
-    h('span', { class: 'mt' }, `#${f.step}`),
-    f.stale ? h('span', { class: 'led', style: { background: 'var(--stale)' }, title: 'STALE' })
-            : f.exists ? h('span', { class: 'led', style: { background: 'var(--ok)' }, title: '有效' })
-            : h('span', { class: 'led', style: { background: 'var(--border-strong)' }, title: '未生成' }))));
+  /* 真实化（GET /api/artifacts，经 fileslive.js 拉取与 30s 缓存）：
+     加载中骨架屏 → 真实产物树（步骤分组 + 三段指纹详情卡）；无 run /
+     后端不可达 → 回落 fileTree() 演示派生并顶部醒目标注「演示数据」。
+     fileslive.js 走动态 import，不新增模块级 import（同 envView 做法，
+     与并行分支的 dock.js 改动解耦）。 */
+  const root = h('div', null,
+    h('p', { class: 'blurb' }, '正在读取产物清单（GET /api/artifacts）…'));
 
-  return h('div', null,
-    h('h3', { class: 'sect' }, '数据与产物 · 由步骤输出派生'),
-    rows,
-    S.selectedFile ? filePreview(S.selectedFile, tree) : null,
-    h('h3', { class: 'sect' }, '指纹'),
-    h('p', { class: 'blurb' },
-      '每个产物携带 sha256 指纹与生成命令。参数变更 → 指纹失配 → 标 STALE。' +
-      '指纹计算包含：method + params + 上游指纹 + 工具版本 + 输入清单。'));
+  // ---- 演示回落：原 fileTree() 派生树原样保留，仅加顶部横幅 ----
+  const demoBody = (FILES) => {
+    const tree = fileTree();
+    const rows = h('div', { class: 'rows' }, ...tree.map((f) => h('button', {
+      class: 'row', type: 'button',
+      'aria-current': String(S.selectedFile === f.path),
+      onclick: () => { S.selectedFile = f.path; refresh(); },
+    },
+      h('span', { class: 'ic' }, icon(f.isDir ? 'folder' : 'file')),
+      h('span', { class: 'nm' }, f.path),
+      f.hash && !f.isDir ? h('span', { class: 'hs' }, f.hash) : null,
+      h('span', { class: 'mt' }, `#${f.step}`),
+      f.stale ? h('span', { class: 'led', style: { background: 'var(--stale)' }, title: 'STALE' })
+              : f.exists ? h('span', { class: 'led', style: { background: 'var(--ok)' }, title: '有效' })
+              : h('span', { class: 'led', style: { background: 'var(--border-strong)' }, title: '未生成' }))));
+
+    return [
+      FILES.demoBanner('产物树为步骤输出的演示派生（state.js fileTree，指纹为示意值），非真实 run 记录。', {
+        onRetry: () => { FILES.invalidate(); refresh(); },
+      }),
+      h('h3', { class: 'sect' }, '数据与产物 · 由步骤输出派生'),
+      rows,
+      S.selectedFile ? filePreview(S.selectedFile, tree) : null,
+      h('h3', { class: 'sect' }, '指纹'),
+      h('p', { class: 'blurb' },
+        '每个产物携带 sha256 指纹与生成命令。参数变更 → 指纹失配 → 标 STALE。' +
+        '指纹计算包含：method + params + 上游指纹 + 工具版本 + 输入清单。'),
+    ].filter(Boolean);
+  };
+
+  (async () => {
+    const FILES = await import('./fileslive.js');
+    if (!root.isConnected) return;
+    root.replaceChildren(FILES.skeleton());        // 骨架屏：等待清单结果
+    const data = await FILES.fetchFilesLive();
+    if (!root.isConnected) return;                 // 面板已切走，丢弃过期结果
+    root.replaceChildren(...(data
+      ? FILES.liveBody(data, {
+          onRefresh: () => { FILES.invalidate(); refresh(); },
+          openImages,
+        })
+      : demoBody(FILES)));
+  })();
+
+  return root;
 }
 
 function filePreview(path, tree) {
@@ -1377,3 +1408,9 @@ export function openFile(path) {
 }
 
 export function openImages() { setTab('images'); }
+
+/** 面板联动（产物 chip → 文件面板）：切到 files 并滚动高亮该步骤的产物组。 */
+export function selectStepFile(stepId) {
+  setTab('files');
+  import('./fileslive.js').then((m) => m.highlightStep(stepId)).catch(() => {});
+}
