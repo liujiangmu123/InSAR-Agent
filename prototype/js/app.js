@@ -104,7 +104,14 @@ async function hydrateFromServer() {
     St.syncServerSteps(state.steps);   // 方法/状态/stale 镜像 → 指纹重算 → 广播
     paintStatus();
   }
-  return state;
+  // 历史对话只在轨迹流仍是空态时重放，不打断已开始的会话
+  if (chat?.length && !S.busy && !el.stream.querySelector('.turn')) {
+    Stream.clear();
+    for (const m of chat) {
+      if (m.role === 'user') Stream.userMsg(m.content);
+      else Stream.agentMsg(m.content);
+    }
+  }
 }
 
 /** 只同步步骤状态镜像(规划/执行回合结束后调用)。
@@ -119,14 +126,6 @@ async function syncStepsFromServer() {
       Dock.refresh();
     }
   } catch { /* 后端不可达时保持本地状态(mock 演示不受影响) */ }
-  // 历史对话只在轨迹流仍是空态时重放，不打断已开始的会话
-  if (chat?.length && !S.busy && !el.stream.querySelector('.turn')) {
-    Stream.clear();
-    for (const m of chat) {
-      if (m.role === 'user') Stream.userMsg(m.content);
-      else Stream.agentMsg(m.content);
-    }
-  }
 }
 
 function connectGlobalEvents() {
