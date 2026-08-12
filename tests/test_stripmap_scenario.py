@@ -53,16 +53,27 @@ def test_pack_loaded_with_complete_fields():
     assert sc.model == "linear"  # 单对两景无法区分阶跃与线性 → 唯一可辨识参数化
     assert sc.pick_7 == "mintpy_sbas"
     assert sc.diag and sc.reason and sc.region  # 领域字段非空
-    assert sc.data_ready is False  # 数据本地已有但需装配(raw 布局 + DEM 转换)
+    assert sc.data_ready is True  # 数据已装配在 WSL 工作区(手工链,/home/insar/work/baja)
     assert re.fullmatch(r"\d+\.\d+\.\d+", sc.version)  # provenance 需要
     assert sc.cloud_completed == ()  # 全链本机执行,无云端已完成步骤
-    assert sc.step_overrides == {
-        3: {"method": "isce2_stripmap_xcorr"},
-        4: {"method": "isce2_stripmap_ifg"},
-        5: {"method": "isce2_stripmap_filter"},
-        6: {"method": "isce2_stripmap_unwrap_snaphu"},
-        11: {"method": "coherence_mask"},  # 单对无双链,交叉验证诚实降级
+    methods = {sid: ov.get("method") for sid, ov in sc.step_overrides.items()
+               if ov.get("method")}
+    assert methods == {
+        2: "dem_local",  # 本地 DEM(已转 ISCE 格式),不走在线 DEM 服务
+        3: "isce2_stripmap_xcorr",
+        4: "isce2_stripmap_ifg",
+        5: "isce2_stripmap_filter",
+        6: "isce2_stripmap_unwrap_snaphu",
+        11: "coherence_mask",  # 单对无双链,交叉验证诚实降级
     }
+    # 路径参数固化为手工验证链的 WSL 绝对路径(与 stripmapApp.xml 原件逐字段一致)
+    assert sc.step_overrides[1]["params"]["source"] == "/home/insar/work/baja"
+    p3 = sc.step_overrides[3]["params"]
+    assert p3["reference_image"] == "/home/insar/work/baja/raw/IMG-HH-ALPSRP207600640-H1.0__A"
+    assert p3["secondary_image"] == "/home/insar/work/baja/raw/IMG-HH-ALPSRP227730640-H1.0__A"
+    assert p3["resample_flag"] == "dual2single"  # FBD 从影像配 FBS 主影像
+    assert p3["dem_path"] == "/home/insar/work/baja/dem/dem.wgs84"
+    assert sc.step_overrides[2]["params"]["dem"] == p3["dem_path"]
 
 
 def test_pack_knowledge_covers_measured_lessons():
@@ -123,12 +134,17 @@ def test_make_plan_assembles_stripmap_chain(store):
     assert methods[6] == "isce2_stripmap_unwrap_snaphu"
     # 单对两景 → 9 步 linear;11 步诚实降级 coherence_mask;场景进 provenance
     assert methods[9] == "linear" and methods[11] == "coherence_mask"
+    # 2 步 dem_local(本地 DEM 已转 ISCE 格式),1 步 local_import 指向 WSL 数据源
+    assert methods[2] == "dem_local" and methods[1] == "local_import"
     assert store.get_run(plan.run_id)["scenario"] == "stripmap_coseismic"
     assert len(store.load_steps(plan.run_id)) == 11
-    # 包不钉死 FBS/FBD 配对形态:resample_flag 保持默认空,由数据决定
+    # 包固化手工验证链的数据形态:FBD 从影像 → dual2single,路径为 WSL 绝对路径
     params3 = next(p.params for p in plan.steps if p.step_id == 3)
-    assert params3["resample_flag"] == ""
-    assert params3["dem_path"] == "data/dem/dem.wgs84"
+    assert params3["resample_flag"] == "dual2single"
+    assert params3["dem_path"] == "/home/insar/work/baja/dem/dem.wgs84"
+    assert params3["reference_image"].startswith("/home/insar/work/baja/raw/IMG-HH-")
+    params1 = next(p.params for p in plan.steps if p.step_id == 1)
+    assert params1["source"] == "/home/insar/work/baja" and params1["scenes"] == 2
 
 
 # ---------------- 区间映射与连续性(pickle 链约束) ----------------
@@ -176,8 +192,9 @@ def test_commandplan_argv_xml_per_new_method(workspace):
         assert set(plan.files) == {xml_rel, script_rel}
         script = plan.files[script_rel]
         assert "cd isce2" in script
-        assert (f"stripmapApp.py stripmapApp_s{sid:02d}.xml "
-                f"--start={start} --end={end}") in script
+        # --steps 显式给出(步进模式才解析 --start/--end);nice 对齐手工链形态
+        assert (f"nice -n 10 stripmapApp.py stripmapApp_s{sid:02d}.xml "
+                f"--steps --start={start} --end={end}") in script
         assert plan.shell_line == f"bash {script_rel}"
         xml = plan.files[xml_rel]
         assert '<component name="insar">' in xml
