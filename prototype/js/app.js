@@ -403,6 +403,18 @@ async function consume(iter) {
         Stream.agentMsg(...ev.parts.map(renderPart));
         break;
 
+      /* 后端意图识别失败的补充表单(§3.5 降级,loop/events.py ask 工厂)。
+         最小渲染:提示语 + 需补充的字段清单,用户直接在输入框补充后重发。
+         此前该类型无分支 → 回合流只有一条 ask 时界面完全空白。 */
+      case 'ask': {
+        const fields = (ev.fields || [])
+          .map((f) => (f.options?.length ? `${f.label}（${f.options.join(' / ')}）` : f.label))
+          .filter(Boolean);
+        Stream.agentMsg(ev.prompt || '请补充信息：',
+          ...(fields.length ? [' 需要补充：', h('b', null, fields.join('、'))] : []));
+        break;
+      }
+
       case 'tool.start':
         tools.set(ev.id, Stream.toolCall({
           cmd: ev.cmd, verb: ev.verb, label: ev.label, open: ev.open,

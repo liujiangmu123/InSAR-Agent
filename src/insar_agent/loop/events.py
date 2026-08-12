@@ -85,6 +85,15 @@ def step_end(step_id: int, exit_code: int) -> dict:
     return {"t": "step.end", "stepId": step_id, "exit": exit_code}
 
 
+def step_stage(step_id: int, stage: str) -> dict:
+    """五阶段执行器的阶段推进(PREPARED/LAUNCHED/COLLECTED/VERIFIED)。
+
+    runtime/executor.py 直发同形状字面量;此工厂登记形状,供契约测试对账
+    (tests/test_e2e_contract.py 的事件类型注册表)。前端当前静默忽略该类型。
+    """
+    return {"t": "step.stage", "stepId": step_id, "stage": stage}
+
+
 def overall(pct: int) -> dict:
     return {"t": "overall", "pct": pct}
 
@@ -115,8 +124,12 @@ def reattach(text: str) -> dict:
     return {"t": "reattach", "text": text}
 
 
-def intervention(text: str, affected: list[int] | None = None) -> dict:
-    return {"t": "intervention", "text": text, "affected": affected or []}
+def intervention(text: str, affected: list[int] | None = None,
+                 mode: str = "queue") -> dict:
+    """干预留痕。mode 对齐前端 interventionEntry 的两种投递语义:
+    queue(步间生效,前端缺省)| steer(立即生效)。"""
+    return {"t": "intervention", "text": text, "affected": affected or [],
+            "mode": mode}
 
 
 def degrade(text: str, evidence_before: str, evidence_after: str) -> dict:
@@ -124,8 +137,12 @@ def degrade(text: str, evidence_before: str, evidence_after: str) -> dict:
             "evidenceBefore": evidence_before, "evidenceAfter": evidence_after}
 
 
-def gate_stop(text: str, suggestions: list[str] | None = None) -> dict:
-    return {"t": "gate_stop", "text": text, "suggestions": suggestions or []}
+def gate_stop(text: str, suggestions: list[str] | None = None,
+              step_id: int | None = None) -> dict:
+    """质量门拦停。stepId 可选:前端文本形态用它在标题标注「第 N 步」,
+    缺省 null 时前端退回通用标题(gateStopEntry 的 stepId 分支)。"""
+    return {"t": "gate_stop", "text": text, "suggestions": suggestions or [],
+            "stepId": step_id}
 
 
 def handler_error(source: str, error: str) -> dict:
