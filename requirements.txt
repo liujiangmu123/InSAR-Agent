@@ -1,16 +1,20 @@
-# insar-agent 运行时依赖(与 pyproject.toml 保持同步)
+# insar-agent 依赖清单(与 pyproject.toml 对应;分组见下)
 # 安装:.venv\Scripts\python.exe -m pip install -r requirements.txt
 #       .venv\Scripts\python.exe -m pip install -e .
+
+# --- agent 运行时(pyproject [project].dependencies) ---
 fastapi>=0.110
 uvicorn>=0.29
-jinja2>=3.1
 pyyaml>=6.0
 
-# 栅格校验(run_ok 的 NaN 检查等)
+# --- 栅格可选(pyproject [raster] extra):run_ok NaN 检查 / 真实 qa / 宿主回退出图 ---
+# matplotlib 默认由引擎 conda 环境提供,宿主直接出图时再自行安装
 numpy>=1.26
 h5py>=3.10
 
-# 开发与测试
+# --- 开发与测试(pyproject [dev] extra) ---
 pytest>=8.0
 httpx>=0.27
-pillow>=10.0  # 桌面图标生成(desktop/icons/make_icons.py)
+
+# --- 桌面打包脚本(非 agent 运行时)---
+pillow>=10.0  # desktop/icons/make_icons.py 图标生成
