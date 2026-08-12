@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>InSAR-Agent · 工作区</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/stream.css">
+<link rel="stylesheet" href="css/dock.css">
+</head>
+<body>
+
+<a href="#prompt" class="sr-only">跳到输入框</a>
+
+<button class="scrim" id="scrim" type="button" hidden aria-label="关闭浮层面板"></button>
+
+<div class="app">
+
+  <!-- ============ 最左导航条 ============ -->
+  <nav class="rail" aria-label="主导航">
+    <div class="brand" aria-hidden="true">IA</div>
+
+    <button class="rail-btn" id="railChat" type="button" aria-pressed="true" aria-label="对话" title="对话">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </button>
+
+    <button class="rail-btn" id="railSessions" type="button" aria-pressed="true" aria-label="会话列表" title="会话列表 ">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
+        <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+    </button>
+
+    <div class="rail-sp"></div>
+
+    <button class="rail-btn" id="btnTheme" type="button" aria-label="切换主题" title="切换主题 Ctrl+J"></button>
+
+    <button class="rail-btn" id="railDock" type="button" aria-pressed="true" aria-label="右侧面板" title="右侧面板 Ctrl+B">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
+    </button>
+  </nav>
+
+  <!-- ============ 会话侧栏 ============ -->
+  <aside class="sider" id="sider" aria-label="会话">
+    <div class="sider-hd">
+      <span class="lbl">会话</span>
+      <span class="grow"></span>
+      <button class="icon-btn" id="btnNew" type="button" aria-label="新建会话" title="新建会话">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+    <div class="sess-list" id="sessions"></div>
+    <div class="sider-ft">
+      <div class="seg" id="modeSwitch" role="group" aria-label="决策模式">
+        <button type="button" data-mode="expert" aria-pressed="true">专家</button>
+        <button type="button" data-mode="guide" aria-pressed="false">向导</button>
+      </div>
+      <div class="who"><span class="av" aria-hidden="true">师</span><span>讲师账号 · 本机 WSL2</span></div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区：轨迹流 ============ -->
+  <main class="main">
+    <header class="topbar">
+      <span class="tt">InSAR-Agent<span class="sl">/</span></span>
+      <span class="st" id="subtitle">Ridgecrest 同震形变 · 11 对</span>
+      <span class="tag is-stale" title="后端未接入，数值为示意值">DEMO</span>
+      <span class="grow"></span>
+      <span class="budget" id="budget" role="status" aria-live="polite" hidden></span>
+      <span class="tag" id="status" role="status" aria-live="polite">
+        <span class="led"></span><span id="statusText">空闲</span>
+      </span>
+      <button class="btn btn-wrn" id="btnRun" type="button" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 3l14 9-14 9z"/></svg>
+        <span class="lbl">重跑失效步骤</span>
+      </button>
+    </header>
+
+    <div class="stream" id="stream" role="log" aria-label="Agent 执行轨迹" aria-live="polite"></div>
+
+    <div class="composer">
+      <div class="composer-in">
+        <div class="attach-row" id="attachRow" hidden aria-label="待发送附件" aria-live="polite"></div>
+        <div class="box">
+          <label class="sr-only" for="prompt">向 InSAR-Agent 描述任务</label>
+          <textarea id="prompt" rows="1"
+            placeholder="描述研究任务，例如：分析玉树冻土 2020-2023 的 SBAS 时序形变"></textarea>
+
+          <input type="file" id="fileInput" multiple hidden>
+          <button class="cbtn" id="btnAttach" type="button" aria-label="附加文件（演示：不上传）" title="附加文件（演示：不上传）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+
+          <button class="cbtn" id="btnClear" type="button" aria-label="清空输入" title="清空输入">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+          </button>
+
+          <button class="cbtn send" id="btnSend" type="button" aria-label="发送" title="发送 Enter" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          </button>
+
+          <button class="cbtn stop" id="btnStop" type="button" aria-label="停止" title="停止 Esc" hidden>
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+          </button>
+        </div>
+        <div class="cmeta">
+          <span><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span>
+          <span class="grow"></span>
+          <span><kbd>Ctrl</kbd>+<kbd>B</kbd> 面板 · <kbd>Ctrl</kbd>+<kbd>K</kbd> 聚焦 · <kbd>Esc</kbd> 停止</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============ 右侧 Dock ============ -->
+  <aside class="dock" id="dock" aria-label="上下文面板">
+    <div class="grip" id="grip" role="separator" aria-orientation="vertical"
+         aria-label="调整面板宽度" tabindex="0"></div>
+    <div class="dock-tabs" id="dockTabs" role="tablist" aria-label="面板视图"></div>
+    <div class="dock-body" id="dockBody"></div>
+  </aside>
+
+</div>
+
+<!-- ============ 灯箱 ============ -->
+<div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="图件全屏查看">
+  <div class="top">
+    <span class="t"></span>
+    <span class="s"></span>
+    <span class="grow"></span>
+    <button class="ghost-btn" data-act="dock" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
+      在右侧面板打开
+    </button>
+    <button class="ghost-btn" data-act="close" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M6 6l12 12M18 6L6 18"/></svg>
+      关闭 Esc
+    </button>
+  </div>
+  <div class="canvas"></div>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+[project]
+name = "insar-agent"
+version = "0.1.0"
+description = "InSAR processing agent with a reproducibility contract (stale detection / provenance / step-level resume)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+raster = ["numpy>=1.26"]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+insar_agent = ["core/schema.sql", "audit/contract.yaml", "runtime/wsl_wrapper.sh", "registry/scenarios/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# basetemp 指向项目内目录:本机 %TEMP% 的 pytest 根目录存在 ACL 损坏(WinError 5)
+addopts = "-q --basetemp=.pytest_tmp"

@@ -1,0 +1,172 @@
+"""计划生成:registry + 可行性 + 场景 → run/steps/edges 落库(AGENT-DESIGN planner/plan)。
+
+fork_run(absorb-E5,pi 树结构 × 我们的指纹系统):
+    fork 时逐步比较 eval_hash,与父 run 一致且父步已完成的 → 直接标 done 复用产物
+    (find_artifact 沿祖先链解析),其余 pending。参数试探零重算。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from insar_agent.core.stale import compute_step_hashes
+from insar_agent.core.store import Store, new_run_id
+from insar_agent.planner.feasibility import narrow_methods
+from insar_agent.planner.score import pick_method
+from insar_agent.registry.model import Capability
+from insar_agent.registry.scenarios import Scenario
+from insar_agent.runtime.probe import ProbeResult
+
+
+@dataclass
+class PlannedStep:
+    step_id: int
+    name: str
+    method: str
+    params: dict
+    state: str  # pending | done(fork 复用)
+    simulated: bool = False
+    narrowed: list[dict] = field(default_factory=list)  # 候选收窄解释(面板9)
+
+
+@dataclass
+class PlanResult:
+    run_id: str
+    steps: list[PlannedStep]
+    problems: list[str] = field(default_factory=list)  # 不可行步骤说明
+    simulated: bool = False
+
+    def runnable(self) -> bool:
+        return not self.problems
+
+
+def _plan_methods(registry: dict[int, Capability], probe: ProbeResult, *,
+                  scenario: Scenario | None, allow_simulated: bool,
+                  overrides: dict[int, dict] | None = None):
+    """为每一步选方法/参数;返回 (choices, problems)。"""
+    choices: dict[int, PlannedStep] = {}
+    problems: list[str] = []
+    overrides = overrides or {}
+    cloud_done = set(scenario.cloud_completed) if scenario else set()
+    for sid in sorted(registry):
+        cap = registry[sid]
+        prefer = None
+        params = cap.default_params()
+        if scenario and sid in scenario.step_overrides:
+            ov = scenario.step_overrides[sid]
+            prefer = ov.get("method")
+            params.update(ov.get("params", {}))
+        if sid in overrides:
+            prefer = overrides[sid].get("method", prefer)
+            params.update(overrides[sid].get("params", {}))
+
+        if sid in cloud_done:
+            # 云端已完成:不做可行性检查(本机缺 ISCE2/SNAPHU 不阻塞 HyP3 路线)
+            choices[sid] = PlannedStep(
+                step_id=sid, name=cap.name, method=prefer or cap.default_method,
+                params=params, state="skipped",
+                narrowed=[{"method": cap.default_method, "ok": True, "simulated": False,
+                           "reason": "云端(HyP3)已完成"}])
+            continue
+
+        feas = narrow_methods(cap, probe, scenario=scenario.key if scenario else None,
+                              allow_simulated=allow_simulated)
+        picked = pick_method(feas, prefer=prefer)
+        if picked is None:
+            blocked = {f.method.id: f.blocked_reason for f in feas}
+            problems.append(f"第 {sid} 步({cap.name})无可行方法:{blocked}")
+            continue
+        choices[sid] = PlannedStep(
+            step_id=sid, name=cap.name, method=picked.method.id, params=params,
+            state="pending", simulated=picked.simulated,
+            narrowed=[{"method": f.method.id, "ok": f.ok, "simulated": f.simulated,
+                       "reason": f.blocked_reason} for f in feas])
+    return choices, problems
+
+
+def make_plan(store: Store, session_id: str, *, registry: dict[int, Capability],
+              probe: ProbeResult, scenario: Scenario | None = None,
+              workspace: str, intent: dict | None = None,
+              overrides: dict[int, dict] | None = None,
+              allow_simulated: bool = False,
+              agent_hash: str | None = None,
+              git_head: str | None = None, git_dirty: bool | None = None) -> PlanResult:
+    choices, problems = _plan_methods(registry, probe, scenario=scenario,
+                                      allow_simulated=allow_simulated, overrides=overrides)
+    simulated = any(c.simulated for c in choices.values())
+    run_id = new_run_id()
+    tool_versions = probe.tool_versions()
+    store.create_run(run_id, session_id, workspace=workspace, intent=intent or {},
+                     scenario=scenario.key if scenario else None, simulated=simulated,
+                     tool_versions=tool_versions, agent_hash=agent_hash,
+                     git_head=git_head, git_dirty=git_dirty)
+
+    evals: dict[int, str] = {}
+    for sid in sorted(choices):
+        cap = registry[sid]
+        c = choices[sid]
+        upstream = [evals[d] for d in cap.deps if d in evals]
+        hashes = compute_step_hashes(cap, c.method, c.params, upstream, tool_versions)
+        evals[sid] = hashes["eval_hash"]
+        store.create_step(run_id, sid, capability=str(sid), name=cap.name, method=c.method,
+                          params=c.params, hashes=hashes, replay=cap.replay,
+                          state=c.state if c.state == "skipped" else "pending")
+        for dep in cap.deps:
+            store.add_edge(run_id, dep, sid)
+    store.set_run_status(run_id, "planning" if problems else "ready")
+    return PlanResult(run_id=run_id, steps=[choices[s] for s in sorted(choices)],
+                      problems=problems, simulated=simulated)
+
+
+def fork_run(store: Store, parent_run_id: str, *, registry: dict[int, Capability],
+             changes: dict[int, dict], probe: ProbeResult) -> PlanResult:
+    """从父 run 分叉:改若干步的方法/参数,未受影响的已完成步骤直接复用(零重算)。"""
+    parent = store.get_run(parent_run_id)
+    if parent is None:
+        raise KeyError(parent_run_id)
+    parent_steps = {s.step_id: s for s in store.load_steps(parent_run_id)}
+    tool_versions = probe.tool_versions()
+
+    run_id = new_run_id("fork")
+    store.create_run(run_id, parent["session_id"], workspace=parent["workspace"],
+                     intent={"forked_from": parent_run_id, "changes": changes},
+                     scenario=parent["scenario"], parent_run_id=parent_run_id,
+                     simulated=bool(parent["simulated"]), tool_versions=tool_versions)
+
+    planned: list[PlannedStep] = []
+    evals: dict[int, str] = {}
+    for sid in sorted(parent_steps):
+        cap = registry[sid]
+        old = parent_steps[sid]
+        method = changes.get(sid, {}).get("method", old.method)
+        params = dict(old.params)
+        params.update(changes.get(sid, {}).get("params", {}))
+        if params_patch := changes.get(sid, {}).get("params"):
+            errors = cap.validate_params(params_patch)
+            if errors:
+                raise ValueError(f"参数校验失败:{errors}")
+        upstream = [evals[d] for d in cap.deps if d in evals]
+        hashes = compute_step_hashes(cap, method, params, upstream, tool_versions)
+        evals[sid] = hashes["eval_hash"]
+
+        if old.state == "skipped":
+            # 云端已完成的步骤:fork 后仍是 skipped(不重算、不复用产物记录)
+            state = "skipped"
+        else:
+            reuse = (hashes["eval_hash"] == old.eval_hash
+                     and hashes["local_hash"] == old.local_hash
+                     and old.state == "done")
+            state = "done" if reuse else "pending"
+        store.create_step(run_id, sid, capability=str(sid), name=cap.name, method=method,
+                          params=params, hashes=hashes, replay=cap.replay, state=state)
+        if state == "done":
+            # 高水位直接置 VERIFIED:产物经 find_artifact 沿祖先链解析(absorb-E5)
+            store.advance(run_id, sid, "VERIFIED", state="done", run_ok=1,
+                          qa=[{"check": "reused_from_parent", "ok": True,
+                               "detail": parent_run_id}])
+        for dep in cap.deps:
+            store.add_edge(run_id, dep, sid)
+        planned.append(PlannedStep(step_id=sid, name=cap.name, method=method, params=params,
+                                   state=state))
+    store.set_run_status(run_id, "ready")
+    return PlanResult(run_id=run_id, steps=planned, simulated=bool(parent["simulated"]))

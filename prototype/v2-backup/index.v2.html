@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InSAR-Agent · 工作区</title>
+<style>
+:root{
+  --bg:#ffffff; --bg-sub:#f7f7f8; --bg-hover:#eef0f2;
+  --border:#e5e7eb; --border-strong:#d4d7dc;
+  --text:#111827; --text-2:#4b5563; --text-3:#9ca3af;
+  --accent:#3b82f6; --accent-weak:#eff6ff; --accent-border:#bfdbfe;
+  --ok:#22c55e; --ok-weak:#f0fdf4; --stale:#f97316; --stale-weak:#fff7ed; --bad:#ef4444; --bad-weak:#fef2f2;
+  --dark:#0c1e3a;
+  --radius:8px; --radius-sm:6px;
+  --mono:ui-monospace,'Cascadia Code',Consolas,'SF Mono',monospace;
+  --rail:54px; --sider:244px; --drawer:384px; --header:46px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:var(--text);background:var(--bg);font-size:13.5px;line-height:1.6;overflow:hidden}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#d8dbe0;border-radius:5px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,textarea{font-family:inherit}
+.hidden{display:none!important}
+
+.app{display:flex;height:100vh}
+
+/* ===== rail ===== */
+.rail{width:var(--rail);flex-shrink:0;background:var(--bg-sub);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:10px 0 12px;gap:2px}
+.logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;letter-spacing:-.5px;margin-bottom:10px;box-shadow:0 2px 8px rgba(59,130,246,.35)}
+.rail-btn{width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--text-2);position:relative}
+.rail-btn:hover{background:var(--bg-hover);color:var(--text)}
+.rail-btn.active{background:var(--accent-weak);color:var(--accent)}
+.rail-btn svg{width:19px;height:19px}
+.rail-btn .dot{position:absolute;top:8px;right:9px;width:7px;height:7px;border-radius:50%;background:var(--stale);border:1.5px solid var(--bg-sub)}
+.rail-spacer{flex:1}
+
+/* ===== sider (会话列表) ===== */
+.sider{width:var(--sider);flex-shrink:0;background:var(--bg);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.sider-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px 6px}
+.sider-head .t{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--text-3);text-transform:uppercase}
+.newchat{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--text-2)}
+.newchat:hover{background:var(--bg-hover)}
+.newchat svg{width:16px;height:16px}
+.slist{flex:1;overflow-y:auto;padding:2px 8px 8px}
+.sitem{display:flex;flex-direction:column;gap:1px;padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:1px}
+.sitem:hover{background:var(--bg-sub)}
+.sitem.active{background:var(--accent-weak)}
+.sitem .name{font-size:13px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sitem .sub{font-size:11px;color:var(--text-3);display:flex;gap:8px;white-space:nowrap;overflow:hidden}
+.sitem .sub .st{display:inline-flex;align-items:center;gap:4px}
+.sider-foot{border-top:1px solid var(--border);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.mode-sw{display:flex;background:var(--bg-sub);border:1px solid var(--border);border-radius:8px;padding:2px;gap:2px}
+.mode-sw button{flex:1;padding:5px 0;font-size:12px;color:var(--text-2);border-radius:6px;font-weight:500}
+.mode-sw button.on{background:#fff;color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.sider-foot .user{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-2)}
+.avatar{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#0c1e3a,#1e40af);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+
+/* ===== main ===== */
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.header{height:var(--header);flex-shrink:0;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:10px;background:var(--bg)}
+.header .title{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.header .title .sep{color:var(--text-3);font-weight:400;margin:0 6px}
+.header .sub{font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.header .grow{flex:1}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--border);color:var(--text-2);white-space:nowrap}
+.badge .dot{width:7px;height:7px;border-radius:50%}
+.badge.ok{color:var(--ok);border-color:#bbf7d0;background:var(--ok-weak)}
+.badge.stale{color:var(--stale);border-color:#fed7aa;background:var(--stale-weak)}
+.badge.run{color:var(--accent);border-color:var(--accent-border);background:var(--accent-weak)}
+.btn{padding:6px 14px;border-radius:8px;font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn svg{width:14px;height:14px}
+.btn.primary{background:var(--accent);color:#fff}
+.btn.primary:hover{background:#2563eb}
+.btn.primary:disabled{opacity:.5;cursor:not-allowed}
+.btn.ghost{border:1px solid var(--border);color:var(--text-2);background:#fff}
+.btn.ghost:hover{background:var(--bg-sub);color:var(--text)}
+.btn.warn{background:var(--stale);color:#fff}
+.btn.warn:hover{background:#ea580c}
+
+/* ===== chat ===== */
+.chat{flex:1;overflow-y:auto;padding:0 0 8px}
+.chat-inner{max-width:820px;margin:0 auto;padding:20px 28px 8px;display:flex;flex-direction:column;gap:16px}
+
+/* hero */
+.hero{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;min-height:52vh;gap:6px;padding:0 20px}
+.hero .logo{width:52px;height:52px;border-radius:14px;font-size:22px;margin-bottom:10px;box-shadow:0 6px 20px rgba(59,130,246,.3)}
+.hero h1{font-size:21px;font-weight:700;letter-spacing:-.02em}
+.hero p{color:var(--text-2);font-size:13.5px;max-width:480px}
+.hero-chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:18px}
+.chip{padding:7px 14px;border-radius:999px;border:1px solid var(--border);background:#fff;font-size:12.5px;color:var(--text-2);transition:all .15s}
+.chip:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-weak)}
+.hero-hint{margin-top:14px;font-size:11.5px;color:var(--text-3)}
+
+/* messages */
+.msg{display:flex;gap:10px}
+.msg .mav{width:26px;height:26px;border-radius:7px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}
+.msg.user{flex-direction:row-reverse}
+.msg.user .mav{display:none}
+.msg .bubble{max-width:calc(100% - 36px)}
+.msg.user .bubble{background:var(--accent);color:#fff;padding:9px 14px;border-radius:14px 14px 3px 14px;font-size:13.5px;line-height:1.55}
+.msg.user .bubble .mono{color:#dbeafe}
+.msg.agent .bubble{flex:1;min-width:0}
+.msg .who{font-size:11.5px;color:var(--text-3);margin-bottom:3px;display:flex;align-items:center;gap:6px}
+.msg .who .stamp{margin-left:auto;font-size:10.5px}
+.msg.agent .who{color:var(--text-2);font-weight:600}
+.msg .text{font-size:13.5px;color:var(--text)}
+.msg .text .mono{font-family:var(--mono);font-size:12.5px;background:var(--bg-sub);padding:1px 5px;border-radius:4px}
+.msg.thinking .bubble{border-left:2px solid #fbbf24;padding-left:12px;margin-left:2px}
+.msg.thinking .text{color:var(--text-2);font-style:italic;font-size:13px}
+.msg.thinking .who{color:#b45309}
+
+/* cards */
+.card{border:1px solid var(--border);border-radius:var(--radius);background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.card+.card{margin-top:10px}
+.card-head{display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none}
+.card-head:hover{background:var(--bg-sub)}
+.card-head .ic{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.card-head .ic svg{width:13px;height:13px}
+.card-head .t{font-weight:600;font-size:13px}
+.card-head .desc{font-size:11.5px;color:var(--text-3);margin-left:2px}
+.card-head .grow{flex:1}
+.card-head .chev{color:var(--text-3);transition:transform .2s}
+.card-head .chev svg{width:14px;height:14px;display:block}
+.card.open .card-head .chev{transform:rotate(90deg)}
+.card-body{display:none;padding:0 14px 12px;border-top:1px solid var(--border)}
+.card.open .card-body{display:block}
+
+/* pipeline card */
+.steps{display:flex;flex-direction:column}
+.step{display:flex;align-items:center;gap:10px;padding:7px 14px;border-left:3px solid transparent;transition:all .25s}
+.step:hover{background:var(--bg-sub)}
+.step .snum{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;flex-shrink:0}
+.step.pending .snum{background:var(--bg-hover);color:var(--text-3)}
+.step.done .snum{background:var(--ok);color:#fff}
+.step.running .snum{background:var(--accent);color:#fff;animation:pulse 1.4s infinite}
+.step.failed .snum{background:var(--bad);color:#fff}
+.step.stale .snum{background:var(--stale);color:#fff}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.4)}50%{box-shadow:0 0 0 5px rgba(59,130,246,0)}}
+.step .sname{font-size:13px;font-weight:500;flex:1}
+.step .smeta{font-size:11px;color:var(--text-3);font-family:var(--mono)}
+.step .sflag{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:999px}
+.step .sflag.ok{background:var(--ok-weak);color:var(--ok)}
+.step .sflag.stale{background:var(--stale-weak);color:var(--stale)}
+.step .sflag.run{background:var(--accent-weak);color:var(--accent)}
+.step.done{border-left-color:var(--ok)}
+.step.stale{border-left-color:var(--stale);background:var(--stale-weak)}
+.step.running{border-left-color:var(--accent)}
+.stale-shake{animation:staleFlash .6s ease-out}
+@keyframes staleFlash{0%{background:#ffedd5}100%{background:var(--stale-weak)}}
+
+/* param / method */
+.param{display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--bg-hover)}
+.param .k{font-family:var(--mono);font-size:12.5px;color:var(--text-2);background:var(--bg-sub);padding:2px 7px;border-radius:5px}
+.param .v{font-family:var(--mono);font-size:12.5px;color:var(--text);font-weight:600}
+.param .grow{flex:1}
+.param .edit{font-size:11.5px;color:var(--accent);font-weight:600}
+.param .edit:hover{text-decoration:underline}
+.cmdline{font-family:var(--mono);font-size:12px;background:#0f172a;color:#e2e8f0;padding:10px 14px;border-radius:7px;margin:10px 14px;overflow-x:auto;white-space:pre;line-height:1.5}
+.cmdline .c1{color:#7dd3fc}.cmdline .c2{color:#a5b4fc}.cmdline .c3{color:#86efac}.cmdline .c4{color:#fbbf24}
+.cmdline .dim{color:#64748b}
+
+/* candidate card */
+.cands{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.cand{border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 12px;cursor:pointer;transition:all .15s;display:flex;gap:10px;align-items:flex-start;background:#fff}
+.cand:hover{border-color:var(--accent)}
+.cand.sel{border-color:var(--accent);background:var(--accent-weak);box-shadow:0 0 0 1px var(--accent)}
+.cand .radio{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--border-strong);flex-shrink:0;margin-top:2px;display:flex;align-items:center;justify-content:center}
+.cand.sel .radio{border-color:var(--accent)}
+.cand.sel .radio::after{content:'';width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.cand .m{font-weight:600;font-size:13px;display:flex;align-items:center;gap:7px}
+.cand .m .tag{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;letter-spacing:.02em}
+.cand .m .tag.rec{background:var(--ok-weak);color:var(--ok)}
+.cand .m .tag.cur{background:var(--stale-weak);color:var(--stale)}
+.cand .why{font-size:12px;color:var(--text-2);margin-top:2px}
+.cand .why .mono{font-family:var(--mono);font-size:11.5px;background:var(--bg-sub);padding:0 4px;border-radius:3px}
+.candfoot{padding:10px 14px;border-top:1px solid var(--bg-hover);display:flex;align-items:center;gap:10px;background:var(--bg-sub)}
+
+/* evidence / provenance */
+.prov-tree{font-family:var(--mono);font-size:12px;padding:10px 14px;display:flex;flex-direction:column;gap:4px;color:var(--text-2);overflow-x:auto}
+.prov-tree .row{display:flex;gap:8px;align-items:center;white-space:nowrap}
+.prov-tree .row .k{color:var(--text-3);min-width:64px}
+.prov-tree .row .v{color:var(--text)}
+.prov-tree .row .hl{color:var(--accent)}
+.ladder{display:flex;padding:12px 14px;gap:4px}
+.ladder .lv{flex:1;text-align:center;font-size:10px;font-weight:700;padding:5px 0;border-radius:5px;color:var(--text-3);background:var(--bg-sub);border:1px solid var(--border)}
+.ladder .lv.on{color:var(--ok);border-color:#bbf7d0;background:var(--ok-weak)}
+
+/* result */
+.res-body{padding:12px 14px}
+.fig{border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:#fff}
+.fig .figbar{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border);background:var(--bg-sub);font-size:11.5px;color:var(--text-2)}
+.fig .figbar .mono{font-family:var(--mono);margin-left:auto;font-size:10.5px;color:var(--text-3)}
+.fig svg{display:block;width:100%;height:auto}
+.metrics{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.metric{flex:1;min-width:120px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 12px}
+.metric .mv{font-size:16px;font-weight:700;font-family:var(--mono)}
+.metric .mk{font-size:11px;color:var(--text-3)}
+table.tbl{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}
+table.tbl th,table.tbl td{padding:6px 10px;border-bottom:1px solid var(--bg-hover);text-align:left}
+table.tbl th{color:var(--text-3);font-weight:600;font-size:11px}
+table.tbl .mono{font-family:var(--mono);font-size:11.5px}
+table.tbl td.ck{cursor:pointer;transition:background .12s}
+table.tbl tr.ck:hover td{background:var(--accent-weak)}
+.xval{display:flex;align-items:center;gap:8px;margin-top:10px;padding:9px 12px;border-radius:var(--radius-sm);background:var(--ok-weak);border:1px solid #bbf7d0;font-size:12.5px;color:#15803d}
+.xval .big{font-family:var(--mono);font-weight:700;font-size:15px}
+
+/* banner */
+.banner{margin:2px 0;padding:9px 14px;border-radius:var(--radius);font-size:12.5px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.banner.stale{background:var(--stale-weak);border:1px solid #fed7aa;color:#9a3412}
+.banner.ok{background:var(--ok-weak);border:1px solid #bbf7d0;color:#15803d}
+.banner.info{background:var(--accent-weak);border:1px solid var(--accent-border);color:#1d4ed8}
+.banner .grow{flex:1}
+
+/* confirm card */
+.confirm{border:1px solid #fed7aa;background:var(--stale-weak)}
+.confirm .q{padding:10px 14px;font-size:13px;font-weight:600}
+.confirm .preview{padding:0 14px 10px;display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--text-2)}
+.confirm .preview .row{display:flex;gap:8px}
+.confirm .preview .row .k{min-width:70px;color:var(--text-3)}
+.confirm .preview .row .v{font-family:var(--mono);color:var(--text)}
+.confirm .acts{display:flex;gap:8px;padding:10px 14px;border-top:1px solid #fed7aa}
+
+/* input bar */
+.inputbar{border-top:1px solid var(--border);background:var(--bg);flex-shrink:0;padding:12px 20px 14px}
+.input-shell{max-width:820px;margin:0 auto}
+.input-box{display:flex;align-items:flex-end;gap:8px;border:1px solid var(--border-strong);border-radius:12px;padding:8px 8px 8px 14px;background:#fff;transition:border-color .15s,box-shadow .15s}
+.input-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+.input-box textarea{flex:1;border:none;outline:none;resize:none;font-size:13.5px;line-height:1.5;max-height:120px;padding:6px 0;color:var(--text);background:transparent}
+.input-box textarea::placeholder{color:var(--text-3)}
+.ibtn{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-3);flex-shrink:0}
+.ibtn:hover{background:var(--bg-sub);color:var(--text-2)}
+.ibtn.send{background:var(--accent);color:#fff;width:34px;height:34px}
+.ibtn.send:hover{background:#2563eb}
+.ibtn.send:disabled{opacity:.4;cursor:not-allowed}
+.ibtn svg{width:16px;height:16px}
+.input-hint{display:flex;align-items:center;gap:12px;margin-top:7px;font-size:11px;color:var(--text-3);padding:0 4px}
+.input-hint .keys{font-family:var(--mono);font-size:10.5px}
+
+/* ===== drawer ===== */
+.drawer{width:var(--drawer);flex-shrink:0;background:var(--bg-sub);border-left:1px solid var(--border);display:none;flex-direction:column}
+.drawer.on{display:flex}
+.drawer-tabs{display:flex;padding:8px 6px 0;gap:1px;border-bottom:1px solid var(--border);background:var(--bg)}
+.drawer-tabs button{flex:1;padding:7px 3px;font-size:11.5px;color:var(--text-2);border-radius:7px 7px 0 0;font-weight:500;display:flex;align-items:center;justify-content:center;gap:4px;border-bottom:2px solid transparent;white-space:nowrap}
+.drawer-tabs button.on{color:var(--text);font-weight:600;border-bottom-color:var(--accent)}
+.drawer-tabs button svg{width:13px;height:13px;flex-shrink:0}
+.drawer-tabs button .cnt{font-size:10px;background:var(--bg-hover);padding:0 5px;border-radius:999px;color:var(--text-2)}
+.drawer-tabs button.on .cnt{background:var(--accent-weak);color:var(--accent)}
+.drawer-body{flex:1;overflow-y:auto;padding:12px}
+.dsec{font-size:11px;font-weight:700;color:var(--text-3);letter-spacing:.05em;margin:14px 0 6px;display:flex;align-items:center;gap:8px}
+.dsec:first-child{margin-top:0}
+.dsec::after{content:'';flex:1;height:1px;background:var(--border)}
+.dlist{display:flex;flex-direction:column;gap:2px}
+.ditem{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:7px;font-size:12.5px;color:var(--text);cursor:pointer}
+.ditem:hover{background:var(--bg-hover)}
+.ditem .ic{color:var(--text-3);display:flex}
+.ditem .ic svg{width:15px;height:15px}
+.ditem .name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ditem .meta{font-size:10.5px;color:var(--text-3);font-family:var(--mono)}
+.ditem .hash{font-family:var(--mono);font-size:10px;color:var(--text-3);background:var(--bg-hover);padding:1px 6px;border-radius:4px}
+.ditem .st{width:8px;height:8px;border-radius:50%}
+.mapbox{border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:#fff}
+.mapbox svg{display:block;width:100%}
+.maplay{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.maplay .ly{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:6px 9px;border-radius:7px;cursor:pointer}
+.maplay .ly:hover{background:var(--bg-hover)}
+.maplay .ly .sw{width:30px;height:16px;border-radius:999px;background:var(--border-strong);position:relative;transition:background .2s;flex-shrink:0}
+.maplay .ly.on .sw{background:var(--accent)}
+.maplay .ly .sw::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .2s}
+.maplay .ly.on .sw::after{left:16px}
+.maplay .ly .t{flex:1}
+.maplay .ly .h{font-size:10.5px;color:var(--text-3)}
+.timeline{display:flex;align-items:center;gap:6px;margin-top:12px}
+.timeline .bar{flex:1;height:4px;border-radius:2px;background:linear-gradient(to right,#dbeafe 0 20%,#93c5fd 20% 40%,#60a5fa 40% 60%,#3b82f6 60% 80%,#2563eb 80% 100%);position:relative}
+.timeline input[type=range]{position:absolute;inset:0;width:100%;opacity:0;cursor:pointer;margin:0}
+.timeline .dt{font-size:10.5px;color:var(--text-3);font-family:var(--mono);min-width:86px;text-align:right}
+
+/* ===== gallery / images ===== */
+.gal{display:flex;flex-direction:column;gap:8px}
+.gal-item{border:1px solid var(--border);border-radius:7px;background:#fff;overflow:hidden;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.gal-item:hover{border-color:var(--accent);box-shadow:0 1px 5px rgba(59,130,246,.18)}
+.gal-item .gbar{display:flex;align-items:center;gap:7px;padding:6px 10px;border-bottom:1px solid var(--border);background:var(--bg-sub);font-size:11.5px;color:var(--text-2)}
+.gal-item .gbar .mono{font-family:var(--mono);margin-left:auto;font-size:10px;color:var(--text-3)}
+.gal-item .gbar .exp{color:var(--text-3);display:flex;transition:color .15s}
+.gal-item:hover .gbar .exp{color:var(--accent)}
+.gal-item .gbar .exp svg{width:13px;height:13px}
+.gal-item .gbody{padding:8px}
+.gal-item .gbody svg{display:block;width:100%;height:auto;border-radius:4px}
+.gal-item .gdesc{padding:7px 10px;font-size:11.5px;color:var(--text-2);border-top:1px solid var(--bg-hover)}
+.gal-item .gdesc .tag{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;background:var(--ok-weak);color:var(--ok);margin-right:6px}
+.gal-item .gdesc .tag.stale{background:var(--stale-weak);color:var(--stale)}
+
+/* map view + points */
+.mapview{border:1px solid var(--border);border-radius:7px;background:#fff;overflow:hidden}
+.mapview .mv-tool{display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:1px solid var(--border);background:var(--bg-sub);font-size:11.5px;color:var(--text-2);flex-wrap:wrap}
+.mapview .mv-tool .mono{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--text-3)}
+.pointchip{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);cursor:pointer;color:var(--text-2);background:#fff}
+.pointchip.on{border-color:var(--accent);background:var(--accent-weak);color:var(--accent);font-weight:600}
+.mapbox .pt{cursor:pointer}
+.mapbox .pt circle{fill:#fff;stroke:#0c1e3a;stroke-width:2.5}
+.mapbox .pt:hover circle{fill:var(--accent)}
+.mapbox .pt.on circle{fill:var(--accent);stroke:var(--dark)}
+.mapbox .pt.on text{font-weight:700}
+.ts-card{border:1px solid var(--border);border-radius:7px;background:#fff;padding:10px 12px;margin-top:8px}
+.ts-card .ts-head{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;margin-bottom:4px}
+.ts-card .ts-head .mono{font-family:var(--mono);font-weight:400;font-size:10.5px;color:var(--text-3);margin-left:auto}
+.ts-card svg{display:block;width:100%;height:auto}
+.ts-card .ts-stats{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.ts-card .ts-stats .tsv{font-size:11px;border:1px solid var(--border);border-radius:6px;padding:4px 9px;color:var(--text-2);background:var(--bg-sub)}
+.ts-card .ts-stats .tsv b{font-family:var(--mono);font-size:12px;color:var(--text)}
+
+/* file preview */
+.filepre{background:#fff;border:1px solid var(--border);border-radius:7px;overflow:hidden;margin-top:10px}
+.filepre .fp-bar{display:flex;align-items:center;gap:8px;padding:7px 11px;border-bottom:1px solid var(--border);background:var(--bg-sub);font-size:12px;font-weight:600}
+.filepre .fp-bar .mono{font-family:var(--mono);font-weight:400;font-size:10.5px;color:var(--text-3);margin-left:auto}
+.filepre .fp-bar .ro{font-size:10px;font-weight:700;color:var(--text-3);background:var(--bg-hover);padding:1px 7px;border-radius:999px}
+.filepre pre{font-family:var(--mono);font-size:11.5px;line-height:1.65;padding:11px 13px;overflow-x:auto;color:var(--text-2);white-space:pre;margin:0}
+.filepre pre .hl2{color:var(--accent);font-weight:600}
+.filepre pre .cm{color:var(--text-3)}
+.filepre .fp-img{padding:10px}
+.filepre .fp-img svg{display:block;width:100%;height:auto;border-radius:4px}
+.filepre .fp-meta{display:flex;gap:6px;flex-wrap:wrap;padding:0 12px 10px}
+.filepre .fp-meta .mv{font-size:10.5px;color:var(--text-3);background:var(--bg-sub);border:1px solid var(--border);padding:2px 8px;border-radius:999px}
+.filepre .fp-empty{padding:26px 14px;text-align:center;font-size:12px;color:var(--text-3)}
+
+/* browser mock */
+.brow{display:flex;flex-direction:column;background:#fff;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.brow .baddr{display:flex;align-items:center;gap:6px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--bg-sub)}
+.brow .baddr .dot{width:9px;height:9px;border-radius:50%;background:#fca5a5;flex-shrink:0}
+.brow .baddr .dot:nth-child(2){background:#fcd34d}
+.brow .baddr .dot:nth-child(3){background:#86efac}
+.brow .baddr input{flex:1;border:1px solid var(--border);border-radius:6px;background:#fff;padding:5px 10px;font-size:11.5px;font-family:var(--mono);outline:none;color:var(--text);min-width:0}
+.brow .baddr input:focus{border-color:var(--accent)}
+.brow .baddr .go{width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--text-2);background:var(--bg-hover);flex-shrink:0}
+.brow .baddr .go:hover{color:var(--accent)}
+.brow .bmarks{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.brow .bmarks .bm{font-size:11px;padding:4px 10px;border-radius:999px;border:1px solid var(--border);cursor:pointer;color:var(--text-2);background:#fff}
+.brow .bmarks .bm:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-weak)}
+.brow .bpage{font-size:12px}
+.brow .bpage .bp-top{background:linear-gradient(135deg,#0c1e3a,#1e40af);color:#fff;padding:14px 16px}
+.brow .bpage .bp-top .h{font-size:14px;font-weight:700}
+.brow .bpage .bp-top .s{font-size:11px;color:#bfdbfe;margin-top:2px}
+.brow .bpage .bp-tools{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--bg-hover);flex-wrap:wrap}
+.brow .bpage .bp-tools .tk{font-size:10.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--border);color:var(--text-2)}
+.brow .bpage .bp-res{padding:10px 12px;display:flex;flex-direction:column;gap:7px}
+.brow .bpage .bp-res .r{border:1px solid var(--bg-hover);border-radius:6px;padding:8px 11px;font-size:11.5px;color:var(--text-2);background:#fff}
+.brow .bpage .bp-res .r b{color:var(--text);font-size:12px;display:block}
+.brow .bpage .bp-res .r .m{font-family:var(--mono);font-size:10px;color:var(--text-3);margin-top:2px}
+.brow .bpage .bp-placeholder{padding:30px 16px;text-align:center;color:var(--text-3);font-size:11.5px;line-height:1.8}
+
+/* lightbox */
+.lightbox{position:fixed;inset:0;background:rgba(10,15,28,.95);z-index:150;display:none;flex-direction:column;color:#e2e8f0;padding:16px 22px}
+.lightbox.on{display:flex}
+.lb-top{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.lb-top .t{font-size:14px;font-weight:600}
+.lb-top .sub{font-size:11.5px;color:#94a3b8}
+.lb-top .grow{flex:1}
+.lb-body{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;min-height:0;padding:8px 0}
+.lb-body svg{max-width:100%;max-height:100%;background:#fff;border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.lb-acts{display:flex;gap:8px;margin-top:12px}
+.lb-acts .btn{color:#0f172a}
+
+/* ===== overlay ===== */
+.overlay{position:fixed;inset:0;background:rgba(10,15,28,.94);z-index:100;display:flex;flex-direction:column;color:#e2e8f0}
+.ov-top{display:flex;align-items:center;gap:12px;padding:14px 22px;border-bottom:1px solid rgba(255,255,255,.12)}
+.ov-top .t{font-size:14px;font-weight:600}
+.ov-top .sub{font-size:12px;color:#94a3b8}
+.ov-top .grow{flex:1}
+.ov-stepper{display:flex;padding:14px 22px 0;gap:4px;overflow-x:auto}
+.ov-step{display:flex;align-items:center;gap:6px;font-size:11px;color:#64748b;white-space:nowrap;padding:4px 8px;border-radius:6px}
+.ov-step .n{width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:9px}
+.ov-step.done{color:#86efac}.ov-step.done .n{background:rgba(34,197,94,.25)}
+.ov-step.run{color:#7dd3fc;background:rgba(59,130,246,.15)}.ov-step.run .n{background:rgba(59,130,246,.4);animation:pulse 1.4s infinite}
+.ov-step.wait{color:#64748b}
+.ov-log{flex:1;overflow-y:auto;padding:16px 22px;font-family:var(--mono);font-size:12px;line-height:1.7}
+.ov-log .ln{white-space:pre-wrap;word-break:break-all}
+.ov-log .ln.t{color:#64748b}
+.ov-log .ln.c{color:#86efac}
+.ov-log .ln.w{color:#fbbf24}
+.ov-log .ln.e{color:#f87171}
+.ov-log .ln.s{color:#7dd3fc}
+.ov-bottom{display:flex;align-items:center;gap:14px;padding:14px 22px;border-top:1px solid rgba(255,255,255,.12)}
+.ov-bar{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden}
+.ov-bar i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#3b82f6,#22c55e);transition:width .3s}
+.ov-pct{font-family:var(--mono);font-size:12px;color:#94a3b8;min-width:44px;text-align:right}
+.ov-close{background:rgba(255,255,255,.1);color:#e2e8f0;padding:6px 14px;border-radius:8px;font-size:12px;display:flex;align-items:center;gap:6px}
+.ov-close:hover{background:rgba(255,255,255,.2)}
+.ov-close svg{width:13px;height:13px}
+
+/* typing */
+.typing{display:inline-flex;gap:4px;padding:4px 2px}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--text-3);animation:blink 1.2s infinite}
+.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+.fadein{animation:fadein .35s ease-out}
+@keyframes fadein{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+@media (max-width:1100px){.sider{display:none}.drawer{position:absolute;right:0;top:0;bottom:0;z-index:50;box-shadow:-8px 0 24px rgba(0,0,0,.08)}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 左 rail -->
+  <nav class="rail">
+    <div class="logo">IA</div>
+    <button class="rail-btn active" id="railChat" title="对话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
+    <button class="rail-btn" id="railSessions" title="会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
+    <button class="rail-btn" id="railRun" title="运行" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3" fill="currentColor" stroke="none"/></svg></button>
+    <div class="rail-spacer"></div>
+    <button class="rail-btn" id="railPanel" title="面板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 12h6"/></svg></button>
+  </nav>
+
+  <!-- 会话列表 -->
+  <aside class="sider" id="sider">
+    <div class="sider-head">
+      <span class="t">会话</span>
+      <button class="newchat" id="newChat" title="新建会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+    </div>
+    <div class="slist" id="slist"></div>
+    <div class="sider-foot">
+      <div class="mode-sw" id="modeSw">
+        <button class="on" data-mode="expert">专家</button>
+        <button data-mode="guide">向导</button>
+      </div>
+      <div class="user"><span class="avatar">师</span><span>讲师账号 · 本机</span></div>
+    </div>
+  </aside>
+
+  <!-- 中央对话 -->
+  <main class="main">
+    <header class="header">
+      <span class="title">InSAR-Agent<span class="sep">/</span></span>
+      <span class="sub" id="hdrSub">青海玉树 · 冻土形变 · SBAS 时序</span>
+      <div class="grow"></div>
+      <span class="badge" id="hdrStatus"><span class="dot"></span><span id="hdrStatusTxt">空闲</span></span>
+      <button class="btn ghost" id="btnReplay" style="display:none">重放演示</button>
+      <button class="btn primary" id="btnRun" style="display:none"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>运行全部</button>
+    </header>
+
+    <div class="chat" id="chat"></div>
+
+    <div class="inputbar">
+      <div class="input-shell">
+        <div class="input-box">
+          <textarea id="input" rows="1" placeholder="向 InSAR-Agent 描述研究任务，例如：分析玉树冻土 2020-2023 的 SBAS 时序形变"></textarea>
+          <button class="ibtn" title="附件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+          <button class="ibtn" title="清除上下文"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z"/></svg></button>
+          <button class="ibtn send" id="btnSend" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg></button>
+        </div>
+        <div class="input-hint">
+          <span>回车发送 · Shift+回车换行</span>
+          <span style="flex:1"></span>
+          <span class="keys">演示：候选集 → STALE 级联 → 运行；对话中的图 / 文件 / 报告可点击在右侧打开</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 右侧面板 -->
+  <aside class="drawer" id="drawer">
+    <div class="drawer-tabs" id="drawerTabs">
+      <button data-tab="pipeline" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>流水线<span class="cnt" id="pipelineCnt">11</span></button>
+      <button data-tab="images"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>影像</button>
+      <button data-tab="files"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>文件</button>
+      <button data-tab="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>审计</button>
+      <button data-tab="report"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>报告</button>
+      <button data-tab="browser"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>浏览器</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
+</div>
+
+<!-- 运行 Overlay -->
+<div class="overlay hidden" id="overlay">
+  <div class="ov-top">
+    <div class="t" id="ovTitle">运行流水线</div>
+    <div class="sub" id="ovSub">解缠 → 时序反演 → 误差校正 → 形变模型 → 出图 → 质检</div>
+    <div class="grow"></div>
+    <button class="ov-close" id="ovClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>取消处理</button>
+  </div>
+  <div class="ov-stepper" id="ovStepper"></div>
+  <div class="ov-log" id="ovLog"></div>
+  <div class="ov-bottom">
+    <div class="ov-bar"><i id="ovBar"></i></div>
+    <span class="ov-pct" id="ovPct">0%</span>
+  </div>
+</div>
+
+<!-- 全屏图查看 -->
+<div class="lightbox" id="lightbox">
+  <div class="lb-top"><span class="t" id="lbTitle"></span><span class="sub" id="lbSub"></span><span class="grow"></span><button class="ov-close" id="lbClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>关闭</button></div>
+  <div class="lb-body" id="lbBody"></div>
+  <div class="lb-acts">
+    <button class="btn primary" id="lbOpenRight"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>在右侧面板打开</button>
+  </div>
+</div>
+
+<script>
+/* ============ 数据 ============ */
+const STEPS=[
+ {id:1, name:'数据获取',  cmd:'fetch_stack.py --site yushu --dates 2020-01..2023-12 --platform sentinel-1', dur:'6m', meta:'46 景 SLC'},
+ {id:2, name:'辅助数据',  cmd:'dem.py --download copernicus-30m --region yushu ; orbits.py --precise', dur:'2m', meta:'DEM + 精密轨道'},
+ {id:3, name:'配准',      cmd:'isce2 topo_rslc.py --stack config.yaml', dur:'18m', meta:'46 景'},
+ {id:4, name:'干涉',      cmd:'isce2 interferogram.py --method tops', dur:'52m', meta:'1,035 对'},
+ {id:5, name:'滤波',      cmd:'isce2 filter.py --goldstein 0.4', dur:'31m', meta:'γ 均值 0.62'},
+ {id:6, name:'解缠',      cmd:'mintpy unwrap --method 3D_FULL', dur:'24m', meta:'unwrap_method=3D_FULL', method:'3D_FULL', cand:true},
+ {id:7, name:'时序反演',  cmd:'mintpy_sbas.py --unw 3D_FULL_out --update', dur:'38m', meta:'mintpy_sbas'},
+ {id:8, name:'误差校正',  cmd:'mintpy remove_ramp --troposphere --ionosphere', dur:'9m', meta:'std 降 32%'},
+ {id:9, name:'形变模型',  cmd:'mintpy timeseries2velocity --model poly_periodic', dur:'7m', meta:'poly_periodic'},
+ {id:10,name:'出图导出',  cmd:'mintpy save_gbis --gbis figs/*.pdf', dur:'4m', meta:'期刊级图表'},
+ {id:11,name:'质检',      cmd:'crossval_ps_sbas.py --ref ps_chain --corr 0.85', dur:'11m', meta:'PS/SBAS 交叉验证'},
+];
+const CANDIDATES=[
+ {m:'MCF', tag:'推荐', tagc:'rec', why:'Minimum Cost Flow。Sentinel-1 冻土低相干区稳健，与 MintPy 原生兼容，下游 poly_periodic 模型直接可用。', extra:'耗时 ~24m，内存 8G'},
+ {m:'SNAPHU', tag:'备选', tagc:'', why:'精度更高但需外部启动参数，冰/冻土区需人工调 cost function，难以全自动。', extra:'耗时 ~40m，需交互配置'},
+ {m:'3D_FULL', tag:'当前', tagc:'cur', why:'当前配置。本机无 3D 相位解缠工具链，且输出格式与下游时序反演不兼容。', extra:'状态：不可用'},
+];
+const FILES=[
+ {ic:'dir', name:'data/slc', meta:'46 景', hash:''},
+ {ic:'dir', name:'data/dem', meta:'copernicus 30m', hash:''},
+ {ic:'file', name:'config.yaml', meta:'1.2 KB', hash:'7f3a…c91e'},
+ {ic:'file', name:'params/unwrap.yaml', meta:'880 B', hash:'b4d0…2a11'},
+ {ic:'file', name:'products/velocities/vel_yushu_2023.png', meta:'2.4 MB', hash:'9e12…f0c7'},
+ {ic:'file', name:'products/timeseries/ts_46_2023.png', meta:'1.8 MB', hash:'55ab…d2e9'},
+ {ic:'file', name:'products/report/methods_draft.md', meta:'6.1 KB', hash:'cc9f…4b53'},
+ {ic:'file', name:'provenance.json', meta:'212 KB', hash:'0d7e…88f0'},
+];
+const DOWN_FILES=new Set(['params/unwrap.yaml','products/velocities/vel_yushu_2023.png','products/timeseries/ts_46_2023.png','products/report/methods_draft.md']);
+const IMAGES=[
+ {id:'vel', name:'vel_yushu_2023.png', t:'形变速率 · LOS (mm/yr)', meta:'mintpy save_gbis · 2.4 MB', hash:'9e12…f0c7', stale:false, tag:'关键结果'},
+ {id:'ts', name:'ts_46_2023.png', t:'累积位移时序 · 46 景', meta:'mintpy save_gbis · 1.8 MB', hash:'55ab…d2e9', stale:false, tag:'关键结果'},
+ {id:'ifg', name:'ifg_2021-06-15.png', t:'干涉图 · 2021-06-15', meta:'isce2 interferogram · 640 KB', hash:'c3e2…7a11', stale:true, tag:'原始产物'},
+ {id:'coh', name:'coh_avg.png', t:'相干性均值 · 1,035 对', meta:'isce2 filter · 210 KB', hash:'8f44…b9c0', stale:true, tag:'原始产物'},
+];
+const DTS=['2020-01','2020-07','2021-01','2021-07','2022-01','2022-07','2023-01','2023-07','2023-12'];
+const POINTS=[
+ {id:'A', name:'冻土区 A', x:105, y:118, rate:-23.4, std:2.1, n:13204, ts:[0,-3.1,-5.2,-7.8,-10.6,-13.9,-16.7,-20.1,-23.4]},
+ {id:'city', name:'玉树市区', x:155, y:88, rate:11.2, std:0.8, n:55120, ts:[0,1.6,3.1,4.4,5.8,7.2,8.6,9.9,11.2]},
+ {id:'gnss', name:'GNSS 校验站', x:215, y:55, rate:-23.8, std:null, n:1, ts:[0,-2.9,-5.4,-7.9,-10.2,-13.1,-16.9,-20.4,-23.8], ref:true},
+];
+const FILECONTENTS={
+ 'config.yaml': {type:'text', rows:[
+  ['# InSAR-Agent 处理配置 · yushu-2023', 'cm'],
+  ['site: yushu', ''],
+  ['platform: sentinel-1', ''],
+  ['stack:', ''],
+  ['  dates: 2020-01..2023-12', ''],
+  ['  scenes: 46', ''],
+  ['  orbit: ascending', ''],
+  ['  pol: VV', ''],
+  ['dem: copernicus-30m', ''],
+  ['coreg: isce2 topo_rslc', ''],
+  ['interferogram:', ''],
+  ['  method: tops', ''],
+  ['  pairs: 1035', ''],
+  ['  filter: goldstein 0.4', ''],
+  ['unwrapp:', ''],
+  ['  method: MCF', 'hl2'],
+  ['  min_coherence: 0.25', ''],
+  ['timeseries: mintpy_sbas', ''],
+  ['model: poly_periodic', ''],
+  ['qa: crossval_ps_sbas (corr 0.85)', ''],
+ ]},
+ 'params/unwrap.yaml': {type:'text', rows:[
+  ['# 解缠参数（第 6 步决策产物）', 'cm'],
+  ['method: MCF', 'hl2'],
+  ['cost: 0.25 (相干性阈值)', ''],
+  ['mst: false', ''],
+  ['threads: 8', ''],
+  ['snafu: 未使用（需人工调参，不满足全自动）', 'cm'],
+  ['---', ''],
+  ['指纹: b4d0…2a11 → 重写中', 'hl2'],
+ ]},
+ 'products/report/methods_draft.md': {type:'text', rows:[
+  ['# 2.3 InSAR 时序形变分析', ''],
+  ['', ''],
+  ['本研究使用 Sentinel-1 升降轨影像（2020 年 1 月—2023 年 12 月，', ''],
+  ['共 46 景），时序处理采用 ISCE2 干涉测量与 MintPy 小基线集', ''],
+  ['（SBAS）反演。解缠采用 MCF 方法〔prov-6a〕，误差校正移除', ''],
+  ['大气、电离层与轨道残差。', ''],
+  ['', ''],
+  ['冻土区 A 年均形变速率 −23.4 ± 2.1 mm/yr（vel_yushu_2023.png', ''],
+  ['〔prov-10〕），与同期 GNSS 观测相关系数 0.86，PS/SBAS 交叉', ''],
+  ['验证一致性 0.92。', ''],
+  ['', ''],
+  ['> 证据边界：适用于玉树及周边冻土沉降区，非全青藏高原；不', 'cm'],
+  ['> 声称捕获季节冻融高频分量（采样率 12 天）。', 'cm'],
+ ]},
+ 'provenance.json': {type:'text', rows:[
+  ['{', ''],
+  ['  "job": "yushu-2023", "chain": "ISCE2→MintPy",', ''],
+  ['  "steps": {', ''],
+  ['    "6": {', ''],
+  ['      "name": "解缠",', ''],
+  ['      "tool": "MintPy 1.6.2",', ''],
+  ['      "cmd": "mintpy unwrap --method MCF",', 'hl2'],
+  ['      "params": "params/unwrap.yaml",', ''],
+  ['      "inputs": ["unwrapPhase.h5 (c3e2…7a11)"],', ''],
+  ['      "outputs": ["unwrapPhase.h5 9a6f…21c4"],', ''],
+  ['      "ts": "2026-08-10T20:44:11+08:00"', ''],
+  ['    },', ''],
+  ['    "11": { "name": "质检", "corr": 0.92, "level": "validated" }', ''],
+  ['  },', ''],
+  ['  "fingerprints": { "6": "b4d0…2a11", "7": "d1c9…0f3e" }', ''],
+  ['}', ''],
+ ]},
+ 'products/velocities/vel_yushu_2023.png': {type:'img', img:'vel'},
+ 'products/timeseries/ts_46_2023.png': {type:'img', img:'ts'},
+};
+const BROWSER_SITES={
+ 'asf':{h:'ASF Vertex · Sentinel-1 数据搜索', s:'search.asf.alaska.edu · ESA/Sentinel-1 C 波段 46 景', tools:['区域: 玉树 96.9°E 33.0°N','时间: 2020-01 — 2023-12','极化: VV','入射角: 29°–46°'], res:[
+   {t:'S1A_IW_SLC__1SDV_2020-01-03T00:21:41', m:'SLC · VV · path 135 · frame 498 · 2.4 GB'},
+   {t:'S1A_IW_SLC__1SDV_2020-01-15T00:21:38', m:'SLC · VV · path 135 · frame 498 · 2.4 GB'},
+   {t:'S1A_IW_SLC__1SDV_2020-01-27T00:21:36', m:'SLC · VV · path 135 · frame 498 · 2.4 GB'},
+   {t:'…共 46 景 · 已自动勾选全部 → 一键加入队列', m:''},
+ ]},
+ 'esa':{h:'ESA Earth Online · 数据开放政策', s:'earth.esa.int · Copernicus Sentinel 数据', tools:['免费开放数据','CC BY-SA 3.0 IGO','科研用途无需申请'], res:[
+   {t:'Sentinel-1 数据获取与许可说明', m:'https://earth.esa.int/eogateway'},
+   {t:'Sentinel-1 SAR 技术指南（InSAR 应用）', m:'干涉测量堆栈处理参考'},
+   {t:'MintPy 时序反演兼容性说明', m:'与 ISCE2 输出直接对接'},
+ ]},
+ 'lit':{h:'文献检索 · InSAR 冻土形变', s:'目标：SCI 论文方法节引用', tools:['关键词: permafrost deformation InSAR','时间范围: 2018 — 2024','数据库: Web of Science'], res:[
+   {t:'Seasonal deformation of permafrost in the Qinghai-Tibet Plateau', m:'Remote Sensing of Environment · 2021 · 被引 87'},
+   {t:'SBAS-InSAR time series for ground deformation monitoring', m:'IEEE TGRS · 2019 · 被引 214'},
+   {t:'MintPy: A Python package for InSAR time-series', m:'Seismological Research Letters · 2021 · 被引 156'},
+ ]},
+};
+
+/* ============ 状态 ============ */
+const S={phase:'hero', method:'3D_FULL', dirty:false, ran:false, mode:'expert', drawer:null, view:null, session:'yushu-2023'};
+const $=id=>document.getElementById(id);
+const chat=$('chat');
+
+/* ============ 工具 ============ */
+const ICONS={
+ play:'<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>',
+ doc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
+ chain:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+ check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
+ warn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>',
+ refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
+ file:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
+ dir:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+};
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function el(html){const d=document.createElement('div');d.innerHTML=html.trim();return d.firstChild}
+function scrollBottom(){chat.scrollTop=chat.scrollHeight}
+function stamp(){const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+
+/* ============ 消息构建 ============ */
+function msgAgent(inner,{thinking=false,who='InSAR-Agent'}={}){
+ const m=el(`<div class="msg ${thinking?'thinking':'agent'} fadein"><div class="mav">IA</div><div class="bubble"><div class="who">${who}<span class="stamp">${stamp()}</span></div><div class="text"></div></div></div>`);
+ m.querySelector('.text').appendChild(inner);
+ chat.appendChild(m); scrollBottom(); return m;
+}
+function msgUser(text){
+ const m=el(`<div class="msg user fadein"><div class="bubble">${esc(text)}</div></div>`);
+ chat.appendChild(m); scrollBottom(); return m;
+}
+function msgError(text){
+ const m=el(`<div class="msg agent fadein"><div class="mav">IA</div><div class="bubble"><div class="who">InSAR-Agent<span class="stamp">${stamp()}</span></div><div class="text" style="color:var(--bad)">${esc(text)}</div></div></div>`);
+ chat.appendChild(m); scrollBottom(); return m;
+}
+function card(headHtml, bodyHtml, cls='', open=true){
+ const c=el(`<div class="card ${cls} ${open?'open':''}"><div class="card-head"><span class="ic"></span><span class="t"></span><span class="grow"></span><span class="desc"></span><span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></span></div><div class="card-body">${bodyHtml}</div></div>`);
+ const ic=c.querySelector('.ic'); const t=c.querySelector('.t');
+ if(typeof headHtml==='string'){t.textContent=headHtml}
+ else{ic.innerHTML=headHtml.ic||'';if(headHtml.t)t.textContent=headHtml.t;if(headHtml.desc)c.querySelector('.desc').textContent=headHtml.desc}
+ c.querySelector('.card-head').addEventListener('click',e=>{if(e.target.closest('button'))return;c.classList.toggle('open')});
+ return c;
+}
+
+/* ---- 流水线卡 ---- */
+function stepRow(st,{compact=false}={}){
+ const status = st.stale?'stale':st.state||'pending';
+ const flag = st.stale?'<span class="sflag stale">STALE</span>'
+   : st.state==='running'?'<span class="sflag run">运行中</span>'
+   : st.state==='failed'?'<span class="sflag" style="background:var(--bad-weak);color:var(--bad)">失败</span>'
+   : st.state==='done'?'<span class="sflag ok">✓ 有效</span>':'';
+ return `<div class="step ${status}" data-step="${st.id}"><span class="snum">${st.state==='done'?'✓':st.stale?'!':st.id}</span><span class="sname">${st.id}. ${st.name}${st.method?' <span style="font-size:11px;color:var(--text-3);font-family:var(--mono)">'+st.method+'</span>':''}</span><span class="smeta">${compact?'':st.meta}</span>${flag}</div>`;
+}
+function pipelineCard({open=true}={}){
+ const head={ic:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>', t:'处理计划：11 步 InSAR 流水线', desc:'ISCE2 → MintPy → 质检', icColor:'#3b82f6'};
+ const c=card(head, `<div class="steps">${STEPS.map(s=>stepRow(s,{compact:true})).join('')}</div>`);
+ c.querySelector('.ic').style.background='var(--accent-weak)'; c.querySelector('.ic').style.color='var(--accent)';
+ return c;
+}
+function setStepState(id,state){
+ const s=STEPS.find(x=>x.id===id); if(!s)return; s.state=state;
+ document.querySelectorAll(`[data-step="${id}"]`).forEach(r=>{
+  r.className='step '+((state==='done')?'done':state==='running'?'running':state==='failed'?'failed':'pending');
+  const n=r.querySelector('.snum'); n.textContent=state==='done'?'✓':s.stale?'!':id;
+  if(state==='done'){r.innerHTML=stepRow(s,{compact:true})}
+  else if(state==='running'){if(!r.querySelector('.sflag.run'))r.innerHTML=stepRow(s,{compact:true})}
+ });
+ refreshDrawer();
+}
+
+/* ---- 候选集卡 ---- */
+function candidateCard(){
+ const head={ic:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>', t:'候选集 · 解缠方法（第 6 步）', desc:'Agent 受限决策：3 选 1'};
+ const c=card(head, `<div class="cands">${CANDIDATES.map(cd=>`
+  <div class="cand" data-m="${cd.m}">
+    <span class="radio"></span>
+    <div><div class="m">${cd.m}${cd.tag?`<span class="tag ${cd.tagc}">${cd.tag}</span>`:''}<span style="font-size:10.5px;color:var(--text-3);font-weight:400;margin-left:6px">${cd.extra}</span></div>
+    <div class="why">${cd.why}</div></div>
+  </div>`).join('')}</div>
+  <div class="candfoot"><span style="font-size:12px;color:var(--text-2)">选择将更新 <span class="mono">unwrap.yaml</span> 并级联标记下游产物</span></div>`);
+ c.querySelector('.ic').style.background='var(--stale-weak)'; c.querySelector('.ic').style.color='var(--stale)';
+ const cands=c.querySelectorAll('.cand');
+ cands.forEach(cd=>cd.addEventListener('click',()=>{
+  cands.forEach(x=>x.classList.remove('sel'));
+  cd.classList.add('sel');
+  applyMethod(cd.dataset.m, c);
+ }));
+ const cur=CANDIDATES.find(cd=>cd.m===S.method);
+ if(cur)c.querySelector(`.cand[data-m="${cur.m}"]`).classList.add('sel');
+ return c;
+}
+
+/* ---- 证据链卡 ---- */
+function evidenceCard(stepId){
+ const s=STEPS.find(x=>x.id===stepId);
+ const head={ic:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>', t:'Provenance · 变更证据链', desc:'谁·何时·用什么·产出什么'};
+ const c=card(head, `<div class="prov-tree">
+  <div class="row"><span class="k">变更</span><span class="v"><span class="hl">${s.name}</span> · unwrap_method: <span class="hl">3D_FULL → ${S.method}</span></span></div>
+  <div class="row"><span class="k">命令</span><span class="v">mintpy unwrap --method ${S.method}</span></div>
+  <div class="row"><span class="k">参数</span><span class="v">params/unwrap.yaml <span class="hl">b4d0…2a11 → 重写</span></span></div>
+  <div class="row"><span class="k">工具</span><span class="v">MintPy 1.6.2 · PyStamps 0.3.4 · Python 3.11</span></div>
+  <div class="row"><span class="k">数据</span><span class="v">data/slc/ 46 景（7f3a…c91e）</span></div>
+  <div class="row"><span class="k">时间</span><span class="v">${new Date().toLocaleString('zh-CN')}</span></div>
+ </div>`);
+ c.querySelector('.ic').style.background='var(--ok-weak)'; c.querySelector('.ic').style.color='var(--ok)';
+ return c;
+}
+
+/* ---- 结果卡（形变速率 + 指标） ---- */
+function resultCard(){
+ const head={ic:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>', t:'结果 · 形变速率（LOS）', desc:'mintpy_sbas → velocity', icColor:'#3b82f6'};
+ const c=card(head, `<div class="res-body">
+  <div class="fig" style="cursor:pointer" onclick="showLightbox('vel')" title="点击查看大图"><div class="figbar">vel_yushu_2023.png<span class="mono">mintpy save_gbis · 2.4 MB</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--accent);font-weight:600;font-size:10.5px">查看大图 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></span></div>
+  <svg viewBox="0 0 640 340" xmlns="http://www.w3.org/2000/svg">
+   <defs>
+    <linearGradient id="velg" x1="0" y1="0" x2="1" y2="1">
+     <stop offset="0" stop-color="#7c2d12"/><stop offset=".25" stop-color="#ea580c"/><stop offset=".45" stop-color="#fde047"/><stop offset=".6" stop-color="#d9f99d"/><stop offset=".75" stop-color="#a5f3fc"/><stop offset="1" stop-color="#1e3a8a"/>
+    </linearGradient>
+   </defs>
+   <rect x="30" y="20" width="560" height="250" fill="url(#velg)" opacity=".85"/>
+   <g stroke="#fff" stroke-opacity=".35" fill="none">
+    <path d="M90 270 C140 210 180 200 220 220 S320 190 380 210 S500 130 560 110"/>
+    <path d="M60 210 C110 170 150 160 190 180 S280 150 330 165 S440 110 490 95"/>
+    <path d="M120 130 C170 100 210 110 250 130 S340 100 390 115 S470 80 520 60"/>
+   </g>
+   <g fill="none" stroke="#0c1e3a" stroke-opacity=".4">
+    <path d="M60 190 C120 160 200 175 260 200 S400 165 470 140 S560 100 600 80"/>
+    <path d="M80 120 C140 95 220 110 280 130 S400 105 450 85"/>
+   </g>
+   <g stroke="#0c1e3a" stroke-width="3">
+    <circle cx="330" cy="165" r="5" fill="#fff"/><text x="340" y="170" font-size="12" fill="#0c1e3a" font-weight="700">玉树市区</text>
+    <circle cx="210" cy="228" r="5" fill="#fff"/><text x="220" y="238" font-size="12" fill="#0c1e3a" font-weight="700">冻土区 A</text>
+    <circle cx="455" cy="92" r="5" fill="#fff"/><text x="465" y="88" font-size="12" fill="#0c1e3a" font-weight="700">GNSS 校验站</text>
+   </g>
+   <rect x="560" y="20" width="12" height="250" fill="#fff" stroke="#d4d7dc"/>
+   <rect x="562" y="22" width="8" height="246" fill="url(#velg)" transform="scale(1,-1) translate(0,-272)"/>
+   <g font-size="10" fill="#4b5563"><text x="558" y="285">-40</text><text x="550" y="150">0</text><text x="550" y="36">+40</text><text x="600" y="300">mm/yr</text></g>
+   <text x="40" y="315" font-size="11" fill="#4b5563">Sentinel-1 · 2020-01 — 2023-12 · 玉树及周边 80×80 km</text>
+  </svg></div>
+  <div class="metrics">
+   <div class="metric"><div class="mv" style="color:var(--bad)">-23.4</div><div class="mk">冻土区 A 年均速率 (mm/yr)</div></div>
+   <div class="metric"><div class="mv" style="color:var(--accent)">11.2</div><div class="mk">市区沉降速率 (mm/yr)</div></div>
+   <div class="metric"><div class="mv" style="color:var(--ok)">0.86</div><div class="mk">GNSS 相关系数</div></div>
+  </div>
+  <table class="tbl"><tr><th>产物</th><th>哈希</th><th>状态</th></tr>
+   <tr class="ck" data-file="products/velocities/vel_yushu_2023.png"><td class="mono">vel_yushu_2023.png</td><td class="mono">9e12…f0c7</td><td><span class="sflag ok">✓ 有效</span></td></tr>
+   <tr class="ck" data-file="products/timeseries/ts_46_2023.png"><td class="mono">ts_46_2023.png</td><td class="mono">55ab…d2e9</td><td><span class="sflag ok">✓ 有效</span></td></tr>
+   <tr class="ck" data-file="provenance.json"><td class="mono">provenance.json</td><td class="mono">0d7e…88f0</td><td><span class="sflag ok">✓ 有效</span></td></tr>
+  </table>
+  <div style="font-size:10.5px;color:var(--text-3);margin-top:7px">点击产物行 → 右侧文件面板预览 · 点击图件 → 全屏查看</div>
+  <div class="xval"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>交叉验证 <b>PS/SBAS 一致性 0.92</b> — 两套独立处理链（PS 链与 SBAS 链）交叉校验通过</div>
+  </div>`);
+ c.querySelector('.ic').style.background='var(--accent-weak)'; c.querySelector('.ic').style.color='var(--accent)';
+ c.querySelectorAll('tr.ck').forEach(r=>r.addEventListener('click',()=>openDrawer('files',{file:r.dataset.file})));
+ return c;
+}
+
+/* ---- 报告卡（论文方法草稿） ---- */
+function reportCard(){
+ const head={ic:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>', t:'报告 · 论文方法草稿（2.3 节）', desc:'provenance → narrate 生成 · 可编辑'};
+ const c=card(head, `<div style="padding:14px;display:flex;flex-direction:column;gap:12px">
+  <div style="font-size:13px;line-height:1.75;color:var(--text)">
+   <p style="margin-bottom:8px"><b>2.3 InSAR 时序形变分析</b></p>
+   <p style="color:var(--text-2)">本研究使用 Sentinel-1 升降轨影像（2020 年 1 月—2023 年 12 月，共 46 景）…时序处理采用 <span class="mono">ISCE2</span> 干涉测量与 <span class="mono">MintPy</span> 小基线集（SBAS）反演，解缠采用 MCF 方法<span class="hl" style="color:var(--accent)">〔prov-6a〕</span>，误差校正移除大气、电离层与轨道残差…冻土区 A 年均形变速率 −23.4 ± 2.1 mm/yr（<span class="mono">vel_yushu_2023.png</span><span class="hl" style="color:var(--accent)">〔prov-10〕</span>），与同期 GNSS 观测相关系数 0.86，两套独立处理链（PS/SBAS）交叉验证一致性 0.92。</p>
+  </div>
+  <div style="font-size:12px;color:var(--text-2);background:var(--bg-sub);border:1px solid var(--border);border-radius:7px;padding:9px 12px">
+   <b>证据边界（X, not Y）：</b>本文结论适用于 80×80 km 玉树及周边 <b>冻土沉降区</b>，非全青藏高原；SBAS 时序 <b>不声称</b>捕获季节冻融高频分量（采样率 12 天）；PS 与 SBAS 一致性 0.92 <b>不排除</b>低相干区未解缠像元。
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+   <button class="btn primary" onclick="toast('已打包：methods_draft.md + figs/*.pdf + provenance.json')">导出 ZIP</button>
+   <button class="btn ghost" onclick="toast('已导出 Markdown 草稿')">导出 .md</button>
+   <button class="btn ghost" onclick="openDrawer('images')">预览图表</button>
+  </div>
+ </div>`);
+ c.querySelector('.ic').style.background='var(--accent-weak)'; c.querySelector('.ic').style.color='var(--accent)';
+ return c;
+}
+function toast(msg){
+ let t=$('toast');
+ if(!t){t=el('<div id="toast" style="position:fixed;bottom:86px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:9px 18px;border-radius:999px;font-size:12.5px;z-index:200;box-shadow:0 6px 20px rgba(0,0,0,.25);opacity:0;transition:opacity .25s"></div>');document.body.appendChild(t)}
+ t.textContent=msg; t.style.opacity='1'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.opacity='0',2200);
+}
+
+/* ============ 核心交互：候选集 → STALE 级联 ============ */
+function applyMethod(m){
+ if(m===S.method && !S.dirty){return}
+ S.method=m; S.dirty=true;
+ STEPS.forEach((s,i)=>{ if(i>=5){s.stale=true; s.state=undefined} });
+ FILES.forEach(f=>{ if(DOWN_FILES.has(f.name)) f.stale=true });
+ const changed=STEPS.filter(s=>s.stale);
+ msgAgent(el(`<div class="text">已更新第 6 步解缠方法：<span class="mono">3D_FULL → ${m}</span>。参数指纹变更触发失效检测，下游 <b>6–11 步</b>（${changed.map(s=>s.id).join('、')}）产物与配置标记为 <b style="color:var(--stale)">STALE</b>，运行前将按新配置自动重跑。</div>`));
+ document.querySelectorAll('[data-step]').forEach(r=>{
+  if(+r.dataset.step>=6){r.classList.remove('stale-shake');void r.offsetWidth;r.classList.add('stale-shake')}
+ });
+ const evWrap=el('<div class="fadein"></div>'); evWrap.appendChild(evidenceCard(6));
+ msgAgent(evWrap);
+ const banner=el(`<div class="banner stale fadein"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg><span><b>6 个下游产物已失效</b>（解缠 → 质检），重跑约需 40 分钟</span><span class="grow"></span><button class="btn warn" id="btnBannerRun">重新运行</button></div>`);
+ msgAgent(banner);
+ $('btnBannerRun').addEventListener('click',()=>confirmRun());
+ setHeaderStatus('stale','6 个产物失效');
+ $('btnRun').style.display=''; $('railRun').style.display='';
+ refreshDrawer();
+}
+
+/* ============ 确认卡 ============ */
+function confirmRun(){
+ if($('confirmCard'))return;
+ const head={ic:'<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>', t:'确认执行 · 重跑下游链', desc:'破坏性操作前置确认'};
+ const cc=card(head, `<div class="preview">
+  <div class="row"><span class="k">命令</span><span class="v">mintpy unwrap --method ${S.method} && mintpy_sbas.py --update && crossval_ps_sbas.py</span></div>
+  <div class="row"><span class="k">耗时</span><span class="v">约 40 分钟（8 核并行）</span></div>
+  <div class="row"><span class="k">涉及</span><span class="v">6 个下游产物 · params/unwrap.yaml · provenance.json</span></div>
+  <div class="row"><span class="k">花费</span><span class="v">0 元（本机计算，无云作业）</span></div>
+ </div>
+ <div class="acts"><button class="btn primary" id="btnConfirm">确认执行</button><button class="btn ghost">改用替代方法</button><button class="btn ghost">取消</button></div>`, 'confirm', true);
+ cc.id='confirmCard';
+ const wrap=el('<div class="fadein"></div>'); wrap.appendChild(cc); msgAgent(wrap);
+ cc.querySelector('#btnConfirm').addEventListener('click',()=>{cc.classList.add('hidden');runPipeline()});
+ cc.querySelectorAll('.btn.ghost')[0].addEventListener('click',()=>{toast('回到候选集，可改选 SNAPHU 等');cc.classList.add('hidden')});
+ cc.querySelectorAll('.btn.ghost')[1].addEventListener('click',()=>{cc.classList.add('hidden');toast('已取消，流水线保持待运行状态')});
+}
+
+/* ============ 运行 Overlay ============ */
+function setOvStepper(idx){
+ const names=STEPS.map(s=>s.name);
+ $('ovStepper').innerHTML=names.map((n,i)=>{
+  const cls=i<idx?'done':i===idx?'run':'wait';
+  return `<span class="ov-step ${cls}"><span class="n">${i+1}</span>${n}</span>`;
+ }).join('');
+}
+function ovLog(text,cls=''){const d=el(`<div class="ln ${cls}">${esc(text)}</div>`);$('ovLog').appendChild(d);$('ovLog').scrollTop=$('ovLog').scrollHeight}
+async function runPipeline(){
+ S.ran=true;
+ const ov=$('overlay'); ov.classList.remove('hidden');
+ $('ovLog').innerHTML=''; setOvStepper(5); $('ovBar').style.width='0%'; $('ovPct').textContent='0%';
+ setHeaderStatus('run','运行中');
+ const script=[
+  [6,[`[06/11] mintpy unwrap --method ${S.method}`,'  ── 读取干涉对: 1,035 pairs (γ>0.25)','  ── MCF 最小费用流解缠 … 94.2% 像元已解缠','  ✓ unwrapPhase.h5 · 9a6f…21c4 (2.1 GB)'],2],
+  [7,['[07/11] mintpy_sbas.py --unw '+S.method+'_out --update','  ── 46 景 × 1,035 对 全闭合回路检查 ✓','  ── SBAS 反演: 13,204,559 像元 · 4 次迭代收敛','  ✓ timeseries.h5 · velocity.h5 · 8a21…77d0'],1],
+  [8,['[08/11] mintpy remove_ramp --troposphere --ionosphere','  ── ERA5 大气校正 · std 降低 32%','  ✓ timeseries_rem_ramp.h5'],1],
+  [9,['[09/11] mintpy timeseries2velocity --model poly_periodic','  ── 拟合: 线性 + 年周期 + 半年周期 (R²=0.94)','  ✓ velocity.h5 · 冻土区 A: −23.4 ± 2.1 mm/yr'],1],
+  [10,['[10/11] mintpy save_gbis --gbis figs/','  ── 输出期刊级图表: vel / ts / spatial-temporal','  ✓ vel_yushu_2023.png · ts_46_2023.png'],1],
+  [11,['[11/11] crossval_ps_sbas.py --ref ps_chain --corr 0.85','  ── PS 链: 8.9M 像元 · SBAS 链: 13.2M 像元','  ── 重叠区相关系数: 0.92 ✓','  ✓ 质检通过 → 证据级别: validated'],1],
+ ];
+ let pct=30; const total=script.length; let si=0;
+ for(const [id,lines] of script){
+  const st=STEPS.find(x=>x.id===id);
+  st.stale=false; st.state='running';
+  setOvStepper(id-1);
+  for(const l of lines){ ovLog(l, l.startsWith('✓')?'c':l.startsWith('[')?'s':l.startsWith('  ──')?'t':''); await sleep(520) }
+  si++; pct=30+Math.round(si/total*70);
+  $('ovBar').style.width=pct+'%'; $('ovPct').textContent=pct+'%';
+  st.state='done';
+  setStepState(id,'done');
+  ovLog('','');
+ }
+ STEPS.forEach(s=>{s.stale=false; s.state='done'});
+ FILES.forEach(f=>{f.stale=false});
+ refreshDrawer();
+ await sleep(600);
+ ov.classList.add('hidden');
+ setHeaderStatus('ok','运行完成');
+ $('btnRun').style.display='none'; $('railRun').style.display='none';
+ $('hdrStatusTxt').textContent='✓ 运行完成';
+ const wrap=el('<div class="fadein"></div>'); wrap.appendChild(resultCard()); msgAgent(wrap);
+ const wrap2=el('<div class="fadein"></div>'); wrap2.appendChild(reportCard()); msgAgent(wrap2);
+ msgAgent(el(`<div class="text">流水线全部完成（断点续跑：仅重跑 STALE 的 6–11 步，前 5 步指纹未变已跳过 ✓）。产物、命令、参数与指纹已写入 <span class="mono">provenance.json</span>，可在「审计」面板查看完整证据链。</div>`));
+}
+
+/* ============ 产物审阅：图件 / 时序 / 大图 ============ */
+function tsSvg(o){
+ const w=o.w||640, h=o.h||340, m={l:56,r:20,t:24,b:40};
+ const all=o.series.flatMap(s=>s.ts); const mn=Math.min(...all), mx=Math.max(...all);
+ const pad=(mx-mn)*.12; const v0=mn-pad, v1=mx+pad;
+ const X=i=>m.l+i*(w-m.l-m.r)/(o.dates.length-1);
+ const Y=v=>h-m.b-(v-v0)/(v1-v0)*(h-m.t-m.b);
+ const grid=''; const gl=[];
+ for(let g=0;g<=4;g++){const v=v0+(v1-v0)*g/4;gl.push(`<line x1="${m.l}" y1="${Y(v)}" x2="${w-m.r}" y2="${Y(v)}" stroke="#eef0f2" stroke-width="1"/><text x="${m.l-8}" y="${Y(v)+3}" font-size="10" fill="#9ca3af" text-anchor="end">${v.toFixed(0)}</text>`)}
+ const lines=o.series.map(s=>{
+  const pts=s.ts.map((v,i)=>`${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+  const area=o.series.length===1?`<polygon points="${m.l},${h-m.b} ${pts} ${X(o.series[0].ts.length-1)},${h-m.b}" fill="${s.color}" opacity=".08"/>`:'';
+  const dots=s.ts.map((v,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="3.2" fill="${s.color}"/>`).join('');
+  return `${area}<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>${dots}`;
+ }).join('');
+ const xl=o.dates.map((d,i)=>`<text x="${X(i)}" y="${h-m.b+16}" font-size="9.5" fill="#9ca3af" text-anchor="middle">${d}</text>`).join('');
+ const lg=o.series.map((s,i)=>`<rect x="${w-m.r-130+(i*70)}" y="${m.t-8}" width="9" height="9" rx="2" fill="${s.color}"/><text x="${w-m.r-117+(i*70)}" y="${m.t}" font-size="10" fill="#4b5563">${s.name}</text>`).join('');
+ return `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
+ <rect x="${m.l}" y="${m.t}" width="${w-m.l-m.r}" height="${h-m.t-m.b}" fill="#fafafa" stroke="#e5e7eb"/>
+ ${gl.join('')}${lines}${xl}${lg}
+ <text x="${w-m.r}" y="${h-8}" font-size="10" fill="#9ca3af" text-anchor="end">${o.unit||''}</text>
+ <text x="${m.l}" y="16" font-size="12" fill="#111827" font-weight="600">${o.title}</text>
+ </svg>`;
+}
+function imgSvg(id){
+ if(id==='vel')return `<svg viewBox="0 0 640 340" xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="img-velg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c2d12"/><stop offset=".25" stop-color="#ea580c"/><stop offset=".45" stop-color="#fde047"/><stop offset=".6" stop-color="#d9f99d"/><stop offset=".75" stop-color="#a5f3fc"/><stop offset="1" stop-color="#1e3a8a"/></linearGradient></defs>
+  <rect x="30" y="20" width="560" height="250" fill="url(#img-velg)" opacity=".85"/>
+  <g stroke="#fff" stroke-opacity=".35" fill="none"><path d="M90 270 C140 210 180 200 220 220 S320 190 380 210 S500 130 560 110"/><path d="M60 210 C110 170 150 160 190 180 S280 150 330 165 S440 110 490 95"/><path d="M120 130 C170 100 210 110 250 130 S340 100 390 115 S470 80 520 60"/></g>
+  <g fill="none" stroke="#0c1e3a" stroke-opacity=".4"><path d="M60 190 C120 160 200 175 260 200 S400 165 470 140 S560 100 600 80"/><path d="M80 120 C140 95 220 110 280 130 S400 105 450 85"/></g>
+  <g stroke="#0c1e3a" stroke-width="3"><circle cx="330" cy="165" r="5" fill="#fff"/><text x="340" y="170" font-size="12" fill="#0c1e3a" font-weight="700">玉树市区</text><circle cx="210" cy="228" r="5" fill="#fff"/><text x="220" y="238" font-size="12" fill="#0c1e3a" font-weight="700">冻土区 A</text><circle cx="455" cy="92" r="5" fill="#fff"/><text x="465" y="88" font-size="12" fill="#0c1e3a" font-weight="700">GNSS 校验站</text></g>
+  <rect x="560" y="20" width="12" height="250" fill="#fff" stroke="#d4d7dc"/>
+  <rect x="562" y="22" width="8" height="246" fill="url(#img-velg)" transform="scale(1,-1) translate(0,-272)"/>
+  <g font-size="10" fill="#4b5563"><text x="558" y="285">-40</text><text x="550" y="150">0</text><text x="550" y="36">+40</text><text x="600" y="300">mm/yr</text></g>
+  <text x="40" y="315" font-size="11" fill="#4b5563">Sentinel-1 · 2020-01 — 2023-12 · 玉树及周边 80×80 km · LOS 向</text>
+ </svg>`;
+ if(id==='ts')return tsSvg({title:'玉树 · 累积位移 (LOS mm)', unit:'mm', dates:DTS, series:[{name:'冻土区 A', ts:[0,-3.1,-5.2,-7.8,-10.6,-13.9,-16.7,-20.1,-23.4], color:'#ef4444'},{name:'GNSS 校验', ts:[0,-2.9,-5.4,-7.9,-10.2,-13.1,-16.9,-20.4,-23.8], color:'#0c1e3a'}]});
+ if(id==='ifg')return `<svg viewBox="0 0 640 340" xmlns="http://www.w3.org/2000/svg">
+  <defs><radialGradient id="img-ifgg" cx=".5" cy=".5" r=".6"><stop offset="0" stop-color="#fef3c7"/><stop offset=".55" stop-color="#fbbf24"/><stop offset="1" stop-color="#f59e0b"/></radialGradient></defs>
+  <rect width="640" height="340" fill="url(#img-ifgg)"/>
+  <g fill="none" stroke="#92400e" stroke-opacity=".28" stroke-width="1.2">
+   ${[20,26,33,41,50,60,71,83,96,110,125,141,158,176,195,215,236,258,281,305,330,356,383,411,440,470,501,533,566,600].map((r,i)=>`<circle cx="320" cy="170" r="${r}" ${i%2?'stroke-opacity=".34"':''}/>`).join('')}
+  </g>
+  <g stroke="#78350f" stroke-opacity=".5" stroke-width="1.4" fill="none"><ellipse cx="300" cy="160" rx="180" ry="120" transform="rotate(-24 300 160)"/><ellipse cx="300" cy="160" rx="150" ry="100" transform="rotate(-24 300 160)"/><ellipse cx="300" cy="160" rx="120" ry="80" transform="rotate(-24 300 160)"/><ellipse cx="300" cy="160" rx="90" ry="60" transform="rotate(-24 300 160)"/><ellipse cx="300" cy="160" rx="60" ry="40" transform="rotate(-24 300 160)"/><ellipse cx="300" cy="160" rx="30" ry="20" transform="rotate(-24 300 160)"/></g>
+  <circle cx="300" cy="160" r="5" fill="#fff" stroke="#78350f" stroke-width="2"/>
+  <rect x="16" y="16" width="120" height="30" rx="6" fill="rgba(255,255,255,.8)"/><text x="28" y="36" font-size="12" fill="#78350f" font-weight="700">wrapped phase (rad)</text>
+  <text x="40" y="322" font-size="11" fill="#78350f" opacity=".75">干涉条纹 · 冻土区 A · B=52 m · Δt=12 d</text>
+ </svg>`;
+ if(id==='coh')return `<svg viewBox="0 0 640 340" xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="img-cohg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#052e16"/><stop offset=".5" stop-color="#166534"/><stop offset="1" stop-color="#4ade80"/></linearGradient></defs>
+  <rect width="640" height="340" fill="url(#img-cohg)" opacity=".8"/>
+  <g fill="none" stroke="#bbf7d0" stroke-opacity=".22"><path d="M0 90 C120 60 220 100 340 70 S520 40 640 80"/><path d="M0 160 C140 130 260 170 400 140 S560 110 640 150"/><path d="M0 240 C100 215 240 250 380 220 S560 200 640 235"/></g>
+  <g fill="#86efac" opacity=".75"><ellipse cx="210" cy="120" rx="52" ry="38" transform="rotate(-12 210 120)"/><ellipse cx="410" cy="200" rx="44" ry="32" transform="rotate(8 410 200)"/><ellipse cx="130" cy="240" rx="36" ry="26" transform="rotate(-20 130 240)"/><ellipse cx="520" cy="120" rx="30" ry="22" transform="rotate(15 520 120)"/></g>
+  <rect x="16" y="16" width="150" height="30" rx="6" fill="rgba(0,0,0,.45)"/><text x="28" y="36" font-size="12" fill="#dcfce7" font-weight="700">相干性 γ · 1,035 对均值</text>
+  <rect x="560" y="20" width="12" height="250" fill="#fff" stroke="#d4d7dc"/><rect x="562" y="22" width="8" height="246" fill="url(#img-cohg)"/>
+  <g font-size="10" fill="#dcfce7"><text x="548" y="285">0.0</text><text x="548" y="150">0.5</text><text x="548" y="36">1.0</text></g>
+  <text x="40" y="322" font-size="11" fill="#dcfce7" opacity=".85">高相干区（亮）与冻土低相干区（暗）空间分布</text>
+ </svg>`;
+ return '';
+}
+function mapSvg(sel){
+ const pts=POINTS.map(p=>`<g class="pt ${p.id===sel?'on':''}" data-id="${p.id}"><circle cx="${p.x}" cy="${p.y}" r="4.5"/><text x="${p.x+8}" y="${p.y+4}" font-size="10.5" fill="#0c1e3a">${p.name}</text></g>`).join('');
+ return `<svg viewBox="0 0 300 170" xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="mvg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c2d12"/><stop offset=".3" stop-color="#ea580c"/><stop offset=".5" stop-color="#fde047"/><stop offset=".7" stop-color="#a5f3fc"/><stop offset="1" stop-color="#1e3a8a"/></linearGradient></defs>
+  <rect width="300" height="170" fill="url(#mvg)" opacity=".85"/>
+  <g stroke="#fff" stroke-opacity=".3" fill="none"><path d="M20 150 C60 120 110 115 150 130 S230 105 285 80"/><path d="M10 105 C50 85 100 85 140 100 S220 75 270 60"/></g>
+  ${pts}
+ </svg>`;
+}
+function tsCard(ptId){
+ const p=POINTS.find(x=>x.id===ptId)||POINTS[0];
+ const svg=tsSvg({title:'', unit:'mm', w:330, h:190, dates:DTS, series:[{name:p.name, ts:p.ts, color:'#ef4444'}]});
+ return `<div class="ts-card fadein"><div class="ts-head">${p.name} · 点位时序<span class="mono">${p.id==='gnss'?'GNSS 实测对照':'MintPy 反演'}</span></div>
+ <div>${svg}</div>
+ <div class="ts-stats">
+  <span class="tsv">年均速率 <b style="color:${p.rate<0?'var(--bad)':'var(--accent)'}">${p.rate!==null?p.rate+' mm/yr':'对照'}</b></span>
+  ${p.std!==null?`<span class="tsv">不确定度 <b>±${p.std}</b></span>`:''}
+  <span class="tsv">时序点数 <b>${p.ts.length}</b></span>
+  ${p.ref?'<span class="tsv">用于 GNSS 校验 <b>✓</b></span>':''}
+ </div></div>`;
+}
+function showLightbox(id){
+ const g=IMAGES.find(x=>x.id===id); if(!g)return;
+ $('lbTitle').textContent=g.name;
+ $('lbSub').textContent=g.t+' · '+g.meta+' · '+g.hash;
+ $('lbBody').innerHTML=imgSvg(id);
+ $('lbOpenRight').dataset.img=id;
+ $('lightbox').classList.add('on');
+}
+function openDrawer(tab,view){
+ const d=$('drawer'); if(!d.classList.contains('on')) d.classList.add('on');
+ S.drawer=tab; S.view=view||null; renderDrawer();
+}
+function renderFilePreview(name){
+ const f=FILES.find(x=>x.name===name); const fc=FILECONTENTS[name];
+ if(!fc)return `<div class="filepre"><div class="fp-bar">${esc(name)}<span class="ro">只读</span></div><div class="fp-empty">目录或二进制产物，此处仅展示元数据。<br><br>哈希 ${f?f.hash:'—'} · ${f?f.meta:''}</div></div>`;
+ const meta=`<span class="mono">${f?f.meta:''}</span>`;
+ const st=`<span class="mv">${f&&f.stale?'STALE · 待重跑':'有效'}</span>`;
+ if(fc.type==='img')return `<div class="filepre fadein"><div class="fp-bar">${esc(name)}${meta}<span class="ro">只读预览</span></div><div class="fp-img">${imgSvg(fc.img)}</div><div class="fp-meta"><span class="mv">${f?f.hash:''}</span><span class="mv">SHA256 指纹</span>${st}<span class="mv" style="cursor:pointer;color:var(--accent)" onclick="showLightbox('${fc.img}')">全屏查看 →</span></div></div>`;
+ const rows=fc.rows.map(r=>{const o=r[1]==='cm'?'<span class="cm">':r[1]==='hl2'?'<span class="hl2">':'';const c=o?'</span>':'';return o+esc(r[0])+c}).join('\n');
+ return `<div class="filepre fadein"><div class="fp-bar">${esc(name)}${meta}<span class="ro">只读</span></div><pre>${rows}</pre><div class="fp-meta"><span class="mv">${f?f.hash:''}</span><span class="mv">UTF-8 · LF</span>${st}</div></div>`;
+}
+function renderBrowser(){
+ const cur=S.view&&S.view.site?S.view.site:'asf'; const s=BROWSER_SITES[cur];
+ const url={'asf':'https://search.asf.alaska.edu','esa':'https://earth.esa.int','lit':'https://scholar.google.com'}[cur];
+ return `<div class="brow fadein">
+  <div class="baddr"><span class="dot"></span><span class="dot"></span><span class="dot"></span><input id="bUrl" value="${url}" spellcheck="false"><button class="go" id="bGo" title="打开"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg></button></div>
+  <div class="bmarks">${Object.keys(BROWSER_SITES).map(k=>`<span class="bm ${k===cur?'on':''}" data-site="${k}" style="${k===cur?'border-color:var(--accent);color:var(--accent);background:var(--accent-weak)':''}">${k==='asf'?'ASF 数据源':k==='esa'?'ESA 政策':'文献检索'}</span>`).join('')}</div>
+  <div class="bpage">
+   <div class="bp-top"><div class="h">${s.h}</div><div class="s">${s.s}</div></div>
+   <div class="bp-tools">${s.tools.map(t=>`<span class="tk">${t}</span>`).join('')}</div>
+   <div class="bp-res">${s.res.map(r=>`<div class="r"><b>${r.t}</b>${r.m?`<div class="m">${r.m}</div>`:''}</div>`).join('')}</div>
+  </div>
+ </div>`;
+}
+
+/* ============ 右侧面板 ============ */
+function refreshDrawer(){ if(S.drawer) renderDrawer() }
+function renderDrawer(){
+ const tab=S.drawer||'pipeline';
+ const b=$('drawerBody');
+ if(tab==='pipeline'){
+  b.innerHTML=`<div class="dsec">处理流水线 · 11 步</div><div class="dlist">${STEPS.map(s=>`<div class="ditem"><span class="st" style="background:${s.stale?'var(--stale)':s.state==='done'?'var(--ok)':s.state==='running'?'var(--accent)':'var(--border-strong)'}"></span><span class="name">${s.id}. ${s.name}</span><span class="meta">${s.stale?'STALE':s.state==='done'?'✓':s.meta||''}</span></div>`).join('')}</div>
+  <div class="dsec">失效传播</div><div class="ditem" style="cursor:default;font-size:12px;color:var(--text-2)">改动上游参数 → 指纹检测 → 级联标记下游 STALE，断点续跑只重跑受影响段。</div>`;
+ }else if(tab==='files'){
+  const sel=S.view&&S.view.file?S.view.file:null;
+  b.innerHTML=`<div class="dsec">数据与产物 · 点击行预览内容</div><div class="dlist">${FILES.map(f=>`<div class="ditem ${sel===f.name?'on':''}" data-file="${esc(f.name)}" style="${sel===f.name?'background:var(--accent-weak);color:var(--text)':''}"><span class="ic">${ICONS[f.ic]}</span><span class="name">${f.name}</span>${f.hash?`<span class="hash">${f.hash}</span>`:''}<span class="meta">${f.meta}</span>${f.stale?'<span class="st" style="background:var(--stale)" title="STALE"></span>':''}</div>`).join('')}</div>
+  ${sel?renderFilePreview(sel):''}
+  <div class="dsec">指纹</div><div class="ditem" style="cursor:default;font-size:12px;color:var(--text-2)">每个产物记录 SHA256 前缀与生成命令；参数变更 → 指纹失配 → 标 STALE。点击任意产物行即可在下方预览内容。</div>`;
+  b.querySelectorAll('.ditem[data-file]').forEach(d=>d.addEventListener('click',()=>{S.view={file:d.dataset.file};renderDrawer()}));
+ }else if(tab==='audit'){
+  b.innerHTML=`<div class="dsec">证据阶梯</div>
+  <div class="ladder">${['runnable','checked','audited','calibrated','validated','publishable'].map((lv,i)=>`<div class="lv ${i<=4?'on':''}">${lv}</div>`).join('')}</div>
+  <div class="dsec">Provenance 树</div><div class="prov-tree" style="background:#fff;border:1px solid var(--border);border-radius:7px;padding:10px 12px">
+   <div class="row"><span class="k">产物</span><span class="v">velocity.h5 · 9e12…f0c7</span></div>
+   <div class="row"><span class="k">└ 命令</span><span class="v">mintpy_sbas.py --unw ${S.method}_out --update</span></div>
+   <div class="row"><span class="k">&nbsp;&nbsp;└ 参数</span><span class="v">params/unwrap.yaml · ${S.method}</span></div>
+   <div class="row"><span class="k">&nbsp;&nbsp;&nbsp;└ 输入</span><span class="v">unwrapPhase.h5 · 46 景 SLC</span></div>
+  </div>
+  <div class="dsec">指标来源契约</div>
+  <div style="background:#fff;border:1px solid var(--border);border-radius:7px;padding:10px 12px;font-size:12px;display:flex;flex-direction:column;gap:6px;color:var(--text-2)">
+   <div>GNSS 比对：<b style="color:var(--ok)">preferred</b> CGPS 站 ✓ 匹配</div>
+   <div>速率外推：<b style="color:var(--ok)">preferred</b> MintPy 反演 ✓ 匹配</div>
+   <div>冻融分量：<b style="color:var(--bad)">forbidden</b> 12 天采样 × 硬 gate</div>
+  </div>`;
+ }else if(tab==='report'){
+  b.innerHTML=`<div class="dsec">论文方法草稿</div><div style="background:#fff;border:1px solid var(--border);border-radius:7px;padding:12px;font-size:12.5px;line-height:1.75;color:var(--text-2)"><p><b style="color:var(--text)">2.3 InSAR 时序形变分析</b></p><p style="margin-top:6px">…采用 ISCE2 干涉测量与 MintPy SBAS 反演，解缠方法 MCF<span style="color:var(--accent)">〔prov-6a〕</span>，冻土区 A 年均速率 −23.4 ± 2.1 mm/yr<span style="color:var(--accent)">〔prov-10〕</span>，与 GNSS 相关 0.86，PS/SBAS 一致性 0.92。</p></div>
+  <div class="dsec">导出</div><div style="display:flex;gap:8px"><button class="btn primary" style="flex:1;justify-content:center" onclick="toast('已打包 ZIP')">ZIP</button><button class="btn ghost" style="flex:1;justify-content:center" onclick="toast('已导出 Markdown')">.md</button></div>`;
+ }else if(tab==='images'){
+  const sel=S.view&&S.view.pt?S.view.pt:'A';
+  b.innerHTML=`<div class="dsec">产物图件 · 点击查看大图</div>
+  <div class="gal">${IMAGES.map(g=>`<div class="gal-item" data-img="${g.id}">
+   <div class="gbar">${g.t}<span class="exp" title="全屏查看"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></span><span class="mono">${g.meta}</span></div>
+   <div class="gbody">${imgSvg(g.id)}</div>
+   <div class="gdesc"><span class="tag ${g.stale?'stale':''}">${g.stale?'STALE · 待重跑':'有效'}</span>${g.name}<span class="mono" style="font-family:var(--mono);font-size:10px;color:var(--text-3);margin-left:6px">${g.hash}</span></div>
+  </div>`).join('')}</div>
+  <div class="dsec">地图查看数据 · 点击点位</div>
+  <div class="mapview">
+   <div class="mv-tool">形变速率 · LOS (mm/yr)<span class="mono">vel_yushu_2023.png</span></div>
+   <div class="mapbox">${mapSvg(sel)}</div>
+   <div style="padding:8px 10px;display:flex;gap:6px;flex-wrap:wrap;border-top:1px solid var(--bg-hover)">${POINTS.map(p=>`<span class="pointchip ${p.id===sel?'on':''}" data-pt="${p.id}">${p.name}</span>`).join('')}</div>
+  </div>
+  ${tsCard(sel)}`;
+  b.querySelectorAll('.gal-item').forEach(it=>it.addEventListener('click',()=>showLightbox(it.dataset.img)));
+  b.querySelectorAll('.mapbox .pt').forEach(p=>p.addEventListener('click',()=>{S.view={pt:p.dataset.id};renderDrawer()}));
+  b.querySelectorAll('.pointchip').forEach(c=>c.addEventListener('click',()=>{S.view={pt:c.dataset.pt};renderDrawer()}));
+ }else if(tab==='browser'){
+  b.innerHTML=renderBrowser();
+  b.querySelectorAll('.bmarks .bm').forEach(bm=>bm.addEventListener('click',()=>{S.view={site:bm.dataset.site};renderDrawer()}));
+  const go=()=>{const v=$('bUrl').value||'';const site=Object.keys(BROWSER_SITES).find(k=>v.includes({'asf':'asf','esa':'esa','lit':'scholar'}[k])&&{'asf':'asf','esa':'esa','lit':'scholar'}[k]===k)||(v.includes('asf')?'asf':v.includes('esa')?'esa':v.includes('scholar')?'lit':'asf');S.view={site};renderDrawer();toast('内置浏览器 · 已打开 '+v)};
+  $('bGo').addEventListener('click',go);
+  $('bUrl').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();go()}});
+ }
+ $('drawerTabs').querySelectorAll('button').forEach(bt=>bt.classList.toggle('on',bt.dataset.tab===tab));
+}
+
+/* ============ 会话 & 顶栏 ============ */
+const SESSIONS=[
+ {id:'yushu-2023', name:'玉树冻土 · SBAS 时序', sub:'ISCE2 + MintPy · 46 景', state:'active'},
+ {id:'landslide-2', name:'雅鲁藏布江滑坡监测', sub:'时序分析 · PS 链', state:'idle'},
+ {id:'quake-0418', name:'地震同震形变 · 玛多', sub:'干涉图 · 未完成', state:'idle'},
+];
+function renderSessions(){
+ $('slist').innerHTML=SESSIONS.map(s=>`<div class="sitem ${s.id===S.session?'active':''}" data-s="${s.id}"><div class="name">${s.name}</div><div class="sub"><span class="st">${s.id===S.session?'<span class="dot" style="width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block"></span>当前':''}</span><span>${s.sub}</span></div></div>`).join('');
+ $('slist').querySelectorAll('.sitem').forEach(it=>it.addEventListener('click',()=>{S.session=it.dataset.s;renderSessions();toast('已切换到会话：'+it.querySelector('.name').textContent)}));
+}
+function setHeaderStatus(kind,txt){
+ const b=$('hdrStatus');
+ b.className='badge '+(kind==='stale'?'stale':kind==='run'?'run':kind==='ok'?'ok':'');
+ $('hdrStatusTxt').textContent=txt;
+}
+
+/* ============ 空态 & 演示 ============ */
+function renderHero(){
+ S.phase='hero';
+ chat.innerHTML=`<div class="hero fadein">
+  <div class="logo">IA</div>
+  <h1>InSAR-Agent</h1>
+  <p>用自然语言驱动 InSAR 处理流水线 —— ISCE2 / MintPy / PyStamps 编排、失效检测、证据链、论文级结果。分析研究、搜索资料研究，边聊边出结果。</p>
+  <div class="hero-chips">
+   <button class="chip" data-demo="1">分析玉树冻土 2020-2023 SBAS 时序</button>
+   <button class="chip" data-demo="2">滑坡区 PS 点监测与 GNSS 对比</button>
+   <button class="chip" data-demo="3">复现论文 Fig.3 干涉图流程</button>
+  </div>
+  <div class="hero-hint">选择上方示例，或直接在输入框描述你的研究任务</div>
+ </div>`;
+ chat.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>startDemo()));
+ $('btnReplay').style.display='none';
+}
+async function startDemo(){
+ if(S.phase==='demo')return;
+ S.phase='demo';
+ S.dirty=false; S.method='3D_FULL';
+ STEPS.forEach((s,i)=>{s.stale=false; s.state=i<5?'done':(i===5?'running':undefined)});
+ FILES.forEach(f=>{f.stale=false});
+ chat.innerHTML='';
+ $('btnReplay').style.display='';
+ setHeaderStatus('run','规划中');
+ msgUser('分析青海玉树冻土 2020-2023 的 SBAS 时序形变');
+ await sleep(650);
+ const th=msgAgent(el('<div class="text">专家模式 · 场景识别：Sentinel-1 升降轨 46 景 · 冻土区低相干 → 选用 SBAS 链（ISCE2 前置处理 + MintPy 时序反演），计划 11 步。前 5 步产物已就绪，直接进入第 6 步。</div>'),{thinking:true});
+ await sleep(500);
+ setHeaderStatus('run','运行中');
+ const pw=el('<div class="fadein"></div>'); const pc=pipelineCard(); pw.appendChild(pc); msgAgent(pw);
+ STEPS.forEach((s,i)=>{ if(i<5)setStepState(s.id,'done'); if(i===5)setStepState(s.id,'running') });
+ await sleep(600);
+ msgAgent(el(`<div class="text">第 <b>6 步 · 解缠</b> 需要决策：当前配置 <span class="mono">3D_FULL</span> 不可用（本机无 3D 相位解缠工具链，且输出格式与下游时序反演不兼容）。候选集如下，Agent 建议 <b style="color:var(--ok)">MCF</b> —— 冻土低相干区稳健、MintPy 原生兼容。</div>`));
+ const cw=el('<div class="fadein"></div>'); const candc=candidateCard(); cw.appendChild(candc); msgAgent(cw);
+ await sleep(200);
+}
+function resetDemo(){
+ S.phase='hero'; S.dirty=false; S.method='3D_FULL'; S.ran=false;
+ STEPS.forEach((s,i)=>{s.stale=false; s.state=i<5?'done':(i===5?'running':undefined)});
+ FILES.forEach(f=>{f.stale=false});
+ $('btnRun').style.display='none'; $('railRun').style.display='none';
+ setHeaderStatus('','空闲');
+ refreshDrawer();
+}
+
+/* ============ 事件绑定 ============ */
+$('btnSend').addEventListener('click',()=>{const v=$('input').value.trim();if(!v)return;if(S.phase==='hero'){startDemo()}else{msgUser(v);const w=el('<div class="fadein"></div>');w.appendChild(candidateCard());msgAgent(w)};$('input').value=''});
+$('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('btnSend').click()}});
+$('input').addEventListener('input',()=>{$('btnSend').disabled=!$('input').value.trim()});
+$('btnRun').addEventListener('click',()=>{if(S.dirty)confirmRun();else{toast('无待重跑变更，直接运行');runPipeline()}});
+$('railRun').addEventListener('click',()=>$('btnRun').click());
+$('btnReplay').addEventListener('click',()=>{resetDemo();startDemo()});
+$('newChat').addEventListener('click',()=>{resetDemo();renderHero()});
+$('railChat').addEventListener('click',()=>{resetDemo();renderHero();toast('已回到对话')});
+$('railSessions').addEventListener('click',()=>{const sd=$('sider');sd.style.display=sd.style.display==='none'?'':'none'});
+$('railPanel').addEventListener('click',()=>{const d=$('drawer');d.classList.toggle('on');if(d.classList.contains('on')){if(!S.drawer)S.drawer='pipeline';renderDrawer()}});
+$('drawerTabs').querySelectorAll('button').forEach(bt=>bt.addEventListener('click',()=>{S.drawer=bt.dataset.tab;renderDrawer()}));
+$('modeSw').querySelectorAll('button').forEach(bt=>bt.addEventListener('click',()=>{
+ $('modeSw').querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+ bt.classList.add('on'); S.mode=bt.dataset.mode;
+ toast(S.mode==='guide'?'向导模式：Agent 自动决策，关键节点征询确认':'专家模式：手动指定每步方法');
+}));
+$('ovClose').addEventListener('click',()=>{if(confirm('取消当前处理？已完成的步骤将保留（断点续跑）。')){$('overlay').classList.add('hidden');setHeaderStatus('','已暂停');toast('已取消，可从断点继续')}});
+$('lbClose').addEventListener('click',()=>$('lightbox').classList.remove('on'));
+$('lbOpenRight').addEventListener('click',()=>{const id=$('lbOpenRight').dataset.img;const g=IMAGES.find(x=>x.id===id);openDrawer('images',g?{img:id}:null);$('lightbox').classList.remove('on')});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')$('lightbox').classList.remove('on')});
+
+/* ============ 启动 ============ */
+renderSessions(); renderHero();
+$('btnSend').disabled=true;
+</script>
+</body>
+</html>

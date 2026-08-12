@@ -1,0 +1,1141 @@
+# InSAR-Agent 系统设计
+
+> 本文是 agent 层、执行层、界面层的完整设计定稿。
+> 依据：`docs/DESIGN.md`（产品与 novelty 定稿）+ 四轮源码级竞品审计。
+> 所有借鉴点标注 `仓库/文件:行号`，所有「未实现」标注为设计空白。
+> 最后更新：2026-08-10
+
+---
+
+## 0. 阅读指引
+
+| 你想知道 | 看哪节 |
+|---|---|
+| InSAR 和普通 agent 任务差在哪 | §1 |
+| agent 主循环怎么转 | §3 |
+| 小时级任务崩了怎么续 | §4（核心） |
+| 指纹怎么算、怎么标脏 | §5 |
+| 界面右侧那些面板怎么组织 | §7 |
+| 先做什么后做什么 | §9 |
+
+前置结论修正（研究后推翻的三条原判断）：
+
+1. **「人改参数 → 自动标脏下游」不是我们的创新** —— aiida-workgraph 已完整实现（`aiida-workgraph/src/aiida_workgraph/engine/task_state.py:170-203` 的 `reset_task` 递归重置 + `workgraph.py:129-136` 的 `check_modified_tasks` 图 diff）。我们的空间在**零基础设施**（它需要 PostgreSQL + RabbitMQ + daemon）与**可解释性**（它静默重置，不告诉用户为什么）。
+2. **InSAR-Pro 没有 ISCE2 封装** —— 它走 ISCE3 + Dolphin，且 `app/engines/isce3.py`（933 行）连 `import isce3` 都没有，全是 numpy fallback。ISCE2 链是零起点。
+3. **InSAR-Pro 的 MintPy 封装已经在用 `--dostep`** —— 5 处独立 CLI 子命令调用（`InSAR-Pro/insar-pro/backend/app/engines/mintpy.py:290,556,750,914,1047`）。这正是竞品明确没做的那块，可直接复用。
+
+---
+
+## 1. InSAR 处理的独特性：七条硬约束
+
+这一节是整份设计的推导起点。**通用 agent 框架在这七条上全部失效**，这是自研执行层的唯一理由。
+
+### 1.1 单步耗时跨五个数量级
+
+```
+参数校验      < 1 秒
+DEM 下载      ~ 2 分钟
+解缠(单对)    ~ 30 秒 × 1035 对
+配准(46 景)   ~ 18 分钟
+干涉图        ~ 52 分钟
+ISCE2 全链    2–5 小时（DESIGN.md:454，预估未实测）
+PS 时序反演   8–24 小时（InSAR-Pro 文档目标值）
+```
+
+**推论**：不能用统一的超时策略。竞品的做法是全局 `timeout=120`（`agentic-swmm/agentic_swmm/agent/tool_handlers/_shared.py:229`）——对 InSAR 直接不可用。MintPy 那条更糟：裸 `proc.wait()` 无超时（`InSAR_Agent/src/insar_agent/tools/mintpy.py:234`），可永久挂起。
+
+设计要求：**超时必须按 capability 声明，且区分「无输出超时」与「总时长超时」**。
+
+### 1.2 重跑代价不对称，且不可逆的是时间不是数据
+
+改一个解缠阈值 → 下游 6 步失效 → 93 分钟。这不是「点一下重试」，是「明天再来看」。
+
+**推论**：三条设计要求。
+- 任何触发重跑的操作**必须前置确认**，并显示预估时长与影响范围（不是弹 `confirm()`，要显示命令、耗时、覆写清单）。
+- 必须能**只重跑受影响段**，粒度到步。竞品的 `run_all(start_from: int)`（`InSAR_Agent/src/insar_agent/workflow.py:141-147`）用整数下标且靠 LLM 猜，不可用。
+- 必须能**回答「为什么要重跑」**。redun 的 `explain_cache_miss`（`redun/redun/backends/db/__init__.py:2507`）区分 `new_task`/`new_args`/`new_call` 三类，这个能力要接到标脏路径上。
+
+### 1.3 中间产物数量与体积失控
+
+实测基准（唯一可信数字，来自 `InSAR-Pro/insar-pro/backend/data/real_data/`）：
+
+```
+HyP3 clipped 产品：11 个干涉对 → 110 文件 → 402 MB（每对 10 文件 / 36.5 MB）
+5 个主栅格（unw/corr/dem/lv_theta/lv_phi）均为 6,757,228 字节 —— 完全相同
+```
+
+ISCE2 radar-coord 中间产物量级远高于此（`.slc.full` 单景 GB 级，1035 对干涉图各含 `.int/.cor/.unw/.vrt/.xml`）。
+
+**推论一**：**绝不能全量内容哈希**。redun 的解法是 `(path, size, mtime)` 伪哈希（`redun/redun/file.py:463-475`）：
+
+```python
+if self.exists(path):
+    stat = os.stat(path); mtime = stat.st_mtime; size = stat.st_size
+else:
+    mtime = -1; size = -1
+return hash_struct(["File", "local", path, size, str(mtime)])
+```
+
+**推论二（重要陷阱）**：上面那 5 个栅格字节数完全相同 —— 说明 `(path,size,mtime)` 在 InSAR 场景有**真实碰撞风险**：同尺寸产物被覆写但 mtime 未变（如从备份恢复、或 `cp -p`）时判不出。因此需要三档策略：
+
+| 数据类别 | 策略 | 依据 |
+|---|---|---|
+| 原始 SLC / DEM（只增不改） | 仅路径（`IFile`） | `redun/redun/file.py:1710-1716` |
+| 中间产物（`.int/.unw/.cor`） | path+size+mtime | `redun/redun/file.py:463-475` |
+| 最终成果（`velocity.h5` / 图件 / provenance） | 全量内容哈希 | `redun/redun/file.py:1784-1788` |
+
+内容哈希的 `block_size` 必须调大 —— redun 默认仅 1024 字节（`redun/redun/hashing.py:57`），对 GB 级文件要改到 4 MB。
+
+### 1.4 外部工具输出契约不稳定
+
+这是 InSAR 特有的、通用框架完全没考虑的问题。实证清单：
+
+| 不稳定点 | 证据 |
+|---|---|
+| MintPy 输出文件名随配置变 | `InSAR_Agent/.../tools/mintpy.py:343-344` 写 4 个候选名 `['timeseries_ramp_demErr.h5','timeseries_ERA5_ramp_demErr.h5','timeseries.h5',...]` |
+| 输出目录不定（根目录 or `geo/`） | `InSAR_Agent/.../tools/mintpy.py:275-283` `_find_in_dir` 两处都试 |
+| 可执行文件可能不在 PATH | `InSAR_Agent/.../tools/mintpy.py:192-197` `shutil.which` 失败退化为 `python -m` |
+| ERA5/CDS 服务不可靠 | `InSAR_Agent/src/insar_agent/agent.py:1052-1067` 被迫自动降级 + unlink 所有 `*ERA5*` 产物 + 整个 MintPy 重跑 |
+| 退出码 0 但结果错 | `agentic-swmm` 的 `run_ok` 语义：swmm5 退出 0 但 rpt 里有 solver error |
+| PyStamps 路径字符偏移硬编码 | `DESIGN.md:138`：`[nb-22:nb-14]` 切日期，文件名必须严格 `YYYYMMDD_YYYYMMDD.diff` 结尾 |
+| PyStamps 反选式文件发现 | `DESIGN.md:139`：目录里有 `.vrt/.hdr/.aux` 残留会被误当数据 |
+| PyStamps 全程 big-endian | `DESIGN.md:131-132`：无条件 `.byteswap()`，桥必须输出 BE |
+
+**推论**：产物发现必须是**声明式候选列表 + 显式失败**，不能假设单一路径。且需要 `run_ok` 双判定：进程退出码 + 领域校验器（产物存在、维度合理、数值范围、无 NaN 面积超限）。
+
+### 1.5 失败原因高度可分类，且多数可自愈
+
+InSAR 失败集中在少数几类，且每类都有确定的处置方式：
+
+| 失败类 | 典型触发 | 处置 |
+|---|---|---|
+| 网络/凭据 | ASF/CDS/ESA 401、超时 | 换账号（`InSAR_Agent/src/insar_agent/tools/submit_insar.py:401-410` 遍历账号找额度）、指数退避 |
+| 服务不可用 | CDS 队列积压 | 降级到 `tropo_height_corr`，标注证据等级下降 |
+| 磁盘满 | 中间产物撑爆 SSD | 清理已归档的中间产物，或停链要求人工介入 |
+| 内存不足 | MintPy 大堆栈 OOM | 降并行度 / 分块处理 |
+| 参数不当 | 相干性阈值过高 → 解缠孤岛 | 回到候选集重选，不是重试 |
+| 数据质量 | 基线过长、相干性过低 | **停链**，不自愈 —— 这是质量门该拦的 |
+
+**推论**：修复动作必须是**预定义闭集**，LLM 只做分类不做发明。且必须区分「可自愈」与「必须停链」——`agentic-swmm` 顶层 skill 的原话值得照抄（`DESIGN.md:607`）：
+
+> "decides which workflow path to take, which QA gates must pass, and **when to stop rather than invent missing inputs**"
+
+### 1.6 部分完成有价值，且必须可见
+
+MintPy 跑了 40 分钟在第 7 步失败 —— 前面的解缠产物是**有效资产**，不能因为整体失败就丢弃或标为无效。
+
+`agentic-swmm` 的格言（`DESIGN.md:335`）：「Partial evidence is still useful evidence.」但它的代码没做到 —— 审计被 `if result.return_code == 0` 门控（`DESIGN.md:669-671`）。
+
+**推论**：
+- 审计必须 `try/finally` 真触发。
+- 取消/失败时已完成步骤的状态与指纹**必须落盘**，不能只留在内存。
+- 部分输出（日志尾部、已生成的中间文件）必须保留并在 UI 可见。当前原型的 `cancel()` 已做到这点（标 SIGTERM 保留输出）。
+
+### 1.7 人在环路是常态，不是例外
+
+专家模式下用户会在流水线跑到一半时说「第 6 步换成 SNAPHU」。这要求：
+
+- 运行中可接收干预指令（不只是 kill）
+- 干预后自动推导影响范围
+- 已完成的无关步骤不受影响
+
+aiida-workgraph 实现了这个，但走 RabbitMQ RPC（`aiida-workgraph/src/aiida_workgraph/engine/workgraph.py:287-303` 的 `message_receive` + `_schedule_rpc`）。**我们用 SQLite 的 `pending_actions` 表 + 主循环轮询替代**，零基础设施。
+
+### 1.8 七条约束 → 架构决策映射
+
+| 约束 | 架构决策 |
+|---|---|
+| §1.1 耗时跨五个数量级 | 超时按 capability 声明；双超时（无输出/总时长） |
+| §1.2 重跑代价不对称 | 前置确认卡 + 步级续跑 + 失效可解释 |
+| §1.3 产物体积失控 | 三档文件指纹策略；大块流式哈希 |
+| §1.4 输出契约不稳定 | 声明式产物候选 + `run_ok` 双判定 |
+| §1.5 失败可分类 | 预定义修复动作闭集；停链条件显式化 |
+| §1.6 部分完成有价值 | try/finally 审计；状态即时落盘 |
+| §1.7 人在环路常态 | SQLite 动作队列 + 轮询消费 |
+
+---
+
+## 2. 分层架构
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ UI      轨迹流(Codex式) + 右侧多面板 Dock + 双 SSE                 │
+│         已实现于 prototype/（12 模块 3954 行，零依赖）              │
+├──────────────────────────────────────────────────────────────────┤
+│ API     FastAPI。人与 LLM 共用同一套接口                           │
+│         task_id 唯一句柄，LLM 永不接触文件系统路径                  │
+├──────────────────────────────────────────────────────────────────┤
+│ Brain   ← 可整层删除，删掉后退化为手动流水线，结果完全正确           │
+│         intent / select / classify_failure / narrate 四职责         │
+│         只做候选集内选择题，绝不生成命令或代码                       │
+├──────────────────────────────────────────────────────────────────┤
+│ Loop    agent 主循环。事件驱动，非 while+tool_call                 │
+│         消费三个来源：用户消息 / 执行器事件 / 干预队列               │
+├──────────────────────────────────────────────────────────────────┤
+│ Core    唯一真相源 —— SQLite                                      │
+│         fingerprint / stale / store / ledger / actions             │
+├──────────────────────────────────────────────────────────────────┤
+│ Runtime 唯一有副作用的层                                           │
+│         五阶段执行器 + 幂等守卫 + 双超时 + 协作式取消               │
+├──────────────────────────────────────────────────────────────────┤
+│ Audit   契约与质量门。try/finally 保证触发                          │
+├──────────────────────────────────────────────────────────────────┤
+│ Registry  kinds / capabilities / bridges / scenarios（纯数据）      │
+├──────────────────────────────────────────────────────────────────┤
+│ Engines   ISCE2 / MintPy / PyStamps / PyAPS + 桥（薄封装，零决策）  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 2.1 目录结构（相对 §DESIGN.md 5.1 的修订）
+
+```
+insar_agent/
+├── registry/              纯数据·零逻辑
+│   ├── kinds.py           DataKind(kind × layout × crs)
+│   ├── capabilities.py    步骤候选方法声明 + 超时/资源声明 ← 新增
+│   ├── artifacts.py       产物候选名声明（应对 §1.4）      ← 新增
+│   ├── bridges.py         layout 转换声明
+│   └── scenarios.py       场景规则（冻土→周期，地震→阶跃）
+├── planner/               纯函数·可单测·不碰磁盘网络
+│   ├── graph.py           由 registry 构建能力图
+│   ├── feasibility.py     此刻哪些候选可选（环境探测结果收窄）
+│   ├── score.py           auto 模式打分
+│   └── plan.py            输出执行 DAG
+├── core/                  唯一真相源
+│   ├── schema.sql         SQLite DDL                     ← 新增
+│   ├── fingerprint.py     三段式哈希（task/args/eval）
+│   ├── normalize.py       规范化哈希（顺序无关+浮点归一） ← 新增
+│   ├── filehash.py        三档文件指纹策略               ← 新增
+│   ├── stale.py           失效传播 + 原因分类
+│   ├── store.py           状态机 + 幂等守卫
+│   ├── actions.py         干预队列（替代 RabbitMQ RPC）  ← 新增
+│   └── ledger.py          provenance 账本
+├── runtime/               唯一有副作用的层
+│   ├── probe.py           环境探测
+│   ├── render.py          Jinja2 → topsApp.xml / *.cfg
+│   ├── executor.py        五阶段执行器                   ← 重写
+│   ├── stream.py          日志流 + 双超时 + 取消          ← 新增
+│   └── discover.py        产物发现（候选列表匹配）        ← 新增
+├── engines/               薄封装·不含决策
+│   ├── isce2.py  mintpy.py  pystamps.py  hyp3.py  pyaps.py
+│   └── bridges/
+│       ├── prep_isce.py           调官方
+│       └── isce2_to_pystamps.py   我们建的桥（主 novelty）
+├── audit/
+│   ├── contract.yaml      指标来源契约
+│   ├── verify.py          重解析比对
+│   ├── runok.py           run_ok 双判定                  ← 新增
+│   └── ladder.py          六级证据阶梯
+├── brain/                 可完全拔掉
+│   ├── provider.py        provider 路由表 + 单跳 fallback
+│   ├── intent.py          自然语言 → 结构化意图
+│   ├── select.py          候选集内选择（约束解码）
+│   ├── triage.py          日志 → 失败分类（闭集）        ← 重命名
+│   └── narrate.py         provenance → 方法章节草稿
+├── loop/                  agent 主循环                    ← 新增整层
+│   ├── driver.py          事件驱动主循环
+│   ├── events.py          事件工厂（LLM data / UI update 分离）
+│   └── budget.py          上下文预算 + compaction
+├── report/                figures.py  methods.py  script.py（裸命令导出）
+└── api/                   app.py + static/（prototype 产物）
+```
+
+---
+
+## 3. Agent 主循环设计
+
+### 3.1 为什么不能照抄竞品的 for 循环
+
+两个竞品都是同一形状：
+
+```python
+# InSAR_Agent/src/insar_agent/agent.py:1443
+for i in range(10):                       # 硬编码 10 轮，无配置
+    response = client.chat.completions.create(...)
+    if msg.tool_calls: ...continue
+    else: return msg.content
+return 'Agent loop exceeded maximum iterations.'    # :1486
+
+# agentic-swmm/agentic_swmm/agent/planner.py:460
+for step in range(1, self.max_steps + 1):          # 默认 40
+    ...
+else:
+    final_text = f"planner stopped after max_steps={self.max_steps}"
+```
+
+这个形状对 InSAR 有三个致命问题：
+
+1. **无法表达「等待 3 小时」** —— 循环体内同步等子进程会阻塞整个 agent，用户连问句都发不出。InSAR_Agent 的绕法是把长任务丢 daemon 线程（`agent.py:1113`）然后**靠前端 `setTimeout` 自动发一条假消息把 LLM 唤起**（`web/static/index.html:619-620`）：
+
+   ```js
+   if(obj.task_id){setTimeout(function(){doSend('auto_pipeline 已完成 (task_id='+obj.task_id+')');}, 1000);}
+   ```
+   工作流状态机被放进了前端 JS。这不可接受。
+
+2. **进程重启即失忆** —— 循环状态在内存，`app.py:113-115` 只能把 running 改成 failed 加后缀「(服务重启)」。
+
+3. **无法接收运行中干预** —— 循环在等 LLM 或等子进程，没有消费外部指令的位置。
+
+### 3.2 事件驱动主循环
+
+主循环不是「问 LLM → 调工具」，而是「取下一个事件 → 分派」。三个事件源合并进一个队列：
+
+```
+                    ┌──────────────┐
+   用户消息 ────────>│              │
+                    │  事件队列     │──> driver.step() ──> 分派
+   执行器事件 ──────>│  (asyncio)   │         │
+                    │              │         ├─> LLM 决策（仅候选集内）
+   干预队列 ────────>│              │         ├─> 执行器投递
+   (SQLite轮询)      └──────────────┘         ├─> 状态机更新 + 落盘
+                                              └─> UI 事件广播
+```
+
+```python
+# loop/driver.py 骨架
+class Driver:
+    """
+    事件驱动 agent 主循环。
+
+    与竞品 for 循环的根本区别：LLM 调用只是事件处理的一种，
+    不是循环的骨架。长任务期间循环继续转，用户可继续对话。
+    """
+    async def run(self):
+        while not self.stopped:
+            ev = await self.inbox.get()          # 三源合并
+            try:
+                await self.dispatch(ev)
+            except CancelledError:
+                await self.on_cancel(ev)         # 保留部分成果（§1.6）
+            except Exception as e:
+                await self.on_error(ev, e)       # 结构化回灌，不崩循环
+            finally:
+                self.store.flush()               # 每个事件后落盘（§1.6）
+
+    async def dispatch(self, ev):
+        match ev.kind:
+            case 'user.message':   await self.on_user(ev)
+            case 'tool.finished':  await self.on_tool_done(ev)
+            case 'step.finished':  await self.on_step_done(ev)
+            case 'action.queued':  await self.on_intervention(ev)   # §1.7
+            case 'timer.tick':     await self.on_tick(ev)
+```
+
+### 3.3 LLM 调用的四个约束
+
+**约束一：一次只问一个决策。** 依据 `DESIGN.md:373-374`：社区记录 Ollama 7b/14b/32b 一律「第二个工具永不执行」。竞品虽然允许一次多个 tool_calls（`agent.py:1473`、`planner.py:549`），但我们的 LLM 不调工具 —— 它只回答选择题，所以天然单步。
+
+**约束二：终止条件必须显式且分类。** 竞品都不读 `finish_reason`（已核实两处均无）。我们的终止条件：
+
+| 条件 | 值 | 处理 |
+|---|---|---|
+| 单轮决策数上限 | 1 | 结构化输出即结束 |
+| 同一决策点重复询问 | 2 | 转人工，不再问 LLM |
+| 失败分类连续同类 | 3 | 借鉴 `planner.py:39` `SAME_TOOL_RETRY_LIMIT=3` |
+| 累计失败 checkpoint | 3 | 借鉴 `planner.py:47` `PIVOT_CHECKPOINT_LIMIT=3`，触发后停链问人 |
+| 空响应 / 自我重复 | 1 | 立即熔断（`DESIGN.md:375`） |
+
+`planner.py:41-47` 的注释解释了为什么要两个计数器：同工具计数会被成功调用重置（`planner.py:621-622`），而真实事故是「6 次失败跨 4 个工具，中间夹着成功的探测不断重置计数器」。累计计数器不重置。
+
+**约束三：`unresolved_failure` 标志。** 借鉴 `planner.py:451,592,623`。作用是防止「最后一轮自然语言总结把未修复的失败洗成成功」。这是 InSAR_Agent 完全没有的诚实性保障，而对我们尤其重要 —— 论文系统不能谎报成功。
+
+**约束四：上下文预算。** 两个竞品都没有 compaction（已核实）。InSAR_Agent 全量重发（`agent.py:1420-1425`），且 `query_slc` 返回值含 footprints geojson（`agent.py:842-862`），几十景就顶爆上下文。
+
+我们的策略：
+- **决策请求不带历史** —— 每次选择题是独立的结构化请求，只含「当前步骤 + 候选集 + 环境事实 + 上游摘要」。这从根上消除了历史膨胀。
+- **对话历史单独维护**，仅用于 intent 与 narrate，按 `agentic-swmm/agentic_swmm/agent/prompts.py:182-200` 的字符预算裁剪。
+- **日志绝不进 LLM 上下文** —— 先用确定性代码切片（`DESIGN.md:384-386`：RULER / context rot 研究）。`triage.py` 只收「错误行 ±5 行」的窗口。
+
+### 3.4 系统提示词策略
+
+竞品的提示词规模：InSAR_Agent `SYSTEM_PROMPT` 11,210 字符 + `TOOL_DEFINITIONS` 16,515 字符 = **每轮重发 27.7 KB**（实测）；agentic-swmm base 5,276 字符 + 动态块。
+
+InSAR_Agent 提示词里有整节 "ABSOLUTE ANTI-FABRICATION"（`agent.py:31-38`），还有中文关键词表硬性强制 `tool_choice='required'`（`agent.py:1430-1441`：`_prog_kw` 列了 22 个词含「托管/确认/好的」，加上「上一句含'是否'且用户输入 ≤6 字」的启发式），甚至要求「必须先调 `save_mintpy_overrides(task_id, {})` 再调 preview」这种凑数调用（`agent.py:46`）。
+
+**这些补丁的存在本身说明架构错了。** 它们都在解决同一个问题：LLM 不肯调工具，只输出文本假装调了。它用云端 DeepSeek 都这样。
+
+我们的解法不是抄关键词表，而是**在结构上让 LLM 无法假装**：
+
+- LLM 输出的是**枚举索引**（`{"choice": 0}`），不是命令、不是路径、不是文件名。索引越界直接拒绝并回灌结构化错误。
+- 借鉴 InSAR_Agent 唯一做对的设计 —— **缓存锚定**（`agent.py:481-499` `_cache_query_result` + `:514-556` `_resolve_scene_names`）：LLM 只能传 0-based `scene_indices`，系统从磁盘缓存读真值。注释原话：「LLM cannot fabricate scene names — the system reads from this cache.」
+- 结构化输出走 **token 级硬约束**（GBNF/JSON Schema），不用 JSON mode。依据 JSONSchemaBench：约束解码快 50%，准确率提升最多 4%（`DESIGN.md:367-369`）。
+- 约束保证结构不保证语义，**代码层再做值域校验**（`DESIGN.md:371-372`）：`{"temperature": 999}` 是合法 JSON。
+
+系统提示词目标 **< 3 KB**，不含任何反幻觉说教 —— 幻觉在结构上不可能发生。
+
+### 3.5 Brain 层四职责与降级路径
+
+| 职责 | 输入 | 输出 | 失败降级 |
+|---|---|---|---|
+| `intent` | 自然语言 | `{region, time_range, target, scenario}` | 转表单让用户填 |
+| `select` | 候选集 + 环境事实 | `{choice: int, reason: str}` | 取 registry 声明的 `recommend: true` |
+| `triage` | 错误窗口（±5 行） | `{class: Literal[...], action: Literal[...]}` | 标 `unknown` 停链问人 |
+| `narrate` | provenance JSON | 方法章节 Markdown | 用模板填空 |
+
+**四个都能降级到无 LLM 路径。** 这就是 `DESIGN.md:233` 那条约束的实现：把 `brain/` 整层删掉，系统退化成手动可插拔流水线，仍完全可用、结果完全正确。
+
+---
+
+## 4. 执行层与中断恢复（核心章节）
+
+这一节回答你最关心的问题：**小时级任务断了之后怎么不用从头开始。**
+
+### 4.1 先看竞品为什么做不到
+
+| 竞品 | 恢复能力 | 证据 |
+|---|---|---|
+| InSAR_Agent | **无**。重启只把 running 改 failed 加「(服务重启)」后缀 | `web/app.py:113-115` |
+| InSAR_Agent | `WorkflowRunner` 有步级恢复（`start_from` + done 跳过 + state.json），但**主路径完全不用它** | `workflow.py:141-147`、`:108-109`、`:87-97` vs `agent.py:603` 另写一套 |
+| InSAR_Agent | `_remaining.json` 保存未提交的 pair 列表，**只写不读** | `tools/submit_insar.py:443-448` |
+| InSAR_Agent | `job_queue.cancel_job` 只把状态改 `'cancelling'`，**无任何代码读它** | `web/job_queue.py:92-95` |
+| agentic-swmm | `resume_from_checkpoint` **只定义未调用**，循环仍从 1 开始 | `calibration_runner.py:241-248` vs `:187` |
+| agentic-swmm | 文档自承：「so the next run can resume — **or at least diagnose** — what happened」 | `run_progress.py:8-10` |
+| redun | 无显式 resume，靠缓存快进重放（纯函数式，不适合外部 CLI 副作用） | `redun/scheduler.py:2181-2341` |
+| LangGraph | resume 时**整个节点从函数开头重跑** → 3 小时 ISCE2 白跑 | `DESIGN.md:412`（官方明确） |
+
+**结论：没有一个现成方案能解决「小时级外部 CLI 任务的断点续跑」。** 唯一真正解决的是 aiida，方法是把长任务切成阶段 + 每个阶段入口幂等守卫。
+
+### 4.2 aiida 的正解：五阶段 + 幂等守卫
+
+`aiida-core/src/aiida/engine/processes/calcjobs/tasks.py:525-548` 的 docstring 把设计意图写得很清楚：
+
+```
+UPLOAD -> SUBMIT -> UPDATE -> STASH -> RETRIEVE
+|   ^     |   ^     |   ^     |   ^     |   ^
+v   |     v   |     v   |     v   |     v   |
+
+The advantage of this design, is that the sequence is interruptable,
+meaning, the process can potentially come back and start from where it left off.
+```
+
+每个阶段入口有幂等守卫（六处同构实现：`tasks.py:76-78, 137-140, 182-186, 294-295, 360-361, 399-400`）：
+
+```python
+if node.get_state() == CalcJobState.WITHSCHEDULER:
+    assert node.get_job_id() is not None
+    logger.warning(f'CalcJob<{node.pk}> already marked as WITHSCHEDULER, skipping task_submit_job')
+    return node.get_job_id()
+```
+
+三个关键设计点：
+
+1. **状态推进总在成功之后**（`tasks.py:165` 在 `else:` 分支里）。
+2. **外部作业句柄持久化到节点属性**（`calcjob.py:66` `SCHEDULER_JOB_ID_KEY = 'job_id'`），重启后凭 job_id 重连调度器轮询，**不重跑**。
+3. **内存 future 不跨重启**（`tasks.py:520-523` 的 `load_instance_state` 显式把 `_task`/`_killing` 置 None）—— 只有 DB 状态跨重启。
+
+**这就是答案：不试图 checkpoint 子进程内部，只 checkpoint 它的句柄。**
+
+### 4.3 我们的五阶段执行器
+
+把 aiida 的五阶段映射到 InSAR：
+
+```
+PREPARED ──> LAUNCHED ──> RUNNING ──> COLLECTED ──> VERIFIED ──> DONE
+   │            │            │            │             │
+   │            │            │            │             └─ run_ok 双判定通过
+   │            │            │            └─ 产物发现完成，指纹已算
+   │            │            └─ 子进程存活，pid/日志偏移持久化
+   │            └─ 子进程已启动，pid 已落盘
+   └─ 配置已渲染，输入清单已校验，指纹已算
+
+任一阶段失败 ──> FAILED（保留已完成阶段的成果）
+运行中取消   ──> INTERRUPTED（保留 pid 记录与日志偏移，可 reattach）
+```
+
+各阶段的幂等守卫与恢复动作：
+
+| 阶段 | 守卫（重启后检查） | 恢复动作 |
+|---|---|---|
+| PREPARED | 配置文件存在 且 指纹匹配 | 跳过渲染 |
+| LAUNCHED | `pid` 已记录 | 进 RUNNING 判活 |
+| RUNNING | `os.kill(pid, 0)` 存活？ | **存活 → 重新 attach 日志（从 `log_offset` 续读）；已死 → 查产物完整性决定 COLLECTED 还是 FAILED** |
+| COLLECTED | 产物清单齐全 且 指纹匹配 | 跳过发现，直接校验 |
+| VERIFIED | `run_ok` 记录存在 | 跳过校验 |
+
+**RUNNING 阶段的重新 attach 是关键。** 这解决了「服务重启但 MintPy 还在跑」这个真实场景 —— InSAR_Agent 在这里直接放弃（标 failed）。
+
+```python
+# runtime/executor.py 骨架
+STAGES = ['PREPARED', 'LAUNCHED', 'RUNNING', 'COLLECTED', 'VERIFIED']
+
+async def execute_step(step_id, token):
+    """
+    五阶段执行。每阶段入口幂等守卫，状态推进在成功之后。
+    借鉴 aiida tasks.py:137-140 的守卫模式与 :165 的推进时机。
+    """
+    rec = store.load(step_id)
+
+    if rec.stage_lt('PREPARED'):
+        cfg = render_config(step_id)              # Jinja2 → topsApp.xml / *.cfg
+        validate_inputs(step_id)                  # 输入清单校验（PyStamps 缺 .base 会静默丢干涉图）
+        store.advance(step_id, 'PREPARED', config_hash=hash_file(cfg))
+
+    if rec.stage_lt('LAUNCHED'):
+        proc = spawn(step_id)                     # 独立进程组，便于整组 kill
+        store.advance(step_id, 'LAUNCHED', pid=proc.pid, pgid=os.getpgid(proc.pid))
+
+    if rec.stage_lt('RUNNING'):
+        if rec.pid and pid_alive(rec.pid):
+            await reattach(rec.pid, rec.log_offset, token)    # 重启后续读，不重跑
+        else:
+            await stream_until_exit(step_id, token)
+        store.advance(step_id, 'RUNNING', exit_code=...)
+
+    if rec.stage_lt('COLLECTED'):
+        arts = discover_artifacts(step_id)        # 声明式候选匹配（§1.4）
+        store.advance(step_id, 'COLLECTED', artifacts=arts)
+
+    if rec.stage_lt('VERIFIED'):
+        ok, checks = run_ok(step_id)              # 退出码 + 领域校验（§1.4）
+        store.advance(step_id, 'VERIFIED' if ok else 'FAILED', qa=checks)
+```
+
+### 4.4 日志流与双超时
+
+InSAR_Agent 的取消有个致命缺陷，必须规避。它的检查嵌在阻塞式读循环里（`tools/mintpy.py:213-232`）：
+
+```python
+for line in proc.stdout:                        # :213  阻塞在这里
+    ...
+    if stop_event and stop_event.is_set():      # :219  子进程静默时永远到不了
+        proc.terminate()
+        try: proc.wait(timeout=5)               # :223
+        except subprocess.TimeoutExpired: proc.kill()   # :225
+```
+
+**MintPy 长时间不输出时，取消信号完全收不到。** 而 MintPy 静默 20 分钟是常态。
+
+我们的解法：读循环放独立线程，主循环用 `select`/队列带超时轮询。
+
+```python
+# runtime/stream.py 骨架
+async def stream_until_exit(step_id, token):
+    """
+    双超时：
+      idle_timeout  —— 无输出超时（capability 声明，默认 30 min）
+      total_timeout —— 总时长超时（capability 声明，如 ISCE2 干涉 6 h）
+    取消检查不依赖子进程输出（规避 InSAR_Agent mintpy.py:219 的缺陷）。
+    """
+    cap = registry.capability_of(step_id)
+    last_output = time.monotonic()
+    started = last_output
+
+    async for item in reader_queue(proc, poll=0.5):     # 0.5 s 必定醒一次
+        now = time.monotonic()
+
+        if token.cancelled:
+            return await graceful_kill(proc, reason='user')
+
+        if item is TICK:                                 # 无输出也会收到 TICK
+            if now - last_output > cap.idle_timeout:
+                return await graceful_kill(proc, reason='idle_timeout')
+            if now - started > cap.total_timeout:
+                return await graceful_kill(proc, reason='total_timeout')
+            continue
+
+        last_output = now
+        store.append_log(step_id, item.line, offset=item.offset)   # 偏移持久化，供 reattach
+        emit(ui_log(step_id, item.line, tone=classify_line(item.line)))
+```
+
+`graceful_kill` 走 aiida/竞品共有的三段式，但作用于**进程组**（ISCE2 会 fork 子进程，只 kill 父进程会留孤儿）：
+
+```python
+async def graceful_kill(proc, reason):
+    os.killpg(proc.pgid, signal.SIGTERM)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=10)
+    except asyncio.TimeoutError:
+        os.killpg(proc.pgid, signal.SIGKILL)
+    store.mark_interrupted(reason=reason, log_offset=...)   # 保留成果（§1.6）
+```
+
+日志落盘策略（借鉴各家上限，全部实测过）：
+
+| 项 | 值 | 依据 |
+|---|---|---|
+| 全量日志 | 落盘 `logs/{step}/{run_id}.log`，不进内存 | `agentic-swmm/.../_shared.py:242-246` |
+| 给 UI 的滑窗 | 最近 200 行 | InSAR_Agent 用 30/50（`job_queue.py:159-160`、`mintpy.py:238`），偏小 |
+| 给 LLM 的窗口 | 仅错误行 ±5 行 | `DESIGN.md:384-386` |
+| 单行上限 | 8 KB 截断 | MCP 用 5 MB（`mcp_client.py:165`），过宽 |
+
+### 4.5 干预队列（替代 RabbitMQ RPC）
+
+aiida-workgraph 的运行中干预走 kiwipy/RabbitMQ（`engine/workgraph.py:294`）。我们用 SQLite 表 + 主循环轮询：
+
+```sql
+CREATE TABLE pending_actions (
+  id         INTEGER PRIMARY KEY,
+  created_at REAL NOT NULL,
+  scope      TEXT NOT NULL,          -- 'step' | 'run'
+  target     TEXT NOT NULL,          -- step_id 或 run_id
+  action     TEXT NOT NULL,          -- RESET|PAUSE|PLAY|SKIP|KILL|SET_METHOD|SET_PARAMS
+  payload    TEXT,                   -- JSON
+  consumed_at REAL                   -- NULL = 待消费
+);
+```
+
+动作集直接对齐 aiida-workgraph（`engine/task_actions.py:36-50`）：RESET / PAUSE / PLAY / SKIP / KILL，加两个 InSAR 特有的 SET_METHOD / SET_PARAMS。
+
+主循环每次 `timer.tick`（1 s）消费一次。RESET 的语义就是 `reset_task` 递归（`task_state.py:170-203`），但我们额外做两件它没做的事：
+
+1. **算影响范围并展示**，不静默重置。
+2. **区分「影响结果的参数」与「不影响结果的参数」** —— 见 §5.4，这是真正的差异化点。
+
+### 4.6 run_ok 双判定
+
+退出码 0 不等于成功。这是 `agentic-swmm` 学到的教训（swmm5 退出 0 但 rpt 里有 solver error），InSAR 同理：MintPy 可以「成功」地输出全 NaN 的时序。
+
+```yaml
+# registry/capabilities.py 里每个 capability 声明
+snaphu_mcf:
+  timeout: {idle: 1800, total: 7200}
+  artifacts:
+    - id: unw
+      candidates: ["data/unw/*.unw", "data/unw/geo/*.unw"]   # §1.4 多候选
+      required: true
+  run_ok:
+    - {check: exit_code, equals: 0}
+    - {check: artifact_exists, id: unw}
+    - {check: not_all_nan, id: unw}
+    - {check: nan_fraction_below, id: unw, value: 0.5}
+    - {check: log_absent, pattern: "ERROR|Segmentation fault"}
+  quality_gate:                          # 失败则停链，不自愈（§1.5）
+    - {metric: unwrap_coverage, min: 0.7, on_fail: stop}
+```
+
+---
+
+## 5. 指纹与失效传播
+
+### 5.1 三段式哈希
+
+借鉴 redun 的分层（`redun/redun/hashing.py:94-114`），**三个哈希分开算、分开存**，这样才能回答「为什么重跑」：
+
+```python
+task_hash = H(["Task", name, "version", version])          # 或含源码，见 5.3
+args_hash = H(["Args", normalize(method), normalize(params)])
+eval_hash = H(["Eval", task_hash, args_hash, upstream_eval_hashes])
+```
+
+对比 redun 的 `hash_eval`（`hashing.py:107-114`）：它的 eval_hash **不含上游**（上游只进用于记录的 `call_hash`，`hashing.py:124-130`）。我们把上游并进 eval_hash，走 aiida 的 Merkle 级联路线（`aiida-core/src/aiida/orm/nodes/process/process.py:88-102`），因为 InSAR 的依赖是显式 DAG，级联语义更直观。
+
+失效原因分类（接到 UI 上，redun 的 `explain_cache_miss` 只用于日志）：
+
+| 原因 | 判定 | UI 文案 |
+|---|---|---|
+| `method_changed` | args_hash 变且 method 不同 | 「换了解缠方法」 |
+| `param_changed` | args_hash 变且 method 相同 | 「改了 min_coherence: 0.25 → 0.3」 |
+| `upstream_changed` | 自身 args_hash 未变，上游 eval_hash 变 | 「第 5 步重跑了」 |
+| `tool_upgraded` | task_hash 变（工具版本） | 「MintPy 1.6.4 → 1.6.5」 |
+| `artifact_missing` | 产物指纹为 `-1` | 「产物被删除」 |
+
+### 5.2 规范化哈希：InSAR 必须处理的三个坑
+
+aiida 的 `make_hash`（`aiida-core/src/aiida/common/hashing.py`）解决了三个我们一定会踩的坑：
+
+**坑一：dict 键序。** 同一份 YAML 换个 key 顺序不应导致全量重算。aiida 按**已哈希的 key** 排序（`hashing.py:159-176`），而非按 key 原值 —— 好处是 key 类型混杂（str/int 混用）时也能全序，不 `TypeError`。
+
+**坑二：浮点表示。** 这是 InSAR 的重灾区（相干阈值、多视因子、alpha）。aiida 先按有效位格式化成字符串再哈希，并把 `-0.0` 归一为 `0.0`（`hashing.py:197-202` + `:310-320`）。**不做这个，`0.3` 和 `0.30000000000000004` 会是两个不同任务。**
+
+**坑三：嵌套结构歧义。** aiida 给容器加配对的闭合 digest（`hashing.py:123` `_END_DIGEST`）。没有它，`[[1],[2]]` 和 `[[1,2]]` 哈希相同。
+
+类型域分离两家都做了，选一个：aiida 用 blake2b 的 `person=` 参数做密码学域分离（`hashing.py:119-120`），redun 用 bencode tag 前缀（`hashing.py:47-54`）。我们用后者，因为不引入 blake2b 依赖，`hashlib.sha256` 够用。
+
+### 5.3 源码是否参与哈希
+
+redun 默认把函数源码纳入 task_hash（`redun/redun/task.py:433-467`），用 `inspect.getsource` + 正则剥掉装饰器行（`redun/redun/utils.py:320-332`）。但它留了逃逸阀：一旦手工指定 `version`，源码彻底不参与（`task.py:454`）。
+
+**InSAR 必须用 version 逃逸阀。** 理由：改一行日志字符串不该触发 12 小时重算。所以：
+
+- `capability` 声明里写显式 `version`，人工递增。
+- 但 `tool_version`（ISCE2/MintPy/SNAPHU 的实际版本号）**必须**进 task_hash —— 这是 `DESIGN.md:258` 的第 5 触发器，竞品全都缺失。
+- 另外 redun 有个细节值得抄：`_task_options_base`（模块加载时的选项）**故意不哈希**，只有运行时 override 才哈希（`task.py:441-442`，注释："not allowed to impact the results of computation"）。这就是「资源配置不该影响结果指纹」的显式建模，直接对应 §5.4。
+
+### 5.4 参数分类：真正的差异化点
+
+研究确认：aiida 建模了「不参与哈希的参数」（`process.py:177-179` `_hash_ignored_attributes`），redun 建模了「不影响结果的选项」（`task.py:441-442`），但**没人把这个区分和「人工改参数后自动决定是否标脏」连起来**。
+
+这是可站得住的创新点。InSAR 参数天然分三类：
+
+| 类别 | 例子 | 进 args_hash？ | 改动后果 |
+|---|---|---|---|
+| **科学参数** | `min_coherence`, `alpha`, `max_temporal_baseline`, `unwrap_method` | ✓ | 标脏自身 + 全部下游 |
+| **资源参数** | `threads`, `memory_limit`, `tmp_dir`, `parallel_pairs` | ✗ | 不标脏，仅记 provenance |
+| **呈现参数** | `dpi`, `cmap`, `output_format`, `figure_size` | ✗（但标脏出图步） | 只标脏第 10 步 |
+
+registry 里显式声明：
+
+```python
+Capability(
+    id='snaphu_mcf',
+    params={
+        'min_coherence': Param(0.25, kind='science', range=(0, 1)),
+        'threads':       Param(8,    kind='resource', range=(1, 32)),
+        'cost_mode':     Param('SMOOTH', kind='science', enum=[...]),
+    },
+)
+```
+
+**用户体验差异**：改 `threads: 8 → 20` 时，系统说「资源参数变更，不影响结果，无需重跑」，而不是把 6 个下游标红要求跑 93 分钟。这个交互 aiida-workgraph 做不到（它是全图 diff）。
+
+### 5.5 文件指纹三档策略
+
+见 §1.3 的表。实现要点：
+
+```python
+# core/filehash.py
+def fingerprint(path: Path, policy: str) -> str:
+    """
+    policy: 'path' | 'stat' | 'content'
+    'stat' 档借鉴 redun/redun/file.py:463-475，不存在编码为 size=-1,mtime=-1，
+    使「产物被删」成为正常的哈希差异而非异常分支。
+    """
+    if policy == 'path':
+        return H(['File', 'path', str(path)])
+    if not path.exists():
+        return H(['File', policy, str(path), -1, -1])       # 关键：-1 编码
+    st = path.stat()
+    if policy == 'stat':
+        return H(['File', 'stat', str(path), st.st_size, st.st_mtime_ns])
+    return H(['File', 'content', str(path), st.st_size, _stream_sha(path)])
+
+def _stream_sha(path, block=4 << 20):     # 4 MB；redun 默认 1024 对 GB 级文件太小
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(block), b''):
+            h.update(chunk)
+    return h.hexdigest()
+```
+
+针对 §1.3 发现的碰撞风险（5 个栅格字节数完全相同），`stat` 档额外加一条：**目录级产物用「文件数 + 各文件 (name,size,mtime) 排序后哈希」**，而非仅目录本身的 stat。
+
+## 6. 状态存储与 Provenance
+
+### 6.1 SQLite 表结构
+
+参照 redun 的三层解耦（provenance / 执行记录 / 缓存分离，`redun/redun/backends/db/__init__.py:662-1006`），但压到最小可用集：
+
+```sql
+-- 运行（一次用户发起的完整处理）
+CREATE TABLE runs (
+  run_id      TEXT PRIMARY KEY,        -- UUID + 单调时间戳（DESIGN.md:639：不能靠目录名）
+  session_id  TEXT NOT NULL,
+  created_at  REAL NOT NULL,
+  status      TEXT NOT NULL,           -- planning|running|paused|done|failed
+  intent      TEXT,                    -- JSON：结构化意图
+  argv        TEXT,                    -- 等价裸命令（DESIGN.md:765 第 3 条要求）
+  env_hash    TEXT,                    -- conda env + 工具版本集合的哈希
+  git_head    TEXT, git_dirty INTEGER,
+  agent_hash  TEXT                     -- prompt+tools schema 哈希（DESIGN.md:644-646）
+);
+
+-- 步骤（DAG 节点）
+CREATE TABLE steps (
+  run_id      TEXT NOT NULL,
+  step_id     INTEGER NOT NULL,
+  capability  TEXT NOT NULL,           -- 'snaphu_mcf'
+  method      TEXT NOT NULL,
+  params      TEXT NOT NULL,           -- JSON
+  task_hash   TEXT NOT NULL,
+  args_hash   TEXT NOT NULL,
+  eval_hash   TEXT NOT NULL,
+  stage       TEXT NOT NULL,           -- PREPARED..VERIFIED|FAILED|INTERRUPTED
+  stale       INTEGER DEFAULT 0,
+  stale_reason TEXT,                   -- method_changed|param_changed|upstream_changed|...
+  pid         INTEGER, pgid INTEGER,   -- 外部作业句柄（aiida calcjob.py:66 的思路）
+  ext_job_id  TEXT,                    -- HyP3 job id 等
+  log_path    TEXT, log_offset INTEGER,-- 供 reattach 续读
+  exit_code   INTEGER,
+  run_ok      INTEGER,                 -- 双判定结果（≠ exit_code）
+  started_at  REAL, ended_at REAL,
+  PRIMARY KEY (run_id, step_id)
+);
+
+-- 依赖边（显式 DAG，供级联标脏）
+CREATE TABLE edges (
+  run_id TEXT, parent INTEGER, child INTEGER,
+  PRIMARY KEY (run_id, parent, child)
+);
+
+-- 产物
+CREATE TABLE artifacts (
+  run_id     TEXT NOT NULL,
+  step_id    INTEGER NOT NULL,
+  art_id     TEXT NOT NULL,            -- 'unw' | 'velocity' | ...
+  path       TEXT NOT NULL,
+  kind       TEXT, layout TEXT,        -- DataKind（DESIGN.md §2）
+  policy     TEXT NOT NULL,            -- path|stat|content
+  fp         TEXT NOT NULL,            -- 指纹（-1 编码表示不存在）
+  size       INTEGER, mtime_ns INTEGER,
+  PRIMARY KEY (run_id, step_id, art_id)
+);
+
+-- 命令轨迹（每次实际执行，一个 step 可能多次）
+CREATE TABLE commands (
+  id         INTEGER PRIMARY KEY,
+  run_id TEXT, step_id INTEGER,
+  argv       TEXT NOT NULL,            -- JSON 数组，可序列化（DESIGN.md:766）
+  cwd        TEXT, env_delta TEXT,
+  exit_code  INTEGER, duration REAL,
+  stdout_path TEXT, stderr_path TEXT,
+  attempt    INTEGER DEFAULT 1
+);
+
+-- 指标 + 来源契约校验（DESIGN.md §7.1）
+CREATE TABLE metrics (
+  run_id TEXT, name TEXT, value REAL, unit TEXT,
+  source_artifact TEXT, source_field TEXT,
+  reparsed_ok INTEGER,                 -- 重解析比对结果
+  PRIMARY KEY (run_id, name)
+);
+
+-- 干预队列（§4.5）
+CREATE TABLE pending_actions (...);
+
+-- 轨迹（供论文评测集导出，schema 对齐 OpenDiscoveryTrace）
+CREATE TABLE trace (
+  id INTEGER PRIMARY KEY,
+  run_id TEXT, step_no INTEGER, ts REAL,
+  phase TEXT,                          -- 数据准备|配准|干涉|解缠|时序反演|成图|质检
+  thought TEXT, action TEXT, observation TEXT,
+  error TEXT, revision_trigger TEXT, confidence REAL
+);
+```
+
+写入原则（借鉴 agentic-swmm 唯一做对的原子写，`run_progress.py:108-115`）：
+
+- 每个阶段推进一个事务，`COMMIT` 后才算数。
+- 需要写文件的地方走 `tmp + os.replace`（POSIX/Windows 都原子）。
+- UNIQUE 索引保幂等插入（`agentic-swmm/.../memory/session_db.py:280-282` 的做法）。
+
+### 6.2 Provenance 导出
+
+字段对齐 `agentic-swmm` 的 `experiment_provenance.json`（`DESIGN.md:618-636`），加 InSAR 特化：
+
+```json
+{
+  "schema_version": "1.0",
+  "run_id": "01J8X7QD3-yushu-2023",
+  "generated_at_utc": "...",
+  "environment": {
+    "python": "3.11.9", "platform": "WSL2 Ubuntu 24.04",
+    "conda_env_sha": "4f21…9ac3",
+    "tools": {"isce2": "2.6.5", "mintpy": "1.6.4", "snaphu": "2.0.7",
+              "pystamps": "0.3.4", "gdal": "3.8.4", "pyaps3": "0.3.6"}
+  },
+  "repo": {"git_head": "08471c2", "git_dirty": false},
+  "agent": {"system_prompt_sha256": "...", "tools_schema_sha256": "...",
+            "capabilities_sha256": "...", "model": "..."},
+  "steps": {"6": {"capability": "snaphu_mcf", "method": "...",
+                  "params": {...}, "task_hash": "...", "args_hash": "...",
+                  "eval_hash": "...", "upstream": ["..."],
+                  "run_ok": true, "qa": [...]}},
+  "artifacts": {"unw": {"path": "...", "fp": "...", "policy": "stat",
+                        "produced_by": 6, "used_for": [7]}},
+  "metrics": {"mean_velocity": {"value": -23.4, "unit": "mm/yr",
+                                "source_artifact": "velocity.h5",
+                                "source_field": "velocity",
+                                "reparsed_ok": true}},
+  "qa": {"status": "pass", "checks": [...]},
+  "evidence_level": "validated",
+  "warnings": [], "human_decisions": [], "interventions": []
+}
+```
+
+改进点相对 agentic-swmm：`run_id` 用 UUID+单调时间戳（它纯靠目录名，跨机合并会碰撞，`DESIGN.md:639`）；schema 版本号单一来源（它裂成三处，`DESIGN.md:666-668` —— 但注意 `COMPARISON_LEARNING.md:147` 已指出上游修好了，论文里不要再攻击这条）。
+
+同时导出 RO-Crate（`DESIGN.md:858`）与**等价裸命令脚本** `run.sh`（第 3 条 baseline 要求）。
+
+### 6.3 六级证据阶梯的可执行判定
+
+`DESIGN.md:301-308` 只有定义没有判定规则。补上：
+
+| 级别 | 机器可判定条件 |
+|---|---|
+| `runnable` | 所有步骤 `stage == VERIFIED` |
+| `checked` | 上 + 所有 `run_ok == 1` 且 QA 指标已解析（相干性/解缠覆盖/参考点） |
+| `audited` | 上 + provenance JSON 完整（每个 artifact 有 fp，每个 metric 有 `reparsed_ok`） |
+| `calibrated` | 上 + 存在 GNSS/水准比对记录且 RMSE 在阈值内 |
+| `validated` | 上 + 双链交叉验证（PS/SBAS）相关系数 ≥ 契约阈值 |
+| `publishable` | 上 + 证据边界表已填 + 跨环境复现记录存在 |
+
+**取最差原则**：借鉴 `InSAR-Pro/insar-pro/backend/app/engines/result_metadata.py:148` 的 `overall_tier` 取最差等级 —— 有一步降级则整体降级。那份代码已实现了 real/fallback/simulated 三级传播，是这套阶梯的可运行前身，可直接扩展。
+
+---
+
+## 7. 界面设计
+
+界面已实现于 `prototype/`（12 模块 3954 行），本节是**下一轮要补的部分**与右侧面板体系的完整设计。
+
+### 7.1 三区布局与信息分工
+
+```
+┌──────┬────────┬──────────────────────────┬──────────────────────┐
+│ rail │ 会话   │ 轨迹流（主战场）          │ Dock（右侧多面板）    │
+│ 52px │ 240px  │ flex, max-width 780px    │ 300–620px 可拖拽      │
+├──────┼────────┼──────────────────────────┼──────────────────────┤
+│ 对话 │ 会话1  │ 用户消息                  │ [流水线][影像][文件]  │
+│ 会话 │ 会话2  │ ▸ 思考（折叠）            │ [审计][报告][轨迹]    │
+│ ──── │ 会话3  │ ▸ 计划 3/11               │ [浏览器][终端][环境]  │
+│ 主题 │ ────   │ ▾ ⚡tool_call exit 0      │                      │
+│ 面板 │专家/向导│   └ 终端输出（内联滚动）   │  ← 当前步详情         │
+│      │        │ ▸ ⚡运行中 04:12 ▓▓▓░░     │  ← 产物预览           │
+│      │        │ ⚠ 审批卡（内联）           │  ← provenance 树      │
+│      │        │ 结果卡 + 图件              │  ← 证据阶梯           │
+└──────┴────────┴──────────────────────────┴──────────────────────┘
+```
+
+**分工原则**：轨迹流回答「发生了什么」（时间序），Dock 回答「现在是什么状态」（空间快照）。同一份数据两种视角，不重复不冲突。
+
+### 7.2 右侧 Dock：九个面板
+
+已实现六个，需补三个。
+
+| # | 面板 | 状态 | 内容 | 独特价值 |
+|---|---|---|---|---|
+| 1 | **流水线** | ✅ | 11 步 + 状态 + 选中步详情（方法下拉/参数表单/指纹/依赖/等价命令） | 参数改动的入口 |
+| 2 | **影像** | ✅ | 图件画廊 + 小地图 + 点位时序 | 结果空间浏览 |
+| 3 | **文件** | ✅ | 产物树（从步骤输出派生）+ 预览 | 指纹可见 |
+| 4 | **审计** | ✅ | 证据阶梯 + provenance 树 + 指标契约 | 竞品全无 |
+| 5 | **报告** | ✅ | 方法草稿 + 证据边界 + 导出（ZIP/md/sh） | 论文直出 |
+| 6 | **浏览器** | ✅ | ASF/CDS/文献检索过程可见 | 数据获取透明 |
+| 7 | **轨迹** | ⬜ 待补 | Lab Notebook：thought/action/observation/error/revision | 论文评测集导出 |
+| 8 | **终端** | ⬜ 待补 | 全量日志检索（当前只在 tool_call 内看片段） | 排查长任务 |
+| 9 | **环境** | ⬜ 待补 | 引擎版本 + WSL 资源 + 磁盘水位 + 候选集收窄原因 | 可行性可解释 |
+
+#### 面板 7：轨迹（Lab Notebook）
+
+schema 对齐 OpenDiscoveryTrace（`src/harness/agent_harness.py:367-378`），字段完整列表：`step_id / timestamp / phase / thought / action{type,tool,input,output} / observation / error{occurred,type,message} / revision_trigger / confidence / wall_time`。
+
+InSAR 的 phase 取值（类比它的 6 个科学阶段，`analyze_trajectories.py:282`）：
+```
+数据获取 → 辅助数据 → 配准 → 干涉 → 滤波 → 解缠 → 时序反演 → 误差校正 → 形变模型 → 成图 → 质检
+```
+
+**必须抄它的长字段硬截断**（`raw_response[:3000]`、`observation[:2000]`、`input[:1000]`）—— 否则 InSAR 日志会撑爆 SQLite。
+
+`revision_trigger` 字段（`agent_harness.py:443-445`）对我们特别有用：它记录「agent 自我修正的触发点」，正好对应我们的失效重跑。配 `recovery_successful` 可量化「断点续跑是否真的救回来了」——这是论文可用的指标。
+
+导出 JSON / Markdown，直接作为 §13 提到的 InSAR 任务评测集素材。
+
+#### 面板 8：终端
+
+当前 tool_call 条目内只有 300px 滚动区。长任务需要独立面板：
+
+- 按步骤分 tab，全量日志（从 `log_path` 读，非内存）
+- 正则过滤 + 高亮（ERROR/WARNING/进度行）
+- 跳到错误行按钮
+- 复制为 issue 模板（含环境信息）
+
+#### 面板 9：环境（可行性可解释）
+
+这个面板解决一个真实问题：**用户看到候选集里有项被禁用，需要知道为什么。**
+
+```
+引擎          isce2 2.6.5 ✓   mintpy 1.6.4 ✓   snaphu 2.0.7 ✓
+              pystamps 0.3.4 ✓  pyaps3 0.3.6 ✓  gacos ✗ 缺凭据
+资源          WSL2 20 核 / 40 GB · SSD 剩余 312 GB / 1 TB
+候选收窄      3D_FULL      ✗ 工具链缺失
+              tropo_gacos  ✗ 缺 GACOS 凭据
+              isce2_stripmap ✗ 数据为 S1 IW 非条带
+磁盘预警      预计中间产物 ~180 GB，当前可用 312 GB ✓
+```
+
+磁盘预警是 §1.5 的「磁盘满」失败类的前置拦截 —— 竞品无一实现。
+
+### 7.3 Dock 的交互契约
+
+三条已实现并需保持：
+
+1. **每个面板独立保留滚动位置**（`dock.js` 的 `scrollMemo`），切换不跳动。
+2. **切换只是 `hidden` 开关**，不全量重建 DOM。
+3. **宽度可拖拽且持久化**（`localStorage`），键盘 ←→ 也能调。
+
+需补的两条：
+
+4. **面板间联动要可追溯**：点结果卡的产物行 → 跳文件面板并选中；点 provenance 树节点 → 跳流水线面板并选中该步。当前只做了前者。
+5. **窄屏浮层一次只显示一个**（已实现），但需补「Dock 内容可弹出为独立窗口」以支持双屏演示（教学场景）。
+
+### 7.4 轨迹流：需补的四种条目
+
+已实现：user / agent / thinking / tool_call / plan / ask / candidates / result / report / note。
+
+需补：
+
+| 条目 | 用途 | 形状 |
+|---|---|---|
+| **`reattach`** | 服务重启后接回运行中任务 | 蓝色横幅「检测到 MintPy 仍在运行（pid 48213，已运行 1h23m），已接回日志流」 |
+| **`intervention`** | 运行中人工干预的留痕 | 「你在第 7 步运行中将第 6 步方法改为 snaphu_smooth → 已排入队列，当前步完成后生效」 |
+| **`degrade`** | 降级发生时显式告知 | 橙色「ERA5 服务不可用，已降级为 tropo_height_corr。证据级别从 validated 降为 checked」 |
+| **`gate_stop`** | 质量门拦停 | 红色「解缠覆盖率 0.62 < 0.70，已停链。这不是错误，是质量门拦截 —— 建议改用 snaphu_smooth 或放宽阈值」 |
+
+`degrade` 与 `gate_stop` 是 InSAR 特有的，两个竞品都没有对应的 UI 表达（InSAR_Agent 的 ERA5 降级只打一行 log）。
+
+### 7.5 长任务的 UI 状态
+
+不要全屏 Overlay（已删）。长任务期间：
+
+- tool_call 条目保持 `is-run`，内联进度条 + 计时
+- 顶栏状态徽章显示「运行中 · 第 6/11 步」
+- 输入框**保持可用** —— 用户可以问「现在到哪了」、「还要多久」
+- 关闭浏览器再打开：从 SQLite 恢复轨迹流 + 接回日志（当前原型未实现，需接后端）
+
+---
+
+## 8. 功能清单
+
+按「是否影响论文 novelty」分级。
+
+### 8.1 P0：novelty 直接依赖
+
+| 功能 | 对应 novelty | 验收标准 |
+|---|---|---|
+| 三段式指纹 + 规范化哈希 | 主 novelty | 键序变化不失效；`0.3` 与 `0.30000000000000004` 同哈希 |
+| 参数三分类（科学/资源/呈现） | 主 novelty 的差异化 | 改 `threads` 不标脏；改 `min_coherence` 标脏全下游 |
+| 依赖图级联标脏 + 原因分类 | 主 novelty | 改第 3 步 → 3/4/5 标脏，1/2 不动，附「为什么」 |
+| 五阶段执行器 + 幂等守卫 | 辅：断点续跑 | 杀进程重启 → 从中断阶段继续，不重跑已完成阶段 |
+| RUNNING 阶段 reattach | 辅：断点续跑 | 服务重启但 MintPy 仍活 → 接回日志不重跑 |
+| 完整 provenance + artifact 指纹 | 辅 | 任一产物可回溯到命令/参数/版本/git |
+| ISCE2→PyStamps 桥 | 主 novelty | 同源数据跑通 PS 链 |
+| 双链交叉验证质量门 | 主 novelty | PS/SBAS 相关系数进 QA，低于阈值停链 |
+| try/finally 审计 | 辅 | 失败/取消同样产出 provenance |
+| 等价裸命令导出 | baseline 第 3 条 | `run.sh` 脱离 agent 可复现 |
+
+### 8.2 P1：可用性必需
+
+超时按 capability 声明（双超时）· 产物候选发现 · `run_ok` 双判定 · 干预队列 · 失败分类闭集 + 降级 · 磁盘/内存前置检查 · 日志分层落盘 · 三档文件指纹 · 会话持久化与恢复 · 轨迹导出。
+
+### 8.3 P2：教学与论文增强
+
+轨迹面板 · 终端面板 · 环境面板 · Dock 弹窗（双屏演示）· 失效级联动画回放（课堂演示「改参数如何失效」）· 跨环境复现对比工具 · InSAR 任务评测集构造。
+
+### 8.4 明确不做
+
+| 不做 | 原因 |
+|---|---|
+| LLM 生成命令行/代码 | `DESIGN.md:348` 硬约束 |
+| LLM 自由多步规划 | BFCL v4 数据：本地 14B 端到端仅 41%（`DESIGN.md:353-360`） |
+| LLM 检索日志 | context rot（`DESIGN.md:384-386`） |
+| 引入 Snakemake/Prefect/Dagster/LangGraph/redun | `DESIGN.md:406-425`（LangGraph resume 从节点开头重跑是决定性的） |
+| 未鉴权的文件读接口 | 竞品致命安全问题（`DESIGN.md:548-551`），我们主打数据不出域 |
+| 明文密码落盘 | 竞品 `submit_insar.py:441` + `web/core.py:87-89` 的错误 |
+| 全量内容哈希 | §1.3 |
+
+---
+
+## 9. 实施顺序
+
+依赖关系决定顺序，不是重要性。
+
+### Phase 0：地基（3–4 天）
+```
+core/schema.sql          SQLite DDL
+core/normalize.py        规范化哈希（先写单测：键序/浮点/嵌套三个坑）
+core/fingerprint.py      三段式
+core/filehash.py         三档策略
+core/store.py            状态机 + 幂等守卫
+registry/capabilities.py 11 步声明（含超时/参数分类/产物候选/run_ok）
+```
+验收：`pytest` 覆盖三个哈希坑 + 幂等重放（同一步执行两次，第二次全跳过）。
+
+### Phase 1：执行层（4–5 天）
+```
+runtime/probe.py         环境探测（产出候选收窄依据）
+runtime/render.py        Jinja2 模板
+runtime/stream.py        日志流 + 双超时 + 协作式取消
+runtime/executor.py      五阶段
+runtime/discover.py      产物候选匹配
+audit/runok.py           双判定
+```
+验收：用 11 对 HyP3 真实数据跑通 MintPy 链（复用 `InSAR-Pro/.../engines/mintpy.py` 的 5 处 `--dostep`）；中途 `kill -9` 后重启能续；服务重启但子进程存活时能 reattach。
+
+**这个阶段同时填掉 §6 发现的资源特征空白** —— 拿真实耗时/内存/文件数替换原型里的占位符（`1035 pairs`、`~24 min · 8 GB` 全是 mock）。
+
+### Phase 2：失效传播（2–3 天）
+```
+core/stale.py            级联 + 原因分类
+core/actions.py          干预队列
+planner/graph.py feasibility.py plan.py
+```
+验收：改第 3 步参数 → 3/4/5 标脏且附原因；改 `threads` 不标脏；运行中投 SET_METHOD 动作能在当前步结束后生效。
+
+### Phase 3：审计（2–3 天）
+```
+audit/contract.yaml verify.py ladder.py
+core/ledger.py
+report/script.py         裸命令导出
+```
+验收：provenance JSON 完整；`run.sh` 可脱离 agent 复现；失败时审计同样触发（try/finally 守护测试）。
+
+### Phase 4：Brain（2–3 天）
+```
+brain/provider.py intent.py select.py triage.py narrate.py
+loop/driver.py events.py budget.py
+```
+验收：拔掉 `brain/` 整层，手动模式仍跑通（这是 `DESIGN.md:233` 的架构约束，要有测试守护）。
+
+### Phase 5：API + 前端接真（3–4 天）
+```
+api/app.py               FastAPI + 双 SSE
+prototype/js/backend.mock.js → backend.sse.js
+```
+只改一个文件（事件契约已按真实 SSE 形状设计）。补面板 7/8/9 与四种新条目。
+
+### Phase 6：桥（5–7 天，主 novelty）
+```
+engines/bridges/isce2_to_pystamps.py
+```
+风险最高，三个已知难点（`DESIGN.md:123-132`）：par 几何字段自洽（最大风险，错了 bperp 和高程误差全崩）、TCN 基线反算、全程 big-endian。
+
+放最后不是因为不重要，而是它依赖前面的执行层与审计层来验证正确性。
+
+---
+
+## 10. 立即要做的三件事
+
+1. **修文档矛盾**（半天）。`COMPARISON_LEARNING.md:189` 的 `update-DESIGN` 行动项没执行 —— `DESIGN.md:666-672` 那两条对 agentic-swmm 的批评已被上游修复，进了论文 related work 会被审稿人直接驳倒。同时把「12 景」改成「11 个干涉对 / 7 个日期」（实测），`§16/§15` 顺序调正。
+
+2. **标注原型里的占位数字**（半天）。`prototype/js/state.js:87` 的 `pairs: 1035`、`:104` 的 `~24 min · 8 GB`、`backend.mock.js:146` 的 `2.1 GB` 全是 mock。要么加「示意值」标注，要么等 Phase 1 用真数据替换。演示给别人看时这些数字会被当真。
+
+3. **建 `insar_agent/` 骨架并跑通 Phase 0 的哈希单测**（1 天）。`pyproject.toml` 声明 `where=["src"]` 但 `src/` 不存在 —— 先让 `pip install -e .` 能过。
+
+---
+
+## 附：借鉴来源索引
+
+| 我们的设计 | 来源 |
+|---|---|
+| 三段式哈希 | `redun/redun/hashing.py:94-114` |
+| version 逃逸阀 | `redun/redun/task.py:454` |
+| 资源参数不哈希 | `redun/redun/task.py:441-442` |
+| 文件伪哈希 + `-1` 编码 | `redun/redun/file.py:463-475` |
+| 三档文件策略 | `redun/redun/file.py:463/1710-1716/1784-1788` |
+| 失效原因分类 | `redun/redun/backends/db/__init__.py:2507` |
+| call graph 三层解耦 | `redun/redun/backends/db/__init__.py:662-1006` |
+| 参数级上游追溯 | `redun/redun/backends/db/__init__.py:550-565` |
+| 规范化哈希（键序/浮点/嵌套） | `aiida-core/src/aiida/common/hashing.py:159-176, 197-202, 123` |
+| Merkle 输入级联 | `aiida-core/src/aiida/orm/nodes/process/process.py:88-102` |
+| 五阶段 + 幂等守卫 | `aiida-core/src/aiida/engine/processes/calcjobs/tasks.py:76-140, 525-548` |
+| 外部句柄持久化 | `aiida-core/.../calculation/calcjob.py:66` |
+| 内存 future 不跨重启 | `aiida-core/.../calcjobs/tasks.py:520-523` |
+| attributes/extras 可变性分离 | `aiida-core/src/aiida/storage/psql_dos/models/node.py:31-49` |
+| 引用式序列化（只存 UUID） | `aiida-core/src/aiida/orm/utils/serialize.py:77-87` |
+| 递归标脏 | `aiida-workgraph/.../engine/task_state.py:170-203` |
+| 动作集 | `aiida-workgraph/.../engine/task_actions.py:36-50` |
+| 双重试计数器 | `agentic-swmm/.../agent/planner.py:39-47` |
+| `unresolved_failure` 标志 | `agentic-swmm/.../agent/planner.py:451, 592, 623` |
+| 字段白名单给模型 | `agentic-swmm/.../agent/tool_registry.py:193-236` |
+| 原子写 tmp+replace | `agentic-swmm/.../run_progress.py:108-115` |
+| 只读步骤降噪 | `agentic-swmm/.../agent/planner.py:338-339` |
+| 幂等 UNIQUE 索引 | `agentic-swmm/.../memory/session_db.py:280-282` |
+| 缓存锚定反幻觉 | `InSAR_Agent/src/insar_agent/agent.py:481-499, 514-556` |
+| task_id 唯一句柄 | `InSAR_Agent` 全局 |
+| 事件工厂 data/ui 分离 | `InSAR_Agent/src/insar_agent/events.py:19-23` |
+| MintPy `--dostep` 拆步 | `InSAR-Pro/insar-pro/backend/app/engines/mintpy.py:290,556,750,914,1047` |
+| 三级可信度取最差 | `InSAR-Pro/.../engines/result_metadata.py:46-47, 148` |
+| Schema 参数契约 | `InSAR-Pro/.../algorithms/schemas.py:82-120` |
+| 轨迹 schema | `OpenDiscoveryTrace/src/harness/agent_harness.py:367-378` |
+| 长字段硬截断 | `OpenDiscoveryTrace/.../agent_harness.py:377` |
+
+**反例（明确不抄）**：InSAR_Agent 的关键词表强制 `tool_choice`（`agent.py:1430-1441`）、阻塞读循环内检查取消（`tools/mintpy.py:219`）、明文密码落盘（`submit_insar.py:441`）、前端 `setTimeout` 回灌唤起 LLM（`web/static/index.html:619-620`）、文件存在即跳过当幂等（7 处）。

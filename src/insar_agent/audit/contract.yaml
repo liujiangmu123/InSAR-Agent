@@ -1,0 +1,60 @@
+# 质量门阈值台账(AGENT-DESIGN §4.13)。
+# 纪律:
+#   1. 每个阈值必须带 source:upstream_default | literature | local_calibration
+#      后两者必须填 ref。
+#   2. status: PENDING 的阈值不参与硬 gate,只产出 warning。
+#   3. CI 守护测试:tests/test_runok_ladder.py::test_contract_discipline
+#      检查无 source 缺失、无 PENDING 被用作 on_fail=stop 的硬判定。
+#
+# 当前诚实盘点(§4.13):只有 3 个 A 级来源,其余全部 PENDING 待标定/待查证。
+
+schema_version: "1.0"
+
+thresholds:
+  esd_coherence_threshold:
+    value: 0.85
+    source: upstream_default
+    ref: "ISCE2 topsApp 默认值"
+    status: OK
+
+  stepFuncDate:
+    value: "20190706T0320"
+    source: upstream_default
+    ref: "实测配置 RidgecrestSenDT71.txt(Ridgecrest 同震日)"
+    status: OK
+
+  weightFunc:
+    value: "no"
+    source: upstream_default
+    ref: "实测配置 RidgecrestSenDT71.txt(MintPy 默认 var,此处有意覆盖)"
+    status: OK
+
+  corr_threshold:
+    value: 0.85
+    source: local_calibration
+    ref: "experiments/PENDING-crossval-calibration.md(待标定:PS/SBAS 一致性无先例可循)"
+    status: PENDING
+
+  min_coherence:
+    value: 0.25
+    source: local_calibration
+    ref: "待查 SNAPHU 文档(MintPy 无此单一默认)"
+    status: PENDING
+
+  unwrap_coverage:
+    value: 0.70
+    source: literature
+    ref: "待查文献"
+    status: PENDING
+
+  nan_fraction_below:
+    value: 0.50
+    source: local_calibration
+    ref: "待定"
+    status: PENDING
+
+  max_temporal_baseline:
+    value: 120
+    source: local_calibration
+    ref: "S1 12 天重访,需按去相干特性标定"
+    status: PENDING

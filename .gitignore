@@ -1,0 +1,39 @@
+# 参考仓库（本地研究用，不纳入版本控制；reference/ 下的分析文档正常入库）
+_refs/
+reference/repos/
+.tools/
+
+# 密钥与本地配置
+.env
+.env.local
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.pytest_tmp/
+.ruff_cache/
+*.egg-info/
+
+# 数据与产物（体积大，不入库）
+data/
+workspace/
+runs/
+*.h5
+*.slc
+*.int
+*.unw
+*.rslc
+*.diff
+
+# 日志
+*.log
+logs/
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
