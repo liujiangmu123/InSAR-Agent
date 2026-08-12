@@ -98,6 +98,10 @@ class WslPaths:
 class WslJobBackend:
     """作业目录在 WSL 的 Linux 文件系统上;宿主通过 \\\\wsl.localhost 读小文件。"""
 
+    # 判活探测要 spawn 一次 wsl.exe(百毫秒级)—— follow_job 据此启用自适应
+    # 节流(runtime/stream.py:启动初期密集、稳定运行后拉大间隔;WSL P2)
+    state_probe_expensive = True
+
     def __init__(self, paths: WslPaths | None = None, runner: Runner | None = None,
                  keepalive: bool = True, user: str = "root"):
         self.paths = paths or WslPaths()
@@ -119,9 +123,21 @@ class WslJobBackend:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def release_keepalive(self) -> None:
-        if self._keepalive_proc is not None and self._keepalive_proc.poll() is None:
-            self._keepalive_proc.terminate()
-        self._keepalive_proc = None
+        """释放本实例拉起的保活进程(wsl.exe sleep infinity;WSL P2 释放钩子)。
+
+        幂等:重复调用、从未拉起、进程已死都安全。只终结自己 spawn 的进程句柄,
+        绝不影响其他实例/其他 run 的保活;VM 是否随之空闲回收由 WSL 自决
+        (§4.8:作业进程活着时 VM 不算空闲)。run 收尾由 driver 统一调用,
+        防止 sleep infinity 随 run 数量堆积泄漏。
+        """
+        proc, self._keepalive_proc = self._keepalive_proc, None
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=5.0)  # 回收句柄,不留僵尸 Popen
+        except subprocess.TimeoutExpired:
+            proc.kill()  # terminate 未生效的极端情形:强杀兜底,交 OS 回收
 
     def _wsl(self, script: str, timeout: float = 30.0) -> subprocess.CompletedProcess:
         # bash -l 登录 shell:加载 /etc/profile.d/insar.sh(PATH/PROJ_DATA/GDAL_DATA,
@@ -177,20 +193,28 @@ class WslJobBackend:
                 f"{(started.stderr or started.stdout or '').strip()[:300]}")
 
     def state(self, job_dir: Path, *, wsl_job_dir: str | None = None) -> JobState:
-        rc = job_dir / "job.rc"
-        if rc.exists():
-            try:
-                return JobState("finished", int(rc.read_text().strip() or "-1"))
-            except ValueError:
-                return JobState("finished", -1)
-        pid_f = job_dir / "job.pid"
-        if not pid_f.exists():
+        # 与 LocalJobBackend.state 同款 TOCTOU 内聚防护(FOLLOWUPS #6),且更宽:
+        # 契约小文件经 \\wsl.localhost(9p)读取,除删除/独占竞态外还有整类
+        # 网络性 OSError(VM 正在关闭、9p 会话断开)。统一按「瞬时不可读 →
+        # unknown」处置:上层单次 unknown 不改变结局,VM 真没了由后续轮询的
+        # orphaned/startup_grace/双超时兜底。
+        try:
+            rc = job_dir / "job.rc"
+            if rc.exists():
+                try:
+                    return JobState("finished", int(rc.read_text().strip() or "-1"))
+                except ValueError:
+                    return JobState("finished", -1)
+            pid_f = job_dir / "job.pid"
+            if not pid_f.exists():
+                return JobState("unknown")
+            pid = pid_f.read_text().strip()
+            want = ""
+            start_f = job_dir / "job.start"
+            if start_f.exists():
+                want = start_f.read_text().strip()
+        except OSError:
             return JobState("unknown")
-        pid = pid_f.read_text().strip()
-        want = ""
-        start_f = job_dir / "job.start"
-        if start_f.exists():
-            want = start_f.read_text().strip()
         # 在 WSL 内核实,绝不在宿主 os.kill(§0.5.2:宿主没有 POSIX 信号 API)
         try:
             got = self._wsl(f"awk '{{print $22}}' /proc/{pid}/stat 2>/dev/null || true",
@@ -206,7 +230,10 @@ class WslJobBackend:
     def cancel(self, job_dir: Path) -> None:
         (job_dir / "job.cancel").touch()
 
-    def read_new_lines(self, job_dir: Path, offset: int) -> tuple[list[str], int]:
+    def read_new_lines(self, job_dir: Path, offset: int, *,
+                       final: bool = False) -> tuple[list[str], int]:
+        # 语义与 LocalJobBackend 一致:增量只提交完整行;final=True 终读模式
+        # 冲刷无换行的尾部余量(作业 finished 后日志不会再写,FOLLOWUPS #7)
         log = job_dir / "job.log"
         if not log.exists():
             return [], offset
@@ -215,6 +242,8 @@ class WslJobBackend:
             chunk = f.read()
         if not chunk:
             return [], offset
+        if final:
+            return chunk.decode("utf-8", errors="replace").splitlines(), offset + len(chunk)
         last_nl = chunk.rfind(b"\n")
         if last_nl == -1:
             return [], offset

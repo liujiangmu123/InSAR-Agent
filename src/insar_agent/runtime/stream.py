@@ -58,16 +58,28 @@ async def follow_job(
     poll: float = 0.5,
     cancel_grace: float = 15.0,
     startup_grace: float = 30.0,  # 容忍杀毒软件对新进程/DLL 的实时扫描延迟
+    probe_dense_window: float = 10.0,  # 高成本后端:启动后密集判活的窗口
+    probe_idle_interval: float = 3.0,  # 高成本后端:密集窗口之后的判活间隔
 ) -> JobOutcome:
     """跟随作业直到结束/取消/超时/孤儿。
 
     - idle_timeout:无输出超时;total_timeout:总时长超时(都按 capability 声明,§1.1)
     - offset 持久化交给 on_offset(供宿主重启后 reattach 续读,§4.3)
-    - 返回时日志已 drain 到最后一行
+    - 返回时日志已 drain 到最后一行(finished 时含无换行的尾部余量,#7)
+    - 后端声明 state_probe_expensive 时判活按 probe_* 参数自适应节流(WSL P2)
     """
     started = time.monotonic()
     last_output = started
     orphan_strikes = 0  # 孤儿判定需连续两次命中:消除心跳文件的瞬时竞态
+
+    # WSL 后端每次 state() 都要 spawn 一次 wsl.exe(百毫秒级),长任务期间按
+    # poll(0.5s)节奏探测纯属浪费(WSL P2)。自适应节流:启动后
+    # probe_dense_window 秒内维持 poll 节奏(启动失败/秒级作业要快诊断),
+    # 之后降到每 probe_idle_interval 一次。日志读取(drain)频率不变 ——
+    # job.log 经 \\wsl.localhost 直读,不 spawn 进程。本地后端 state() 只是
+    # 文件 stat,不节流,孤儿检测延迟维持原语义。
+    throttle_probe = bool(getattr(backend, "state_probe_expensive", False))
+    next_probe_at = started  # 首轮立即探测
 
     def probe_state() -> JobState | None:
         """判活探测;瞬时 IO 失败返回 None,本轮跳过状态分支,由双超时兜底。
@@ -81,10 +93,13 @@ async def follow_job(
         except OSError:
             return None
 
-    async def drain() -> None:
+    async def drain(final: bool = False) -> None:
+        """final=True 为终读:作业已 finished、日志不会再写,冲刷无换行的
+        尾部余量(#7)。运行中绝不终读 —— 半行可能正在被写,提交它会让
+        reattach 续读的 offset 停在行中间。"""
         nonlocal offset, last_output
         try:
-            lines, new_offset = backend.read_new_lines(job_dir, offset)
+            lines, new_offset = backend.read_new_lines(job_dir, offset, final=final)
         except OSError:
             # 日志被外部独占/删除竞态:本轮视为无新输出,下一轮重试;
             # 持续不可读时 idle_timeout 兜底,follow 不因瞬时 IO 失败崩溃
@@ -99,6 +114,8 @@ async def follow_job(
                 on_offset(offset)
 
     async def cancel_and_wait(kind: str) -> JobOutcome:
+        # 取消宽限期内不做判活节流:窗口本身受 cancel_grace 硬限,且要尽快
+        # 拿到真实 rc;对 WSL 而言 rc 在场时 state() 只读 9p 文件、不 spawn
         try:
             backend.cancel(job_dir)
         except OSError:
@@ -108,7 +125,7 @@ async def follow_job(
             await drain()
             st = probe_state()
             if st is not None and st.kind == "finished":
-                await drain()
+                await drain(final=True)  # 终读:作业已结束,冲刷尾部余量
                 return JobOutcome(kind, st.exit_code, offset)
             await asyncio.sleep(min(poll, 0.2))
         return JobOutcome(kind, None, offset)  # wrapper 也没响应:交给上层按 orphaned 处置
@@ -120,14 +137,24 @@ async def follow_job(
         if token is not None and token.cancelled:
             return await cancel_and_wait("cancelled")
 
-        st = probe_state()
+        st: JobState | None = None
+        # 孤儿一击后的确认探测绕过节流:连续两次命中语义要求快速复核
+        # (多花一次 spawn 换孤儿判定延迟不随 idle 间隔放大);复核若恢复
+        # alive,strikes 归零,节流照常恢复
+        if not throttle_probe or orphan_strikes > 0 or now >= next_probe_at:
+            st = probe_state()
+            if throttle_probe:
+                interval = poll if now - started < probe_dense_window else probe_idle_interval
+                next_probe_at = now + interval
         if st is not None:
             if st.kind == "finished":
-                await drain()
+                await drain(final=True)  # 终读:冲刷无换行的尾部余量(#7)
                 return JobOutcome("finished", st.exit_code, offset)
             if st.kind == "orphaned":
                 orphan_strikes += 1
                 if orphan_strikes >= 2:
+                    # 非终读:孤儿子进程可能仍在续写日志,半行不提交,
+                    # 让续跑 reattach 的 offset 停在完整行边界
                     await drain()
                     return JobOutcome("orphaned", None, offset)
                 await asyncio.sleep(min(poll, 0.3))

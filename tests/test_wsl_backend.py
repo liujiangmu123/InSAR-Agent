@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import subprocess
@@ -366,6 +367,211 @@ def test_read_new_lines_commits_only_complete_lines(tmp_path):
     log.write_bytes(b"line1\nline2\nhalf done\n")
     lines, _ = backend.read_new_lines(tmp_path, offset)
     assert lines == ["half done"]
+
+
+def test_read_new_lines_final_mode_flushes_tail(tmp_path):
+    """终读模式(FOLLOWUPS #7):作业 finished 后无换行尾行交付,offset 到 EOF。"""
+    backend, _ = _backend(tmp_path, rules=[])
+    (tmp_path / "job.log").write_bytes(b"line1\nhalf-tail")
+    lines, offset = backend.read_new_lines(tmp_path, 0)
+    assert (lines, offset) == (["line1"], 6)
+    lines, offset = backend.read_new_lines(tmp_path, offset, final=True)
+    assert (lines, offset) == (["half-tail"], 15)
+    assert backend.read_new_lines(tmp_path, offset, final=True) == ([], offset)
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, PermissionError, OSError])
+def test_state_toctou_window_returns_unknown(tmp_path, error):
+    """9p 上 exists→read 窗口文件被删/独占/会话断开 → unknown 不抛(#6)。
+
+    \\\\wsl.localhost 走网络重定向器,除本地竞态外还有 VM 关闭/9p 断开的
+    整类 OSError —— 判活探测绝不能把调用方打崩。
+    """
+
+    class _Vanishing:
+        def exists(self):
+            return True
+
+        def read_text(self, *a, **kw):
+            raise error("gone between exists() and read")
+
+    class _Dir:
+        def __truediv__(self, name):
+            return _Vanishing()
+
+    backend, _ = _backend(tmp_path, rules=[])
+    st = backend.state(_Dir())
+    assert st.kind == "unknown" and st.exit_code is None
+
+
+def test_state_probe_declared_expensive():
+    """WslJobBackend 声明判活高成本(每次 spawn wsl.exe),follow_job 据此
+    启用自适应节流;LocalJobBackend 不声明,判活节奏不变(WSL P2)。"""
+    assert getattr(WslJobBackend, "state_probe_expensive", False) is True
+    assert getattr(LocalJobBackend, "state_probe_expensive", False) is False
+
+
+def test_release_keepalive_idempotent():
+    """release_keepalive 幂等:只终结自己 spawn 的保活进程;重复调用、
+    从未拉起、进程已死都安全(WSL P2 释放钩子)。"""
+    backend = WslJobBackend(paths=WslPaths(distro="insar"), runner=FakeRunner())
+
+    class _FakeProc:
+        def __init__(self):
+            self.terminated = 0
+            self._rc = None
+
+        def poll(self):
+            return self._rc
+
+        def terminate(self):
+            self.terminated += 1
+            self._rc = 1
+
+        def wait(self, timeout=None):
+            return self._rc
+
+        def kill(self):
+            pass
+
+    backend.release_keepalive()             # 从未拉起:no-op
+    proc = _FakeProc()
+    backend._keepalive_proc = proc
+    backend.release_keepalive()
+    assert proc.terminated == 1 and backend._keepalive_proc is None
+    backend.release_keepalive()             # 重复调用:无进程可释放
+    assert proc.terminated == 1
+    dead = _FakeProc()
+    dead._rc = 0                            # 进程已自亡:不再 terminate
+    backend._keepalive_proc = dead
+    backend.release_keepalive()
+    assert dead.terminated == 0
+
+
+# ================================================================ driver 收尾释放(WSL P2)
+
+def _empty_probe():
+    from insar_agent.runtime.probe import ProbeResult
+    return ProbeResult(engines={"isce2": None, "mintpy": None, "snaphu": None,
+                                "gdal": None, "snap": None, "pystamps": None,
+                                "pyaps": None},
+                       credentials={"earthdata": False, "cds": False, "gacos": False},
+                       disk_free_gb=100.0, cpu_count=8)
+
+
+async def _collect(agen) -> list[dict]:
+    return [e async for e in agen]
+
+
+class _ReleasableLocal(LocalJobBackend):
+    """带保活释放钩子的本地后端替身:接口对齐 WslJobBackend.release_keepalive,
+    又能真正跑模拟作业(测试机不可依赖真 WSL)。"""
+
+    def __init__(self):
+        super().__init__(hb_stale=3.0)
+        self.released = 0
+
+    def release_keepalive(self):
+        self.released += 1
+
+
+def _release_driver(store, workspace, monkeypatch, factory):
+    """把 driver 的每步后端选择替换为 factory(override 语义保持原样)。"""
+    from insar_agent.brain.facade import Brain
+    from insar_agent.loop import driver as driver_mod
+
+    def fake_backend_for_step(**kwargs):
+        if kwargs.get("override") is not None:
+            return kwargs["override"]
+        return factory()
+
+    monkeypatch.setattr(driver_mod, "backend_for_step", fake_backend_for_step)
+    return driver_mod.Driver(store, workspace=workspace, probe=_empty_probe(),
+                             poll=0.05, startup_grace=15.0, brain=Brain(None))
+
+
+def test_driver_releases_keepalive_at_run_end(store, workspace, monkeypatch):
+    """run 正常收尾(done):本 run 用过的每个后端实例的 keepalive 恰好释放
+    一次,登记表清空(WSL P2:此前 sleep infinity 无人释放,随 run 堆积)。"""
+    created: list[_ReleasableLocal] = []
+
+    def factory():
+        b = _ReleasableLocal()
+        created.append(b)
+        return b
+
+    driver = _release_driver(store, workspace, monkeypatch, factory)
+    asyncio.run(_collect(driver.turn("s1", "Ridgecrest 地震同震形变分析")))
+    events = asyncio.run(_collect(driver.execute("s1")))
+    assert any(e["t"] == "result" for e in events)            # run 跑到 done
+    assert created and all(b.released == 1 for b in created)  # 恰好各释放一次
+    assert not driver._run_backends                           # 登记表已清空
+
+
+def test_driver_releases_keepalive_on_interrupted_run(store, workspace, monkeypatch):
+    """中途 KILL → run interrupted 提前返回:finally 收尾同样释放保活。"""
+    created: list[_ReleasableLocal] = []
+
+    def factory():
+        b = _ReleasableLocal()
+        created.append(b)
+        return b
+
+    driver = _release_driver(store, workspace, monkeypatch, factory)
+    asyncio.run(_collect(driver.turn("s1", "Ridgecrest 地震同震形变分析")))
+    run = store.latest_run("s1")
+
+    async def scenario():
+        async for e in driver.execute("s1"):
+            if e["t"] == "step.start":
+                store.push_action(scope="run", target=run["run_id"], action="KILL",
+                                  deliver_as="steer")
+
+    asyncio.run(scenario())
+    assert store.get_run(run["run_id"])["status"] == "interrupted"
+    assert created and all(b.released == 1 for b in created)
+    assert not driver._run_backends
+
+
+def test_driver_never_releases_injected_override(store, workspace, monkeypatch):
+    """注入 override 后端可能跨 run 共享:生命周期归注入方,driver 绝不代释。"""
+    from insar_agent.brain.facade import Brain
+    from insar_agent.loop.driver import Driver
+
+    injected = _ReleasableLocal()
+    driver = Driver(store, workspace=workspace, probe=_empty_probe(), poll=0.05,
+                    startup_grace=15.0, brain=Brain(None), backend=injected)
+    asyncio.run(_collect(driver.turn("s1", "Ridgecrest 地震同震形变分析")))
+    events = asyncio.run(_collect(driver.execute("s1")))
+    assert any(e["t"] == "result" for e in events)
+    assert injected.released == 0
+
+
+def test_driver_survives_backend_launch_failure(store, workspace, monkeypatch):
+    """launch 抛 RuntimeError(WSL 不可达类)→ 步骤 failed、分类 wsl_orphaned、
+    分诊 note 正常发出,执行回合流完整走完不裸崩(WSL P2 分诊)。"""
+
+    class _LaunchBoom(_ReleasableLocal):
+        def launch(self, job_dir):
+            raise RuntimeError("WSL 侧启动 wrapper 失败(rc=127):setsid not found")
+
+    created: list[_LaunchBoom] = []
+
+    def factory():
+        b = _LaunchBoom()
+        created.append(b)
+        return b
+
+    driver = _release_driver(store, workspace, monkeypatch, factory)
+    asyncio.run(_collect(driver.turn("s1", "Ridgecrest 地震同震形变分析")))
+    run = store.latest_run("s1")
+    events = asyncio.run(_collect(driver.execute("s1")))      # 正常返回,无异常
+    assert store.get_run(run["run_id"])["status"] == "failed"
+    failed = [s for s in store.load_steps(run["run_id"]) if s.state == "failed"]
+    assert failed and failed[0].failure_class == "wsl_orphaned"
+    assert any(e["t"] == "note" and "wsl_orphaned" in e.get("text", "")
+               for e in events)
+    assert created and all(b.released == 1 for b in created)  # 失败收尾同样释放
 
 
 # ================================================================ 真实 WSL 冒烟

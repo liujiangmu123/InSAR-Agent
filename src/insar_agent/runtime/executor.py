@@ -154,8 +154,25 @@ async def execute_step(
                     run_id, step_id, plan.argv, cwd=plan.cwd,
                     cmd_path=str(job_dir / "cmd.sh"), stdout_path=str(log_path),
                     attempt=attempt)  # ← 意图:命令即将执行
-                ctx.backend.prepare(job_dir, plan)
-                ctx.backend.launch(job_dir)
+                try:
+                    ctx.backend.prepare(job_dir, plan)
+                    ctx.backend.launch(job_dir)
+                except StepExecutionError:
+                    raise  # 已分类的失败原样上抛(StepExecutionError 是 RuntimeError 子类)
+                except RuntimeError as exc:
+                    # WSL P2:WslJobBackend 的 prepare/launch 显式失败(发行版
+                    # 不可达、mkdir 失败、wrapper 起不来)抛裸 RuntimeError,
+                    # 修复前越过失败分诊直接崩断整个执行回合流。归入闭集
+                    # wsl_orphaned(环境事件,非计算失败;处置=修复执行环境后
+                    # 续跑),走统一 failed 收尾:mark_step + 审计留痕,回合流不断。
+                    raise StepExecutionError(
+                        "wsl_orphaned",
+                        f"作业后端 prepare/launch 失败(执行环境不可用):{exc}") from exc
+                except OSError as exc:
+                    # 同一窗口的宿主侧失败(本地 spawn 失败、契约文件写不进磁盘):
+                    # 环境损坏类,按 tool_missing 停链报环境问题
+                    raise StepExecutionError(
+                        "tool_missing", f"作业启动失败(宿主环境问题):{exc}") from exc
 
             store.advance(run_id, step_id, "LAUNCHED", state="running",
                           job_dir=str(job_dir), command_id=command_id,

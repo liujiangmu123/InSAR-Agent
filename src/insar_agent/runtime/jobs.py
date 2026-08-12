@@ -52,7 +52,8 @@ class JobBackend(Protocol):
     def launch(self, job_dir: Path) -> None: ...
     def state(self, job_dir: Path) -> JobState: ...
     def cancel(self, job_dir: Path) -> None: ...
-    def read_new_lines(self, job_dir: Path, offset: int) -> tuple[list[str], int]: ...
+    def read_new_lines(self, job_dir: Path, offset: int, *,
+                       final: bool = False) -> tuple[list[str], int]: ...
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -120,19 +121,29 @@ class LocalJobBackend:
             wrapper_err.close()  # 子进程持有继承的句柄,父进程侧关闭不影响
 
     def state(self, job_dir: Path) -> JobState:
-        rc = job_dir / "job.rc"
-        if rc.exists():
-            try:
-                return JobState("finished", int(rc.read_text().strip() or "-1"))
-            except ValueError:
-                return JobState("finished", -1)
-        pid_f = job_dir / "job.pid"
-        if not pid_f.exists():
-            return JobState("unknown")  # wrapper 尚未启动(或启动失败)
-        hb = job_dir / "job.hb"
-        if not hb.exists():
-            return JobState("orphaned")
-        age = time.time() - hb.stat().st_mtime
+        # TOCTOU 内聚防护(FOLLOWUPS 2026-08-12 #6):exists() 与 stat()/read_text()
+        # 之间文件可能被外部删除(作业目录清理)或短暂独占(杀软/索引器零共享句柄,
+        # Windows 上表现为 PermissionError)。语义统一为「瞬时不可读 → unknown,
+        # 本轮不判定」:单次 unknown 不改变结局 —— 孤儿判定需连续两次命中,启动期
+        # 由 startup_grace 兜底,僵死由双超时兜底;下一轮轮询自然重试。
+        # 修复前该窗口直接抛异常,只有 stream 侧兜着;其他调用方(executor 认领、
+        # admin 判活)会被判活探测本身打崩。
+        try:
+            rc = job_dir / "job.rc"
+            if rc.exists():
+                try:
+                    return JobState("finished", int(rc.read_text().strip() or "-1"))
+                except ValueError:
+                    return JobState("finished", -1)
+            pid_f = job_dir / "job.pid"
+            if not pid_f.exists():
+                return JobState("unknown")  # wrapper 尚未启动(或启动失败)
+            hb = job_dir / "job.hb"
+            if not hb.exists():
+                return JobState("orphaned")
+            age = time.time() - hb.stat().st_mtime
+        except (FileNotFoundError, PermissionError):
+            return JobState("unknown")
         if age > self.hb_stale:
             return JobState("orphaned")  # wrapper 死了但没写 rc:kill -9 / 断电
         return JobState("alive")
@@ -140,8 +151,14 @@ class LocalJobBackend:
     def cancel(self, job_dir: Path) -> None:
         (job_dir / "job.cancel").touch()
 
-    def read_new_lines(self, job_dir: Path, offset: int) -> tuple[list[str], int]:
-        """按 offset 增量读完整行;半行留到下次(§4.4:只在读到换行符时才提交)。"""
+    def read_new_lines(self, job_dir: Path, offset: int, *,
+                       final: bool = False) -> tuple[list[str], int]:
+        """按 offset 增量读完整行;半行留到下次(§4.4:只在读到换行符时才提交)。
+
+        final=True 为终读模式(FOLLOWUPS 2026-08-12 #7):作业已 finished、
+        日志不会再有写入,无换行的尾部余量必须一并交付(否则永久丢失 ——
+        不少引擎最后一行诊断不带换行)。半行语义只对「还在写」的日志成立。
+        """
         log = job_dir / "job.log"
         if not log.exists():
             return [], offset
@@ -150,6 +167,9 @@ class LocalJobBackend:
             chunk = f.read()
         if not chunk:
             return [], offset
+        if final:
+            # splitlines 顺带兼容裸 \r 结尾的进度行;offset 前进到文件末尾
+            return chunk.decode("utf-8", errors="replace").splitlines(), offset + len(chunk)
         last_nl = chunk.rfind(b"\n")
         if last_nl == -1:
             return [], offset  # 只有半行
