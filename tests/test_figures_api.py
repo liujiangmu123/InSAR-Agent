@@ -179,3 +179,62 @@ def test_artifact_file_no_run_404(env):
     r = c.get("/api/artifact-file", params={
         "session": "sess-b", "step": 10, "art_id": "vel_png"})
     assert r.status_code == 404
+
+
+# ---------------- 目录型产物(注册表真实形态:figures 声明的是目录) ----------------
+# 2026-08-12 终验发现:标准管线第 10 步的产物行是 products/figures 目录,
+# 只按产物路径后缀过滤会让画廊对真实链永远空转 —— 目录型必须枚举内部图像。
+
+def _add_dir_artifact(env):
+    ws = env["ws"]
+    gal = ws / "products" / "gallery"
+    gal.mkdir(parents=True, exist_ok=True)
+    (gal / "a_velocity.png").write_bytes(PNG_BYTES)
+    (gal / "b_hist.jpg").write_bytes(JPG_BYTES)
+    (gal / "notes.txt").write_bytes(b"not an image")
+    (gal / "sub").mkdir(exist_ok=True)  # 子目录不下钻
+    (gal / "sub" / "deep.png").write_bytes(PNG_BYTES)
+    env["store"].record_artifact(RUN_ID, 10, "gallery_dir", path="products/gallery",
+                                 kind="FIGURE", layout="", policy="stat",
+                                 fp="stat:sha256:cafebabe")
+
+
+def test_figures_lists_directory_artifact_members(env):
+    _add_dir_artifact(env)
+    c = env["client"]
+    figs = c.get("/api/figures", params={"session": "sess-a"}).json()["figures"]
+    members = [f for f in figs if f["artId"] == "gallery_dir"]
+    # 只列顶层图像成员:txt 与子目录内文件都不列
+    assert sorted(m["name"] for m in members) == ["a_velocity.png", "b_hist.jpg"]
+    for m in members:
+        assert "file=" in m["url"]
+        r = c.get(m["url"])  # 列表 url 直接可用作 <img src>
+        assert r.status_code == 200 and r.headers["content-type"].startswith("image/")
+
+
+def test_artifact_file_dir_member_traversal_404(env):
+    _add_dir_artifact(env)
+    c = env["client"]
+    # 成员穿越:解析后跳出产物目录必须 404(工作区内的其他文件也不许经此读取)
+    r = c.get("/api/artifact-file", params={
+        "session": "sess-a", "run_id": RUN_ID, "step": 10, "art_id": "gallery_dir",
+        "file": "../figures/velocity.png"})
+    assert r.status_code == 404
+    r2 = c.get("/api/artifact-file", params={
+        "session": "sess-a", "run_id": RUN_ID, "step": 10, "art_id": "gallery_dir",
+        "file": "../../../evil.png"})
+    assert r2.status_code == 404
+
+
+def test_artifact_file_dir_member_non_image_400_and_file_on_file_404(env):
+    _add_dir_artifact(env)
+    c = env["client"]
+    r = c.get("/api/artifact-file", params={
+        "session": "sess-a", "run_id": RUN_ID, "step": 10, "art_id": "gallery_dir",
+        "file": "notes.txt"})
+    assert r.status_code == 400
+    # file 参数只对目录型产物有意义:对文件型产物给 file → 404
+    r2 = c.get("/api/artifact-file", params={
+        "session": "sess-a", "run_id": RUN_ID, "step": 10, "art_id": "vel_png",
+        "file": "velocity.png"})
+    assert r2.status_code == 404

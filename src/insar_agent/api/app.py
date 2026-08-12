@@ -563,45 +563,75 @@ def create_app(home: Path | None = None) -> FastAPI:
         run = resolve_run(session, run_id, required=False)
         if run is None:
             return {"run": None, "figures": []}
-        items = []
-        for art in store.artifacts_of(run["run_id"]):
-            if Path(art["path"]).suffix.lower() not in _IMAGE_MEDIA_TYPES:
-                continue
-            target = resolve_artifact_file(run, art["path"])
-            if target is None or not target.is_file():
-                continue
+
+        def entry(art: dict, target: Path, member: str | None = None) -> dict:
             st = target.stat()
-            items.append({
+            q = {"session": session, "run_id": run["run_id"],
+                 "step": art["step_id"], "art_id": art["art_id"]}
+            if member:
+                q["file"] = member
+            return {
                 "step": art["step_id"], "artId": art["art_id"],
                 "name": target.name, "path": art["path"], "kind": art["kind"],
                 "size": st.st_size, "mtime": st.st_mtime,
-                "url": "/api/artifact-file?" + urlencode({
-                    "session": session, "run_id": run["run_id"],
-                    "step": art["step_id"], "art_id": art["art_id"]}),
-            })
-        items.sort(key=lambda x: (x["step"], x["artId"]))
+                "url": "/api/artifact-file?" + urlencode(q),
+            }
+
+        items = []
+        for art in store.artifacts_of(run["run_id"]):
+            target = resolve_artifact_file(run, art["path"])
+            if target is None:
+                continue
+            if Path(art["path"]).suffix.lower() in _IMAGE_MEDIA_TYPES:
+                if target.is_file():
+                    items.append(entry(art, target))
+            elif target.is_dir():
+                # 目录型产物(注册表里 figures 声明的是 products/figures 目录):
+                # 枚举目录内图像文件 —— 真实链的图件都长在这里,只按产物路径
+                # 后缀过滤会让画廊对标准管线永远空转(2026-08-12 终验发现)
+                children = sorted(p for p in target.iterdir()
+                                  if p.is_file()
+                                  and p.suffix.lower() in _IMAGE_MEDIA_TYPES)
+                for child in children[:100]:
+                    items.append(entry(art, child, member=child.name))
+        items.sort(key=lambda x: (x["step"], x["artId"], x["name"]))
         return {"run": run["run_id"], "figures": items}
 
     @app.get("/api/artifact-file")
     def artifact_file(session: str, art_id: str,
                       step: int = Query(ge=0, le=_STEP_ID_MAX),
-                      run_id: str | None = None):
+                      run_id: str | None = None, file: str | None = None):
         """产物图像文件本体(只读 FileResponse)。
 
         安全边界:非图像扩展名 400;产物不存在/路径越界/跨会话一律 404,
         且不泄露磁盘路径(与 resolve_run 的「不存在」口径一致)。
+        file 参数用于目录型产物(如 products/figures)取内部成员:成员解析后
+        必须仍落在产物目录内(防 ../ 越界),且同受图像扩展名闭集约束。
         """
         run = resolve_run(session, run_id)
         art = next((a for a in store.artifacts_of(run["run_id"], step)
                     if a["art_id"] == art_id), None)
         if art is None:
             raise HTTPException(404, "no artifact")
-        media = _IMAGE_MEDIA_TYPES.get(Path(art["path"]).suffix.lower())
+        target = resolve_artifact_file(run, art["path"])
+        if target is None:
+            raise HTTPException(404, "no artifact file")
+        if file is not None:
+            if not target.is_dir():
+                raise HTTPException(404, "no artifact file")
+            try:
+                member = (target / file).resolve()
+                member.relative_to(target.resolve())
+            except (ValueError, OSError):
+                raise HTTPException(404, "no artifact file")
+            target = member
+            media = _IMAGE_MEDIA_TYPES.get(target.suffix.lower())
+        else:
+            media = _IMAGE_MEDIA_TYPES.get(Path(art["path"]).suffix.lower())
         if media is None:
             raise HTTPException(
                 400, f"仅支持图像类产物({'/'.join(sorted(e.lstrip('.') for e in _IMAGE_MEDIA_TYPES))})")
-        target = resolve_artifact_file(run, art["path"])
-        if target is None or not target.is_file():
+        if not target.is_file():
             raise HTTPException(404, "no artifact file")
         return FileResponse(target, media_type=media)
 

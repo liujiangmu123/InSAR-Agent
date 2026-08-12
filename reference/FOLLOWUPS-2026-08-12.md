@@ -1,5 +1,18 @@
 # 深测波次跟踪清单(2026-08-12)
 
+## 20 代理波次(傍晚)闭环记录
+
+- 清单 #6/#7/#8(jobs TOCTOU/尾行冲刷/wrapper 显式化)与 WSL P2 组(keepalive
+  释放/失败分诊/判活节流)→ 执行层清仓分支全部修复。
+- fuzz 波次两缺陷(session 孤代理 500、NaN 体 500)→ 主线修复,xfail 已翻正。
+- a11y 遗留 P1(深色主题语义底色白字徽章)→ 主线修复(--text-inv)。
+- 浏览器实测 P2-002/P2-003(对勾遮挡/失败态弱)→ 失败卡分支修复。
+- 终验新发现并修复:目录型 FIGURE 产物(products/figures)不被 /api/figures
+  枚举 → 画廊对真实链空转;已支持目录成员枚举 + file 子参数(带越界防护)。
+- 仍开放:UI-DETAILS-AUDIT 的 1-4(审计面板消费服务端 evidence、files/report
+  面板真实化、产物 chip 联动)与 T1 报告的 state.js 两处中等缺陷
+  (syncServerSteps 清脏标记语义、workSummary 桶优先级)。
+
 合并波次结束后统一处理;来源:浏览器 UI 实测 + 沙箱数据库取证 + 各分支报告。
 
 ## 已修(合并波次中由主线处理,见 driver/store/ledger 同日提交)
