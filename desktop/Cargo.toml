@@ -9,9 +9,14 @@ rust-version = "1.77"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# 唯一运行时依赖:壳的全部业务(健康检查 HTTP、诊断页托管)手写在 std 上,
-# 不引 reqwest/tokio 等重依赖
+# 壳的核心逻辑(健康检查 HTTP、诊断页托管)手写在 std 上,不引 reqwest/tokio 等重依赖
 # tray-icon feature:系统托盘(src/tray.rs)
 tauri = { version = "2", features = ["tray-icon"] }
 # 单实例锁(src/singleton.rs):第二实例启动时前置已有窗口
 tauri-plugin-single-instance = "2"
+
+# —— 桌面 JS 桥(src/commands.rs)——
+# rfd:原生目录选择对话框(异步 API 在独立线程弹窗,不占事件循环)
+# serde_json:app_info 返回结构化 JSON
+rfd = "0.15"
+serde_json = "1"
