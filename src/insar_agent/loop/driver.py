@@ -340,12 +340,11 @@ class Driver:
                     "ok", "run 已完成,无待跑步骤;改参数或 RESET 后可重跑"
                           "(显式指定 step_ids 可重验证)"))
                 return
-        store.set_run_status(run_id, "running")
-
         # 待跑集合:显式指定,或 pending+stale+interrupted+orphaned+running
-        # (failed 需人工 RESET;running 是服务重启后的接回目标 —— REVIEW P1:
+        # (failed 默认需人工 RESET;running 是服务重启后的接回目标 —— REVIEW P1:
         # 漏掉它会让活作业永远接不回,下游步骤反因缺输入 contract_broken,
         # 执行器的 claim/reattach 语义本就支持接回,不会重跑已完成阶段)
+        explicit = step_ids is not None
         steps = {s.step_id: s for s in store.load_steps(run_id)}
         if step_ids is None:
             step_ids = [sid for sid, s in steps.items()
@@ -363,14 +362,29 @@ class Driver:
                     "warn", f"忽略云端已完成步骤 {dropped}:产物由云端交付,"
                             f"无本地作业可执行(显式重跑需先 RESET)"))
         step_ids = topo_order(step_ids)
+        # 空集合防御(REVIEW-r2 P1-2):质量门拦停/全失败的 run,默认选集为空,
+        # 若照走收尾会被标 done —— 拦停 run 重跑一次就"翻绿",伤质量门可信度。
+        if not step_ids:
+            failed = sorted(sid for sid, s in steps.items() if s.state == "failed")
+            if failed:
+                yield self._emit(ev.note(
+                    "bad", f"没有可执行步骤:失败步骤 {failed} 需处置后重跑"
+                           f"(失败卡「从断点继续」或 RESET);run 状态保持不变"))
+                return
+        store.set_run_status(run_id, "running")
         for sid in step_ids:  # 失效/中断步骤先复位(新 attempt);running 不复位,交执行器接回
-            if steps[sid].state in ("stale", "interrupted", "orphaned"):
+            st = steps[sid].state
+            # failed 只在显式列表中复位:失败卡「从断点继续」发的就是显式列表,
+            # 不复位会让执行器在 try 块外裸抛(REVIEW-r2 P1-1);默认选集仍要求
+            # 人工处置,不自动重试失败步骤
+            if st in ("stale", "interrupted", "orphaned") or (explicit and st == "failed"):
                 store.reset_step_for_rerun(run_id, sid)
 
         total = len(step_ids)
         done_count = 0
         consecutive_failures: dict[str, int] = {}
         last_renew = time.monotonic()
+        lease_lost = False
 
         for sid in step_ids:
             # 干预消费:steer 在步骤之间生效(§4.5 / absorb-E4)
@@ -423,9 +437,14 @@ class Driver:
                 while not detail.empty():
                     yield detail.get_nowait()
                 if time.monotonic() - last_renew > 5.0:  # 运行锁心跳续租
-                    store.acquire_lease(lease, holder, ttl=60.0, stale_after=60.0)
+                    # 续租失败 = 锁已被接管(本回合曾挂起超过 stale 窗)。输者自停
+                    # (REVIEW-r2 P1-5):当前步走完就退出,不再启动新步骤;不碰
+                    # token/control 位——在途作业的跟随与结算交给接管方,同一步骤
+                    # 上的竞争由执行器阶段 CAS 仲裁(残余双驱窗口仅限当前步)。
+                    if not store.acquire_lease(lease, holder, ttl=60.0, stale_after=60.0):
+                        lease_lost = True
                     last_renew = time.monotonic()
-                for action in store.due_actions("steer", run_id=run_id):
+                for action in store.due_actions("steer", run_id=run_id, include_unattributed=False):
                     if action["action"] == "KILL":
                         store.consume_action(action["id"])
                         self.request_cancel(run_id)  # E3:control 位同步落盘
@@ -434,6 +453,11 @@ class Driver:
                 yield detail.get_nowait()
             result = exec_task.result()
             step = result.step
+            if lease_lost:
+                yield self._emit(ev.note(
+                    "warn", "运行锁已被其他执行回合接管,本回合自停;"
+                            "已完成步骤保留,后续步骤由接管方推进"))
+                return
 
             if result.outcome == "done":
                 done_count += 1
@@ -516,7 +540,7 @@ class Driver:
         store.set_run_status(run_id, "done")
 
         # follow_up 干预此刻消费(absorb-E4;按 run 过滤,防跨 run 互吞)
-        for action in store.due_actions("follow_up", run_id=run_id):
+        for action in store.due_actions("follow_up", run_id=run_id, include_unattributed=False):
             outcome = apply_action(store, run_id, action, registry=self.registry,
                                    tool_versions=(self.probe().tool_versions()))
             store.consume_action(action["id"])
@@ -546,7 +570,7 @@ class Driver:
     # ---------------- 干预消费 / 恢复 ----------------
 
     async def _consume_steer(self, run_id: str, current_step: int) -> AsyncIterator[dict]:
-        for action in self.store.due_actions("steer", run_id=run_id):
+        for action in self.store.due_actions("steer", run_id=run_id, include_unattributed=False):
             kind = action["action"]
             if kind == "KILL":
                 self.store.consume_action(action["id"])
@@ -580,7 +604,7 @@ class Driver:
         纪律:凡到期动作,本回合必消费、必留痕,不许静默遗留。
         """
         store = self.store
-        for action in store.due_actions(deliver_as, run_id=run_id):
+        for action in store.due_actions(deliver_as, run_id=run_id, include_unattributed=False):
             kind = action["action"]
             if kind in ("KILL", "PAUSE", "PLAY"):
                 store.consume_action(action["id"])

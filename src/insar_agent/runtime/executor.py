@@ -143,12 +143,22 @@ async def execute_step(
             if existing is not None:
                 # 意图已落盘。作业若已实际启动(崩溃在 launch 与 advance 之间),
                 # 认领它,绝不重复启动(absorb-E2 唯一不确定窗口的处置)。
+                # 认领前必须比对 argv(REVIEW-r2 P1-4,与 reserve_command 的重入
+                # 判据对称):崩溃后改了方法/参数再重跑,旧意图对应旧配置的作业,
+                # 认领会把旧产物入账新配置名下 —— rc=0 时是静默的错误结果。
+                # 序列化口径必须与 store.reserve_command 完全一致(默认 ensure_ascii)
+                same_argv = existing["argv"] == json.dumps(plan.argv)
                 prev_dir = Path(existing["stdout_path"]).parent if existing["stdout_path"] else None
-                if prev_dir and prev_dir.exists() and ctx.backend.state(prev_dir).kind != "unknown":
+                if (same_argv and prev_dir and prev_dir.exists()
+                        and ctx.backend.state(prev_dir).kind != "unknown"):
                     job_dir = prev_dir
                     log_path = prev_dir / "job.log"
                     command_id = existing["id"]
                     claimed = True
+                elif not same_argv:
+                    # 配置已变:旧意图合成结算关账(-255,对齐 orphaned 语义),
+                    # 走全新 reserve —— 旧作业若仍在跑,由外部终结协议处置
+                    store.settle_command(existing["id"], exit_code=-255, duration=0.0)
             if not claimed:
                 command_id = store.reserve_command(
                     run_id, step_id, plan.argv, cwd=plan.cwd,

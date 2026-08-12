@@ -71,7 +71,8 @@ def test_execute_consumes_steer_between_steps(store, workspace):
 
     # 排队:第 9 步换 exponential(steer,在步骤间生效)
     store.push_action(scope="step", target="9", action="SET_METHOD",
-                      payload={"method": "exponential"}, deliver_as="steer")
+                      payload={"method": "exponential"}, deliver_as="steer",
+                      run_id=run["run_id"])
     events = asyncio.run(collect(driver.execute("s1")))
     interventions = [e for e in events if e["t"] == "intervention"]
     assert interventions and "exponential" in interventions[0]["text"]
@@ -84,7 +85,7 @@ def test_pause_stops_after_current_step(store, workspace):
     asyncio.run(collect(driver.turn("s1", "Ridgecrest 地震")))
     run = store.latest_run("s1")
     store.push_action(scope="run", target=run["run_id"], action="PAUSE",
-                      deliver_as="steer")
+                      deliver_as="steer", run_id=run["run_id"])
 
     events = asyncio.run(collect(driver.execute("s1")))
     assert any(e["t"] == "note" and "暂停" in e["text"] for e in events)
@@ -111,7 +112,8 @@ def test_kill_action_interrupts_run(store, workspace):
             events.append(e)
             if e["t"] == "step.start" and e["stepId"] >= 2:
                 store.push_action(scope="run", target=run["run_id"],
-                                  action="KILL", deliver_as="steer")
+                                  action="KILL", deliver_as="steer",
+                                  run_id=run["run_id"])
         return events
 
     events = asyncio.run(scenario())

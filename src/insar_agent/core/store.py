@@ -549,20 +549,27 @@ class Store:
                  json.dumps(payload or {}), deliver_as))
             return int(cur.lastrowid)
 
-    def due_actions(self, deliver_as: str, run_id: str | None = None) -> list[dict]:
-        """未消费动作;run_id 给定时只取"该 run 的 + 未定向(NULL)"的动作。
+    def due_actions(self, deliver_as: str, run_id: str | None = None,
+                    include_unattributed: bool = True) -> list[dict]:
+        """未消费动作;run_id 给定时只取"该 run 的(+ 可选未定向 NULL)"的动作。
 
-        NULL 兼容旧数据与未接线的入队方(API 层补 run_id 前不丢投递);
-        run 隔离语义由带 run_id 的行保证(REVIEW P1:跨 run 互吞)。
+        include_unattributed=True 兼容旧数据与无 run 语义的投递(next_run 面向
+        未来 run,天然 NULL);steer/follow_up 的执行期消费应传 False —— NULL 行
+        会被任意 run 的 driver 吞掉(REVIEW-r2 P1-3:A 会话首个 run 规划前排队
+        的动作被 B 消费;API 入队已绑定 run,严格匹配不再丢合法投递)。
         """
         if run_id is None:
             rows = self.db.query(
                 "SELECT * FROM pending_actions WHERE consumed_at IS NULL AND deliver_as=?"
                 " ORDER BY id", (deliver_as,))
-        else:
+        elif include_unattributed:
             rows = self.db.query(
                 "SELECT * FROM pending_actions WHERE consumed_at IS NULL AND deliver_as=?"
                 " AND (run_id=? OR run_id IS NULL) ORDER BY id", (deliver_as, run_id))
+        else:
+            rows = self.db.query(
+                "SELECT * FROM pending_actions WHERE consumed_at IS NULL AND deliver_as=?"
+                " AND run_id=? ORDER BY id", (deliver_as, run_id))
         out = []
         for r in rows:
             d = dict(r)
