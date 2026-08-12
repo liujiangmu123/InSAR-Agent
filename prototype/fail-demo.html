@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>InSAR-Agent · 失败态卡片静态演示</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/stream.css">
+<style>
+  /* 演示页自身的极简布局（不进组件库）：顶部说明 + 流区块 + 底部输入框 */
+  body { display: flex; flex-direction: column; height: 100vh; background: var(--bg); }
+  .demo-bar {
+    padding: 10px 24px; border-bottom: 1px solid var(--border);
+    font-size: 13px; color: var(--text-2); background: var(--surface);
+  }
+  .demo-bar b { color: var(--text); }
+  #stream { flex: 1; }
+  .demo-input { padding: 10px 24px 14px; border-top: 1px solid var(--border); background: var(--bg); }
+  .demo-input textarea {
+    width: 100%; max-width: var(--stream-w); display: block; margin: 0 auto;
+    border: 1px solid var(--border-strong); border-radius: var(--r);
+    padding: 8px 12px; background: var(--surface); color: var(--text); resize: vertical;
+  }
+</style>
+</head>
+<body>
+
+<div class="demo-bar"><b>fail-demo</b> · stream.js 失败态卡片静态演示：
+  ① 失败卡（P2-003） ② gate_stop 卡（建议可点） ③ 确认后的审批卡（P2-002）
+  ④ 无失败上下文的 bad note 对照。数据由本页脚本注入，非真实运行。</div>
+
+<div class="stream" id="stream" role="log" aria-label="演示轨迹流"></div>
+
+<div class="demo-input">
+  <label class="sr-only" for="prompt">演示输入框</label>
+  <textarea id="prompt" rows="2"
+    placeholder="gate_stop 卡的建议点击后会回填到这里（复用 index.html 的 #prompt 约定）"></textarea>
+</div>
+
+<script type="module">
+  import * as Stream from './js/stream.js';
+  import { toast } from './js/dom.js';
+
+  Stream.mount(document.getElementById('stream'));
+  // 演示页没有 dock / app.js：hooks 注入为提示动作，验证按钮接线路径本身
+  Stream.setFailureHooks({
+    openTerminal: (stepNo) => toast(`演示：切换到 dock 终端面板（第 ${stepNo} 步日志）`),
+    resume: () => toast('演示：从断点继续 —— 真实页面复用 app.js 的 resumeRun 入口'),
+  });
+
+  /* ---- ① 失败卡（P2-003）：工具卡 exit≠0 → note(tone=bad) ---- */
+  Stream.agentMsg('① 失败卡：第 8 步大气校正 ERA5 拉取失败（tool 卡 exit 1 后紧跟 note tone=bad）。',
+    '共写入 10 行日志，预览按规则截尾为最后 8 行。');
+  const t = Stream.toolCall({
+    cmd: 'smallbaselineApp.py --dostep correct_troposphere --method tropo_era5_pyaps',
+    verb: '[08/11]', label: '大气校正', open: true,
+  });
+  [
+    ['$ smallbaselineApp.py --dostep correct_troposphere --method tropo_era5_pyaps', 'cmd'],
+    ['本地缓存命中 3/7 天 · 需从 CDS 补拉 4 个日期的 ERA5 再分析数据', 'dim'],
+    ['CDS 请求已入队 · queue position 12 → 4', 'dim'],
+    ['GET https://cds.climate.copernicus.eu/api/v2/… → HTTP 503 Service Unavailable', 'err'],
+    ['重试 1/3（指数退避 2s）… HTTP 503', 'warn'],
+    ['重试 2/3（指数退避 4s）… HTTP 503', 'warn'],
+    ['重试 3/3（指数退避 8s）… HTTP 503', 'err'],
+    ['失败分类：service_down（规则命中 r"HTTP 5\\d\\d"，未消耗 LLM 调用）', 'dim'],
+    ['✗ ERA5 不可达 · 断点已保留（已下载 0/4 天，无需清理）', 'err'],
+    ['wrapper: exit_code=1 · checkpoint.json 已写入', 'dim'],
+  ].forEach(([line, tone]) => t.log(line, tone));
+  t.finish({ exit: 1, summary: '失败 · service_down（HTTP 503 × 3）' });
+  Stream.note('bad',
+    '第 8 步失败 · service_down（分诊来源：rule）。处置：换用离线大气模型降级继续，或保留断点等 ERA5 恢复。');
+
+  /* ---- ② gate_stop 卡（服务端文本形态，建议为字符串列表） ---- */
+  Stream.agentMsg('② gate_stop 卡：建议列表升级为可点操作，点击回填到底部输入框。');
+  Stream.gateStopEntry({
+    stepId: 6,
+    text: '第 6 步被质量门拦停：unwrap_coverage 0.62 < 0.70，上游解缠质量不足以支撑时序反演。',
+    suggestions: [
+      '换用其他方法（snaphu_smooth）重跑第 6 步',
+      '放宽阈值至 0.60（需在 contract.yaml 里登记依据）',
+    ],
+  });
+
+  /* ---- ③ 确认后的审批卡（P2-002：紧凑单行完成态） ---- */
+  Stream.agentMsg('③ 审批卡：点「确认执行」后是一行紧凑完成态，不再是占满卡片的大号对勾。');
+  const card = Stream.askApproval({
+    title: '需确认 · 执行流水线',
+    rows: [
+      ['步骤', '第 6、7、8、9、10、11 步（共 6 步）'],
+      ['耗时', '时长未知 · 首次运行此配置'],
+      ['花费', '0 元 · 本机计算，未提交云端作业'],
+      ['可逆', '仅新增文件，无覆写风险'],
+    ],
+    actions: [
+      { label: '确认执行', icon: 'play', done: '已确认 · 开始执行', run: () => {} },
+      { label: '取消', done: '已取消 · 流水线保持待运行', run: () => {} },
+    ],
+  });
+  card.querySelector('.acts button').click();   // 模拟用户点「确认执行」
+
+  /* ---- ④ 对照：无失败上下文的 bad note 仍是普通横幅 ---- */
+  Stream.note('bad', '④ 对照：这条 bad note 前面没有失败的工具卡，保持横幅形态（运行时错误等场景）。');
+</script>
+
+</body>
+</html>

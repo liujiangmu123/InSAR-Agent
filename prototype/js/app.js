@@ -63,6 +63,11 @@ function boot() {
 
   St.initSteps(5);
   Stream.mount(el.stream);
+  // 失败卡动作接线（P2-003）：完整日志 → dock 终端面板；续跑复用断点入口
+  Stream.setFailureHooks({
+    openTerminal: () => { Dock.setTab('term'); ensureDock(); },
+    resume: resumeRun,
+  });
   Dock.mount({
     tabsEl: el.dockTabs, bodyEl: el.dockBody,
     on: {
