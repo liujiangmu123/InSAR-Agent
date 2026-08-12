@@ -140,6 +140,11 @@ export HDF5_USE_FILE_LOCKING=FALSE
 # 引擎 conda env 前缀:runtime/probe.py 与 runtime/wsl_probe.py 都认这个变量
 export INSAR_ENGINE_PREFIX=${ENV_PREFIX}
 export PATH="${ENV_PREFIX}/bin:${MINIFORGE_PREFIX}/bin:\$PATH"
+# PROJ/GDAL 数据路径:不 conda activate 时缺省解析失败(2026-08 ALOS Baja 实测:
+# 缺 PROJ_DATA 则 gdal_translate/geocode 报 proj_create_from_database 打不开 proj.db)
+export PROJ_DATA=${ENV_PREFIX}/share/proj
+export PROJ_LIB=${ENV_PREFIX}/share/proj
+export GDAL_DATA=${ENV_PREFIX}/share/gdal
 # ISCE2 应用脚本(topsApp.py 等)在 site-packages/isce/applications,不在 env bin
 _isce_apps="\$(ls -d ${ENV_PREFIX}/lib/python3.*/site-packages/isce/applications 2>/dev/null | head -n 1)"
 if [ -n "\$_isce_apps" ]; then

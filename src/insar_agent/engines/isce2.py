@@ -37,11 +37,20 @@ _TOPS_XML = """\
 </topsApp>
 """
 
-# capability → topsApp 步骤区间(startup..geocode 全序列的分段)
+# capability → topsApp 步骤区间(startup..geocode 全序列的分段)。
+#
+# 硬约束(2026-08 ALOS Baja 实测教训):ISCE2 --steps 续跑要求 pickle 链连续。
+# Application 恢复时只加载"起始步骤的直接前驱"的 pickle;若分段之间跳过了任何
+# 步骤(哪怕是 do_xxx=False 时的空转占位步),前驱 pickle 不存在,恢复得到空
+# 状态,在首个产品引用处以 NoneType 崩溃。因此相邻 capability 的区间必须在
+# topsApp 步骤全序列上首尾相接:
+#   startup preprocess computeBaselines verifyDEM topo subsetoverlaps
+#   coarseoffsets coarseresamp overlapifg prepesd esd rangecoreg fineoffsets
+#   fineresamp ion burstifg mergebursts filter unwrap unwrap2stage geocode
 _STEP_RANGES: dict[int, tuple[str, str]] = {
     3: ("startup", "fineresamp"),        # 配准:几何配准 + ESD + 精配准
-    4: ("mergebursts", "filter"),        # 干涉:合并 burst + 多视 + 干涉图
-    5: ("filter", "filter"),             # 滤波(单步重跑)
+    4: ("ion", "filter"),                # 干涉:ion/burstifg 占位步不可跳过
+    5: ("filter", "filter"),             # 滤波(单步重跑;前驱 burstifg pickle 已存在)
 }
 
 
