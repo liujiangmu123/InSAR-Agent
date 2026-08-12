@@ -9,8 +9,9 @@
      桌面壳    「● 运行中 · 第 6 步 · InSAR-Agent · 工作区」(● 运行中/○ 非运行)
    后端不可达 / 无会话 / 尚无 run:静默还原原始标题,绝不报错。
 
-   桌面判定:Tauri 2 远程 URL(http://127.0.0.1)默认不注入 __TAURI__,
-   但 Windows WebView2 始终注入 chrome.webview —— 两者都认。
+   桌面判定:withGlobalTauri 开启后,远程 URL(http://127.0.0.1)也会注入
+   __TAURI__(2026-08-12 实机验证,见 desktop/INTEGRATION-commands.md §三);
+   Windows WebView2 另有恒在的 chrome.webview —— 两者都认,双保险。
 
    集成(index.html 加一行,见 desktop/INTEGRATION-window.md):
    <script type="module">import { initTitleSync } from './js/titlebar.js'; initTitleSync();</script>
