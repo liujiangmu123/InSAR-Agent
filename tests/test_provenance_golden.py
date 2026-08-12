@@ -100,8 +100,10 @@ def test_provenance_top_level_golden(golden):
 
     assert doc["qa"] == {"status": "pass"}
     ev = doc["evidence"]
+    # 字段增量(FOLLOWUPS #11/#12):step_sources(每步证据来源)与
+    # parent_validations(fork 父链曾有的外部验证清单)随 evidence 段入账本
     assert set(ev) == {"level", "level_index", "ladder", "reasons", "ceiling",
-                       "ceiling_reason"}
+                       "ceiling_reason", "step_sources", "parent_validations"}
     assert ev["ladder"] == list(LADDER)
     # simulated 全链:封顶 runnable,演示不冒充证据
     assert doc["evidence_level"] == "runnable" == ev["level"] == ev["ceiling"]
@@ -146,6 +148,28 @@ def test_provenance_steps_golden(golden):
     # 依赖边如实进账本(第 11 步质检依赖 10 与 7)
     assert set(steps["11"]["upstream"]) == {"10", "7"}
     assert steps["7"]["upstream"] == ["6"]
+
+
+def test_provenance_evidence_sources_golden(golden):
+    """evidence 段每步证据来源(#11/#12 字段增量):本地执行 local、
+    云端跳过 cloud(manifest 指纹可回查);根 run 无父链验证清单。"""
+    ev = golden.doc["evidence"]
+    sources = ev["step_sources"]
+    assert set(sources) == {str(i) for i in range(1, 12)}  # 全步覆盖
+
+    manifest_sha = hashlib.sha256(golden.manifest_bytes).hexdigest()
+    for sid in _EXECUTED:
+        assert sources[sid] == {"origin": "local", "source": "local"}
+    for sid in _SKIPPED:
+        s = sources[sid]
+        assert s["origin"] == "cloud"
+        assert s["manifest_sha256"] == manifest_sha  # 与账本 cloud_evidence 同指纹
+        assert s["source"] == f"cloud(manifest sha256:{manifest_sha[:12]})"
+        assert s["manifest_path"] == "hyp3_manifest.json"
+
+    assert ev["parent_validations"] == []  # 非 fork run:无父链
+    # 云端封顶候选存在,但 simulated 的 runnable 是更低的封顶 → 最终仍 runnable
+    assert ev["ceiling"] == "runnable"
 
 
 def test_provenance_artifacts_and_metrics_golden(golden):
