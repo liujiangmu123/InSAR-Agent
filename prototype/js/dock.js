@@ -271,28 +271,17 @@ function imagesView() {
   // 后端不可达/无产物时回落演示图件 —— 数据源与灯箱逻辑全在 gallery.js。
   const gal = galleryView();
 
-  const pt = POINTS.find((p) => p.id === S.selectedPoint) || POINTS[0];
-  const canvas = h('div', { class: 'canvas', html: mapSvg(S.selectedPoint) });
-  canvas.querySelectorAll('.pt').forEach((g) => {
-    const pick = () => { S.selectedPoint = g.dataset.id; refresh(); };
-    g.addEventListener('click', pick);
-    g.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); }
-    });
-  });
+  // 下半区(空间浏览小地图 + 点位时序卡)整体归 tspoint.js:点击地图 →
+  // GET /api/timeseries-point 取真实单像元时序(Shift 叠加对比),后端
+  // 不可达/模拟运行无真实产物时回落演示曲线。动态 import 与 envlive 同策略,
+  // 不新增模块级 import(与并行分支的 dock.js 改动解耦)。
+  const spatial = h('div', null);
+  import('./tspoint.js').then((m) => { if (spatial.isConnected) m.mountSpatial(spatial); });
 
   return h('div', null,
     gal,
     h('h3', { class: 'sect' }, '空间浏览 · 点击点位取时序'),
-    h('div', { class: 'mapcard' },
-      h('div', { class: 'bar' }, icon('target'), '形变速率 · LOS (mm/yr)',
-        h('span', { class: 'mono' }, 'vel_ridgecrest_2019.png')),
-      canvas,
-      h('div', { class: 'pins' }, ...POINTS.map((p) => h('button', {
-        class: 'pin', type: 'button', 'aria-pressed': String(p.id === S.selectedPoint),
-        onclick: () => { S.selectedPoint = p.id; refresh(); },
-      }, p.name)))),
-    tsCard(pt));
+    spatial);
 }
 
 function tsCard(p) {

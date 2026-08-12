@@ -163,6 +163,7 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_setup_router(home))  # 环境向导(/api/setup/*,settings.json 与 DB 同目录)
     app.include_router(version_router)             # 版本信息与更新检查(/api/version*)
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
+    from insar_agent.api.data_router import create_data_router; app.include_router(create_data_router(store))  # 点位时序数据(约定:app.py 仅此一行)
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)

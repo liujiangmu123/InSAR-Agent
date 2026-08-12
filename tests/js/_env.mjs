@@ -16,7 +16,12 @@ globalThis.localStorage = {
   clear: () => { store.clear(); },
 };
 
-// setTheme / setDockWidth 会碰 document.documentElement,给哑对象兜底
+// setTheme / setDockWidth 会碰 document.documentElement,给哑对象兜底。
+// readyState 报 'loading':dom.js 顶层按此走 DOMContentLoaded 注册分支
+// (监听器 no-op,不触发 createElement),figures.js / tspoint.js
+// (它们 import dom.js)才能在 Node 里安全导入做纯函数单测。
 globalThis.document = {
+  readyState: 'loading',
+  addEventListener() {},
   documentElement: { dataset: {}, style: { setProperty() {} } },
 };
