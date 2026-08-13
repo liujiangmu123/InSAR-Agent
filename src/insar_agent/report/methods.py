@@ -238,8 +238,14 @@ def _prose_invert(sid, s, c):
         out += ";参考点选取未入账本,以 MintPy 运行配置为准(诚实缺席)"
         return out + "。"
     if m == "pystamps_ps":
+        # 滑坡技能包纪律:「LOS → 坡向投影假设必须进报告」;适用性/几何可见性
+        # 引文与场景知识段(landslide SKILL)一致,数字只进 ref 锚点
         return ("形变时序经永久散射体(PS)方法反演"
-                "〔ref:Ferretti et al. (2001), IEEE TGRS 39(1):8-20〕。")
+                "〔ref:Ferretti et al. (2001), IEEE TGRS 39(1):8-20〕;"
+                "PS 测得的是 LOS 分量,换算坡向/垂直形变须显式声明投影假设"
+                "〔ref:Colesanti & Wasowski (2006), Engineering Geology 88:173-199 "
+                "—— 缓慢滑坡 InSAR 适用性标准引文;LOS 对近南北向运动几乎不敏感,"
+                "升降轨互补是 PSI 滑坡应用惯例〕。")
     return None
 
 
