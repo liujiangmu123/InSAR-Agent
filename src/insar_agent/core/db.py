@@ -33,6 +33,10 @@ _STATEMENT_MIGRATIONS: tuple[str, ...] = (
     # 本就选 autoindex(scripts/bench_store.py 的 EXPLAIN 佐证),徒增每次
     # INSERT 的维护成本 → 旧库删掉;schema.sql 已不再创建。
     "DROP INDEX IF EXISTS idx_steps_run",
+    # 分页索引(与 schema.sql 末尾索引区双处一致):schema 重放本可自动补齐,
+    # 迁移清单再列一份是显式台账 —— 未来 schema 重放策略若收紧,旧库不掉索引。
+    "CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at, session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_trace_run_ts ON trace(run_id, ts)",
 )
 
 
