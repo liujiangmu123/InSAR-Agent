@@ -392,6 +392,8 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_data_catalog_router(home))  # /api/datasets*(文件面板「数据集」区)
     from insar_agent.api.report_router import create_report_router
     app.include_router(create_report_router(store, home))  # 方法章节草稿(/api/report/draft)
+    from insar_agent.api.visionqa_router import create_visionqa_router
+    app.include_router(create_visionqa_router(home, store))  # AI 识图质检(/api/vision-qa)
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
