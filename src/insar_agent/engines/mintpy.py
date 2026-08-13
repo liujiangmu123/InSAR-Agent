@@ -72,7 +72,14 @@ def engine_python() -> str:
     exe = os.environ.get("INSAR_ENGINE_PYTHON")
     if exe:
         return exe
+    # 显式 prefix 优先;未配置时用探测层的隐式 conda 回退(与向导判定同源)——
+    # 否则"隐式绿灯"的机器(检测全过)真跑第 7 步会回落裸 python 缺 mintpy
+    # (2026-08-13 检测矩阵代理发现的跨模块缺口)
     prefix = os.environ.get("INSAR_ENGINE_PREFIX")
+    if not prefix:
+        from insar_agent.runtime.probe import _implicit_engine_prefix
+
+        prefix = _implicit_engine_prefix()
     if prefix:
         cand = Path(prefix) / ("python.exe" if sys.platform == "win32" else "bin/python")
         if cand.exists():
