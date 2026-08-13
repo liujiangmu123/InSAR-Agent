@@ -43,6 +43,12 @@ _STATEMENT_MIGRATIONS: tuple[str, ...] = (
     " id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, session_id TEXT NOT NULL,"
     " step_ids_json TEXT, enqueued_at REAL NOT NULL, started_at REAL,"
     " state TEXT NOT NULL DEFAULT 'pending')",  # state: pending|running|done|cancelled
+    # LLM 用量账本(brain/usage.py):每次调用一行流水;token/成本拿不到记 NULL
+    "CREATE TABLE IF NOT EXISTS llm_calls ("
+    " id INTEGER PRIMARY KEY, ts REAL NOT NULL, model TEXT NOT NULL,"
+    " kind TEXT NOT NULL, prompt_tokens INTEGER, completion_tokens INTEGER,"
+    " latency_ms INTEGER, session_id TEXT, run_id TEXT, cost_est REAL)",  # kind: chat|vision
+    "CREATE INDEX IF NOT EXISTS idx_llm_calls_ts ON llm_calls(ts)",
 )
 
 

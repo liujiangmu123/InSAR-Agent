@@ -14,7 +14,7 @@ import time
 import zlib
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from insar_agent.brain.llm_config import (DEFAULT_BASE_URL, load_llm_config,
@@ -23,6 +23,7 @@ from insar_agent.brain.llm_config import (DEFAULT_BASE_URL, load_llm_config,
                                           vision_route_from_config)
 from insar_agent.brain.provider import (BrainUnavailable, LLMProvider, LLMRoute,
                                         describe_image_stream, list_models)
+from insar_agent.brain.usage import UsageLedger
 
 
 class LLMConfigBody(BaseModel):
@@ -74,12 +75,26 @@ def _config_view(home: Path) -> dict:
     }
 
 
-def create_llm_router(home: Path) -> APIRouter:
+#: /usage 未接账本(独立挂载形态)时的空响应,形状与 UsageLedger.summary 一致
+_EMPTY_TOTAL = {"calls": 0, "prompt_tokens": None,
+                "completion_tokens": None, "cost_est_cny": None}
+
+
+def create_llm_router(home: Path, usage_ledger: UsageLedger | None = None) -> APIRouter:
     router = APIRouter(prefix="/api/llm", tags=["llm"])
 
     @router.get("/config")
     def get_config() -> dict:
         return _config_view(home)
+
+    @router.get("/usage")
+    def get_usage(days: int = Query(7, ge=1, le=90)) -> dict:
+        """LLM 用量账本汇总(顶栏用量芯片数据源):
+        总量 / 按模型 / 按日 / 按会话 / 最近 20 条流水;成本估算 CNY,未知为 null。"""
+        if usage_ledger is None:
+            return {"days": days, "total": dict(_EMPTY_TOTAL), "by_model": [],
+                    "by_day": [], "by_session": [], "recent": []}
+        return usage_ledger.summary(days=days)
 
     @router.post("/config")
     def post_config(body: LLMConfigBody) -> dict:
