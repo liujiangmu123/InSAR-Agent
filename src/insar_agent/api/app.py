@@ -16,6 +16,8 @@ import json
 import logging
 import math
 import os
+import time
+import uuid
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -102,6 +104,30 @@ def read_sidecar_meta(image: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+#: 会话显示名上限(check_session_id 的宽松版:name 只是标签,不做目录名)
+_SESSION_NAME_MAX = 80
+
+
+def check_session_name(name: str) -> str:
+    """校验会话显示名;不合法直接 400。返回去首尾空白后的名字。
+
+    与 check_session_id 的差异:name 不落文件系统,放开路径分隔符等敏感字符,
+    上限放宽到 80;保留的检查是防 500/防 UI 破版的底线 —— 非空、无控制字符、
+    可编码 UTF-8(孤代理会在 SQLite 绑定时逃逸为 500,同 id 校验的教训)。
+    """
+    trimmed = name.strip()
+    if not trimmed or len(trimmed) > _SESSION_NAME_MAX:
+        raise HTTPException(
+            400, f"name 不合法:去首尾空白后长度须为 1-{_SESSION_NAME_MAX} 字符")
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in trimmed):
+        raise HTTPException(400, "name 不合法:不允许控制字符(含换行/制表符)")
+    try:
+        trimmed.encode("utf-8")
+    except UnicodeEncodeError:
+        raise HTTPException(400, "name 不合法:含无法编码为 UTF-8 的码位(孤代理)")
+    return trimmed
+
+
 def check_session_id(session_id: str) -> str:
     """校验 session_id 可安全用作目录名;不合法直接 400(结构化 detail)。"""
     sid = session_id
@@ -161,6 +187,16 @@ class SessionBody(BaseModel):
     id: str
     name: str | None = None
     mode: str = "expert"
+
+
+class SessionPatchBody(BaseModel):
+    """PATCH /api/sessions/{id}:至少给一个字段。
+
+    name:重命名(check_session_name 宽松校验);
+    archived:true=归档(同 DELETE 软删,受 running 守卫)/ false=还原。
+    """
+    name: str | None = None
+    archived: bool | None = None
 
 
 def create_app(home: Path | None = None) -> FastAPI:
@@ -265,8 +301,10 @@ def create_app(home: Path | None = None) -> FastAPI:
         return {"ok": True, "version": app.version}
 
     @app.get("/api/sessions")
-    def sessions():
-        return store.list_sessions()
+    def sessions(include_archived: bool = False):
+        # 默认不含已归档(软删除的「列表不显示」);?include_archived=1 给
+        # 前端「已归档」折叠组当数据源
+        return store.list_sessions(include_archived=include_archived)
 
     @app.post("/api/sessions")
     def create_session(body: SessionBody):
@@ -274,6 +312,76 @@ def create_app(home: Path | None = None) -> FastAPI:
         store.create_session(body.id, body.name or body.id, mode=body.mode)
         driver_of(body.id)
         return store.get_session(body.id)
+
+    def guard_archivable(session_id: str) -> None:
+        """归档守卫:有 running run 的会话拒绝归档(409)—— 先取消/等结束。
+        看全量 run 而非最新:老 run 仍在跑而新 run 已建时,latest 口径会漏。"""
+        if store.has_running_run(session_id):
+            raise HTTPException(
+                409, f"会话 {session_id} 有正在运行的 run,请先取消或等待结束后再归档")
+
+    def require_session(session_id: str) -> dict:
+        check_session_id(session_id)  # 目录名级校验:purge 要拿 id 拼工作区路径
+        sess = store.get_session(session_id)
+        if sess is None:
+            raise HTTPException(404, f"会话 {session_id} 不存在")
+        return sess
+
+    def retire_workspace(session_id: str) -> str | None:
+        """硬删只删 DB 行:工作区目录改名 <id>.deleted-<时间戳> 留人工回收。
+        目录不存在返回 None;改名失败(句柄占用等)目录原样保留,绝不删文件。"""
+        ws = home / "sessions" / session_id
+        if not ws.is_dir():
+            return None
+        stamp = time.strftime("%Y%m%dT%H%M%S")
+        target = ws.with_name(f"{session_id}.deleted-{stamp}")
+        if target.exists():  # 同秒重复 purge 同名会话:补随机后缀防覆盖
+            target = ws.with_name(f"{session_id}.deleted-{stamp}-{uuid.uuid4().hex[:6]}")
+        try:
+            ws.rename(target)
+        except OSError as exc:
+            log.warning("purge %s:工作区改名失败,目录原样保留:%s", session_id, exc)
+            return None
+        return target.name
+
+    @app.patch("/api/sessions/{session_id}")
+    def patch_session(session_id: str, body: SessionPatchBody):
+        require_session(session_id)
+        if body.name is None and body.archived is None:
+            raise HTTPException(
+                400, "PATCH 需要至少一个字段:name(重命名)或 archived(归档/还原)")
+        if body.name is not None:
+            store.rename_session(session_id, check_session_name(body.name))
+        if body.archived is True:
+            guard_archivable(session_id)
+            store.archive_session(session_id)
+        elif body.archived is False:
+            store.restore_session(session_id)
+        return store.get_session(session_id)
+
+    @app.delete("/api/sessions/{session_id}")
+    def delete_session(session_id: str, purge: bool = False):
+        """默认软删除(归档):列表不显示,run 与工作区数据一律保留,可还原。
+
+        ?purge=1 硬删除,极度保守:仅当会话无任何 run 时允许(有 run → 409
+        只能归档);也只删 DB 行,工作区目录改名 <id>.deleted-<时间戳> 留人工回收。
+        """
+        require_session(session_id)
+        if not purge:
+            guard_archivable(session_id)
+            store.archive_session(session_id)
+            return {"ok": True, "archived": True, "session": store.get_session(session_id)}
+        n_runs = store.count_runs(session_id)
+        if n_runs > 0:
+            raise HTTPException(
+                409, f"会话 {session_id} 含 {n_runs} 个 run,只能归档(去掉 purge=1)")
+        try:
+            store.purge_session(session_id)  # 事务内复查 run 数:上面的预检只为报数
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+        drivers.pop(session_id, None)  # 工作区路径即将失效,丢弃缓存的 driver
+        moved = retire_workspace(session_id)
+        return {"ok": True, "purged": True, "workspace_moved_to": moved}
 
     @app.get("/api/chat")
     def chat(session: str):

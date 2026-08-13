@@ -23,6 +23,9 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # 干预动作按 run 隔离(REVIEW-2026-08-12 P1:跨 run 互吞/溯源污染)
     ("pending_actions", "run_id",
      "ALTER TABLE pending_actions ADD COLUMN run_id TEXT"),
+    # 会话软删除:归档时刻(NULL=活跃);列表默认过滤,run/工作区数据一律保留
+    ("sessions", "archived",
+     "ALTER TABLE sessions ADD COLUMN archived REAL"),
 )
 
 _STATEMENT_MIGRATIONS: tuple[str, ...] = (
