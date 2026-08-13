@@ -1112,6 +1112,8 @@ function applyMethod(stepId, methodId) {
   const affected = St.setMethod(stepId, methodId);
   if (!affected.length) return;
   lastChange = { stepId, method: methodId };
+  // bridge 接线：方法变更 → 聊天流干预回执卡（bridge.js，未挂载时静默跳过）
+  window.Bridge?.noteIntervention({ kind: 'method', stepId, value: methodId });
   if (interventionDuringRun(`将第 ${stepId} 步方法改为 ${methodId}`)) return;
   explainInvalidation(stepId, before, methodId, affected, 'method', snap);
 }
@@ -1122,6 +1124,8 @@ function applyParams(stepId, patch) {
   const affected = St.setParams(stepId, patch);
   if (!affected.length) return;
   lastChange = { stepId, params: { ...patch } };
+  // bridge 接线：参数变更 → 聊天流干预回执卡（bridge.js，未挂载时静默跳过）
+  window.Bridge?.noteIntervention({ kind: 'params', stepId, patch });
   const k = Object.keys(patch)[0];
   if (interventionDuringRun(`将第 ${stepId} 步参数改为 ${k}=${patch[k]}`)) return;
   explainInvalidation(stepId, `${k}=${before[k]}`, `${k}=${patch[k]}`, affected, 'param', snap);
@@ -1308,6 +1312,8 @@ function askRerun() {
 }
 
 async function run(ids) {
+  // bridge 接线：执行/重跑流水线 → 聊天流干预回执卡（bridge.js，未挂载时静默跳过）
+  window.Bridge?.noteIntervention({ kind: 'run', ids });
   expireUndos();   // 开始执行后旧参数不可再撤销（撤销窗口只在静止态有效）
   Notify.ensurePermission();   // 通知权限惰性申请：首次执行流水线时才问，拒绝后不再骚扰
   setBusy(true);

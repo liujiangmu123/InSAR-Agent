@@ -1,0 +1,114 @@
+/* ============================================================
+   bridge.css —— 聊天流「干预回执卡」（bridge.js）
+   平面区分约定：
+     · 用户操作平面 = 回执卡：右对齐 + 右缘主色色带（呼应 .u-msg 气泡）
+     · 系统事件平面 = 既有 .ivt 条目：左侧全宽 + 虚线边（stream.css）
+   全部取色走 tokens.css 语义变量：明暗双主题自动适配；
+   状态 chip 用 *-text 配 *-weak 的既定 AA 对（tokens.css 文件头注释）。
+   ============================================================ */
+
+.brg-receipt {
+  align-self: flex-end;              /* 右对齐 = 用户操作平面 */
+  max-width: 84%;
+  min-width: 240px;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 9px 12px;
+  border: 1px solid var(--accent-border);
+  border-right: 3px solid var(--accent);   /* 右缘色带：与左缘色带的系统横幅镜像 */
+  border-radius: 12px 12px 4px 12px;       /* 呼应 .u-msg 的气泡切角 */
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+/* 终态一目了然：生效转绿、被拒转红；排队/本地保持主色（用户平面身份色） */
+.brg-receipt[data-state='applied'] {
+  border-color: var(--ok-border);
+  border-right-color: var(--ok);
+}
+.brg-receipt[data-state='rejected'] {
+  border-color: var(--bad-border);
+  border-right-color: var(--bad);
+}
+
+/* 卡体按钮：整卡可点（定位到流水线步骤），去按钮默认皮 */
+.brg-receipt .brg-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.brg-receipt button.brg-body { cursor: pointer; border-radius: var(--r-sm); }
+.brg-receipt button.brg-body:hover .brg-text { color: var(--accent-text); }
+.brg-receipt button.brg-body:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 3px;
+}
+
+.brg-receipt .brg-ico { flex-shrink: 0; margin-top: 1px; color: var(--accent); }
+.brg-receipt .brg-ico svg { width: 15px; height: 15px; display: block; }
+
+.brg-receipt .brg-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.brg-receipt .brg-text { font-weight: 600; word-break: break-word; }
+
+/* 元信息行：时间 · 投递语义 · 点击提示（text-3 已按 AA 调深，tokens.css） */
+.brg-receipt .brg-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+.brg-receipt .brg-deliver:empty { display: none; }
+
+/* 拒因行：只在 rejected 时出现 */
+.brg-receipt .brg-reason {
+  font-size: var(--fs-xs);
+  color: var(--bad-text);
+  word-break: break-word;
+}
+
+/* 状态 chip：颜色 + 文字双通道表达（色盲友好，与全站语义三重表达一致） */
+.brg-receipt .brg-state {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 1px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text-2);
+  background: var(--bg-mute);
+}
+.brg-receipt[data-state='pending'] .brg-state {
+  color: var(--think);
+  background: var(--think-weak);
+  border-color: var(--think-border);
+}
+.brg-receipt[data-state='queued'] .brg-state {
+  color: var(--accent-text);
+  background: var(--accent-weak);
+  border-color: var(--accent-border);
+}
+.brg-receipt[data-state='applied'] .brg-state {
+  color: var(--ok-text);
+  background: var(--ok-weak);
+  border-color: var(--ok-border);
+}
+.brg-receipt[data-state='rejected'] .brg-state {
+  color: var(--bad-text);
+  background: var(--bad-weak);
+  border-color: var(--bad-border);
+}
