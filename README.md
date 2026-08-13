@@ -44,7 +44,8 @@
 python -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"        # 跑测试足够;真实 qa/出图另加 raster:".[dev,raster]"
 .venv\Scripts\python -m pytest tests/ -q     # 215 项测试(2026-08-12 全绿)
-.venv\Scripts\python scripts\test_js.py      # 前端 state.js 单测(node --test,零 npm 依赖)
+.venv\Scripts\python scripts\check_frontend.py  # 前端质量门一键:JS 单测 + *.check.mjs + CSS/a11y 质检
+                                             # (零 npm 依赖;--only 名 可只跑单套件)
 .venv\Scripts\python -m insar_agent.api.app  # http://127.0.0.1:8873(UI + API)
 
 # 可选:装 pre-commit 提交钩子(ruff / 尾空格 / EOF / YAML / CSS 质检,配置见 .pre-commit-config.yaml)
