@@ -16,8 +16,9 @@ import json
 import logging
 import math
 import os
+import re
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -42,6 +43,7 @@ from insar_agent.loop.driver import Driver
 from insar_agent.planner.feasibility import narrow_methods
 from insar_agent.planner.plan import fork_run
 from insar_agent.registry.capabilities import PIPELINE, REGISTRY
+from insar_agent.report.bundle import build_repro_bundle
 from insar_agent.report.script import export_run_script
 
 # INSAR_UI_DIR:静态 UI 目录的唯一环境变量覆盖点(桌面冻结版由
@@ -527,6 +529,34 @@ def create_app(home: Path | None = None) -> FastAPI:
                                 workspace=driver_of(session).workspace)
         md, source = driver_of(session).brain.narrate(doc)
         return PlainTextResponse(md, headers={"X-Narrate-Source": source})
+
+    @app.get("/api/repro-bundle")
+    def repro_bundle(session: str, run_id: str | None = None):
+        """复现包 zip 一键导出(provenance / run.sh / methods.md / qa.json /
+        图件 PNG+sidecar / MANIFEST 的 sha256 清单),交付给同行/审稿人。
+
+        会话归属校验同 resolve_run(跨会话按 404「不存在」);run 非 done 一律
+        409 —— 复现包对外代表「已完成 run 的可复现记录」,中途态出包会让收件人
+        拿到与最终账本不一致的半成品。
+        """
+        run = resolve_run(session, run_id)
+        if run["status"] != "done":
+            raise HTTPException(
+                409, f"run {run['run_id']} 状态为 {run['status']},复现包只对已完成"
+                     "(done)的 run 导出:半成品的账本/图件不完整,请等待运行结束"
+                     "或先 resume 收尾后再出包")
+        buf = build_repro_bundle(store, run["run_id"], driver_of(session).workspace,
+                                 contract=contract)
+        # Content-Disposition 转义:HTTP 头须 latin-1 —— ASCII 档名做字符白名单
+        # 清洗(防引号/控制字符破坏 quoted-string),原始档名走 RFC 5987 的
+        # filename*(UTF-8 百分号编码),两者并给以兼容新旧客户端
+        prefix = run["run_id"][:24]
+        ascii_name = "insar-repro-" + re.sub(r"[^A-Za-z0-9._-]", "_", prefix) + ".zip"
+        utf8_name = quote(f"insar-repro-{prefix}.zip", safe="")
+        return StreamingResponse(buf, media_type="application/zip", headers={
+            "Content-Disposition":
+                f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}",
+        })
 
     @app.get("/api/trace")
     def trace(session: str, run_id: str | None = None):

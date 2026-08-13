@@ -257,5 +257,15 @@ function renderBlock(b) {
 export function renderMarkdown(md) {
   const root = document.createElement('div');
   for (const b of parseBlocks(md)) root.appendChild(renderBlock(b));
+  // 「导出复现包」:href 直链 GET /api/repro-bundle(zip:provenance/run.sh/
+  // methods/qa/图件 + MANIFEST sha256 清单);run 非 done 时后端 409 不出包
+  const a = document.createElement('a');
+  a.className = 'btn btn-gho btn-sm';
+  a.style.marginTop = '10px';
+  a.href = `/api/repro-bundle?session=${encodeURIComponent(S.sessionId)}`;
+  a.setAttribute('download', '');
+  a.title = '打包下载 provenance.json / run.sh / methods.md / qa.json / 图件 + MANIFEST(sha256 清单)';
+  a.textContent = '导出复现包(.zip)';
+  root.appendChild(a);
   return root;
 }
