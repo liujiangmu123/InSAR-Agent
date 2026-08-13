@@ -26,6 +26,16 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # 会话软删除:归档时刻(NULL=活跃);列表默认过滤,run/工作区数据一律保留
     ("sessions", "archived",
      "ALTER TABLE sessions ADD COLUMN archived REAL"),
+    # 指纹记录格式版本门控(absorb-M):早期库建于该列入 schema 之前,缺列会让
+    # load_steps 在 r["record_version"] 上 IndexError 炸穿 —— 2026-08-13 真实
+    # workspace 实测(converse 上线首日聊天即触发,老库一直没走过这条路径)
+    ("steps", "record_version",
+     "ALTER TABLE steps ADD COLUMN record_version INTEGER NOT NULL DEFAULT 1"),
+    ("artifacts", "record_version",
+     "ALTER TABLE artifacts ADD COLUMN record_version INTEGER NOT NULL DEFAULT 1"),
+    # 投递语义列同期缺失(absorb-E4 之前的库)
+    ("pending_actions", "deliver_as",
+     "ALTER TABLE pending_actions ADD COLUMN deliver_as TEXT NOT NULL DEFAULT 'steer'"),
 )
 
 _STATEMENT_MIGRATIONS: tuple[str, ...] = (
@@ -46,11 +56,18 @@ _STATEMENT_MIGRATIONS: tuple[str, ...] = (
 )
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    """列补齐必须先于 schema 重放:schema.sql 的 CREATE INDEX IF NOT EXISTS
+    可能引用后来才加的列(如 idx_actions_due → deliver_as),旧库缺列时
+    executescript 会在建索引处直接炸(2026-08-13 真实 workspace 实测)。
+    全新库(无表)时 PRAGMA 返回空,整个循环自然跳过。"""
     for table, column, ddl in _COLUMN_MIGRATIONS:
         cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if cols and column not in cols:
             conn.execute(ddl)
+
+
+def _migrate_statements(conn: sqlite3.Connection) -> None:
     for ddl in _STATEMENT_MIGRATIONS:
         conn.execute(ddl)
 
@@ -74,8 +91,9 @@ class Database:
             # 丢最近提交、库不损坏。「每阶段一事务」的写路径对每提交 fsync 最敏感
             # (FULL→NORMAL 实测见 scripts/bench_store.py 写路径样本)。
             self._conn.execute("PRAGMA synchronous = NORMAL")
+        _migrate_columns(self._conn)  # 先补列(见函数注释:索引可能引用新列)
         self._conn.executescript(_load_schema())
-        _migrate(self._conn)
+        _migrate_statements(self._conn)
         self._conn.commit()
 
     def close(self) -> None:
