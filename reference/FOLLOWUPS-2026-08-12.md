@@ -2,6 +2,18 @@
 
 ## 24 代理波次(2026-08-13 晚)接力项
 
+- 【手册核对发现】①顶栏 DEMO 徽章硬编码常驻(index.html),后端接入后应动态
+  移除——归演示清除代理(复活中);②运行队列 POST /api/queue 无界面入口,
+  只有聊天排队提示,应补「排队执行」按钮(下波候选)。
+- 【实测缺口】converse 的环境摘要(_env_summary_text/_converse_state)用
+  check_wsl=False 的本机探测,把 WSL 里实际可用的 isce2/snaphu 报成缺失——
+  应改用 setup 同款 merge_wsl_probe 缓存合并口径(2026-08-13 浏览器实测)。
+- 【合并时接线】对话大脑(converse)落地后:①其 list_data 动作接 /api/datasets
+  目录(数据集摘要注入系统上下文,让「我本地有什么数据/怎么处理好」可答);
+  ②「按此路线开始对话」预填话术(recommend 代理)与 converse 的 plan 动作打通
+  验证;③advisor 建议卡的 chat_prefill 与 converse 联测;④triage 的 LLM 增强
+  (facade 解锁后)与 next-steps 的 narrate 增强作为后续小波。
+
 - 【P0,来自 RESEARCH-chat-vs-pipeline】聊天自然语言参数指令闭环:用户在聊天说
   「把第 6 步 min_coherence 改成 0.3」应产生 SET_PARAMS 动作(brain 意图解析
   → /api/actions 队列),当前 driver 意图解析只识别场景。斜杠命令(/param)只

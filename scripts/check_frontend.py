@@ -38,6 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PY_CHECKS: tuple[tuple[str, str], ...] = (
     ("check_css_syntax.py", "py:css_syntax"),
     ("check_a11y_contrast.py", "py:a11y_contrast"),
+    ("check_contrast.py", "py:contrast_tokens"),
 )
 
 
@@ -111,7 +112,7 @@ def parse_counts(suite: Suite, output: str) -> tuple[int | None, int | None]:
     if suite.name == "py:css_syntax":
         files = len(_CSS_FILE.findall(output))
         return (files, None) if files else (None, None)  # 失败数不可归因,交给退出码
-    if suite.name == "py:a11y_contrast":
+    if suite.name in ("py:a11y_contrast", "py:contrast_tokens"):
         m = _A11Y_TOTAL.search(output)
         return (int(m.group(1)), int(m.group(2))) if m else (None, None)
     return None, None

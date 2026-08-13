@@ -1,0 +1,148 @@
+/* ============================================================
+   通知中心（notify.js 第三节的视觉层）
+   —— 顶栏铃铛角标 + 右侧滑出抽屉 + 开关行。
+   只消费 tokens.css 既有变量（颜色组合均在 a11y 审计清单内），
+   不引入新颜色、不新增 @media 断点（宽度用 min() 自适应收窄）。
+   层级：scrim 90 / 抽屉 95 —— 盖过 dock(60)/sider(70)，让位 toast(300)。
+   ============================================================ */
+
+/* ---- 顶栏铃铛（复用 .icon-btn 基础样式）与未读角标 ---- */
+#btnNotify { position: relative; }
+#btnNotify .nbadge {
+  position: absolute; top: 1px; right: 0;
+  min-width: 14px; height: 14px; padding: 0 3px;
+  border-radius: var(--r-pill);
+  background: var(--bad); color: var(--text-inv);
+  font-size: 9px; font-weight: 700; line-height: 14px; text-align: center;
+  pointer-events: none;
+}
+#btnNotify .nbadge[hidden] { display: none; }
+
+/* ---- 遮罩与抽屉骨架 ---- */
+.notify-scrim {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(10, 15, 28, .32); border: none;
+}
+.notify-scrim[hidden] { display: none; }
+
+.notify-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 95;
+  width: min(370px, calc(100vw - var(--rail)));
+  display: flex; flex-direction: column;
+  background: var(--bg); border-left: 1px solid var(--border);
+  box-shadow: var(--sh-3);
+  transform: translateX(100%);
+  transition: transform .2s ease-out;
+}
+.notify-drawer.open { transform: translateX(0); }
+.notify-drawer[hidden] { display: none; }
+
+/* ---- 抽屉头部：标题 · 未读数 · 全部已读 / 清空 / 关闭 ---- */
+.notify-drawer .nd-hd {
+  display: flex; align-items: center; gap: 8px;
+  height: var(--header); padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.notify-drawer .nd-title { font-size: var(--fs-md); font-weight: 600; }
+.notify-drawer .nd-unread { font-size: var(--fs-xs); color: var(--text-3); }
+.notify-drawer .nd-grow { flex: 1; }
+.notify-drawer .nd-act {
+  font-size: var(--fs-xs); color: var(--text-2);
+  padding: 3px 9px; border: 1px solid var(--border); border-radius: var(--r-pill);
+  background: var(--bg); white-space: nowrap; transition: background .12s;
+}
+.notify-drawer .nd-act:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.notify-drawer .nd-act:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ---- 设置区：后台通知 / 提示音 开关 ---- */
+.notify-drawer .nd-settings {
+  padding: 8px 14px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.notify-drawer .nd-set {
+  display: flex; align-items: center; gap: 10px; padding: 5px 0;
+}
+.notify-drawer .nd-set-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.notify-drawer .nd-set-lbl { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.notify-drawer .nd-set-sub { font-size: var(--fs-xs); color: var(--text-3); }
+.notify-drawer .nd-note {
+  margin: 2px 0 4px; padding: 6px 9px;
+  font-size: var(--fs-xs); line-height: 1.5;
+  color: var(--stale-text); background: var(--stale-weak);
+  border: 1px solid var(--stale-border); border-radius: var(--r-sm);
+}
+.notify-drawer .nd-note[hidden] { display: none; }
+
+/* 开关：track/knob 纯 CSS，选中态用 --accent（组件对比 ≥3:1，双主题已审计） */
+.nd-switch {
+  position: relative; width: 34px; height: 20px; flex-shrink: 0;
+  border-radius: var(--r-pill);
+  background: var(--bg-active); border: 1px solid var(--border-strong);
+  transition: background .15s, border-color .15s;
+}
+.nd-switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--bg); box-shadow: var(--sh-1);
+  transition: transform .15s;
+}
+.nd-switch[aria-checked='true'] { background: var(--accent); border-color: var(--accent); }
+.nd-switch[aria-checked='true']::after { transform: translateX(14px); }
+.nd-switch:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ---- 列表：按天分组，条目 = 图标 + 标题/正文/元信息 + 未读点 ---- */
+.notify-drawer .nd-list { flex: 1; overflow-y: auto; padding: 4px 8px 14px; }
+.notify-drawer .nd-day {
+  padding: 10px 8px 4px;
+  font-size: var(--fs-xs); font-weight: 600; color: var(--text-3);
+  letter-spacing: .02em;
+}
+.notify-drawer .nd-empty {
+  padding: 28px 16px; text-align: center;
+  font-size: var(--fs-sm); color: var(--text-3); line-height: 1.7;
+}
+
+.nd-item {
+  display: flex; align-items: flex-start; gap: 9px;
+  width: 100%; text-align: left;
+  padding: 8px 9px; margin-bottom: 1px;
+  border-radius: var(--r); transition: background .12s;
+}
+.nd-item:hover { background: var(--bg-sub); }
+.nd-item.is-unread { background: var(--accent-weak); }
+.nd-item.is-unread:hover { background: var(--bg-hover); }
+
+.nd-item .nd-ico {
+  width: 24px; height: 24px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; margin-top: 1px;
+}
+.nd-item .nd-ico svg { width: 13px; height: 13px; }
+/* 语义三重表达：色调只作辅助，种类同时体现在图标形状与标题文字 */
+.nd-item.is-done .nd-ico { color: var(--ok-text); background: var(--ok-weak); border: 1px solid var(--ok-border); }
+.nd-item.is-fail .nd-ico { color: var(--bad-text); background: var(--bad-weak); border: 1px solid var(--bad-border); }
+.nd-item.is-stop .nd-ico { color: var(--stale-text); background: var(--stale-weak); border: 1px solid var(--stale-border); }
+.nd-item.is-ask .nd-ico { color: var(--accent-text); background: var(--accent-weak); border: 1px solid var(--accent-border); }
+
+.nd-item .nd-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nd-item .nd-t { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.nd-item .nd-times {
+  margin-left: 6px; padding: 0 5px;
+  font-size: 10px; font-weight: 400; color: var(--text-2);
+  border: 1px solid var(--border); border-radius: var(--r-pill);
+}
+.nd-item .nd-b {
+  font-size: var(--fs-xs); color: var(--text-2); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.nd-item .nd-m { font-size: var(--fs-xs); color: var(--text-3); }
+.nd-item .nd-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); flex-shrink: 0; margin-top: 5px;
+}
+
+/* ---- 键盘焦点可见性（沿用令牌焦点色，双主题 ≥3:1 已审计） ---- */
+.nd-switch:focus-visible, .nd-item:focus-visible,
+.notify-drawer .nd-act:focus-visible, .notify-drawer .nd-close:focus-visible {
+  outline: 2px solid var(--border-focus); outline-offset: 1px;
+}

@@ -25,6 +25,7 @@ from insar_agent.audit.ladder import LADDER
 from insar_agent.core.db import Database
 from insar_agent.core.store import Store
 from insar_agent.report.methods import methods_markdown
+from insar_agent.skills.loader import load_skills
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _FP = re.compile(r"^(path|stat|content):(v\d+|sha256):[0-9a-f]{64}$")
@@ -46,6 +47,15 @@ _STEP_KEYS = {
     "eval_hash", "upstream", "stage", "state", "stale", "stale_reason", "failure_class",
     "run_ok", "qa", "exit_code", "commands",
 }
+
+# skill 是条件字段(schema 规则:该步存在技能文档才写,core/ledger.py):
+# 期望键集按实际技能注册表推导 —— skills/ 目录逐步补齐各步技能时金样不随之漂移
+_SKILLED = {str(sid) for sid in load_skills()}
+_SKILL_KEYS = {"name", "version", "content_hash"}
+
+
+def _step_keys(sid: str, *extra: str) -> set:
+    return _STEP_KEYS | set(extra) | ({"skill"} if sid in _SKILLED else set())
 
 _TOP_KEYS = {
     "schema_version", "run_id", "session_id", "parent_run_id", "generated_at_utc",
@@ -120,7 +130,7 @@ def test_provenance_steps_golden(golden):
 
     for sid in _EXECUTED:
         s = steps[sid]
-        assert set(s) == _STEP_KEYS, f"步骤 {sid} 字段漂移"
+        assert set(s) == _step_keys(sid), f"步骤 {sid} 字段漂移"
         for key in ("task_hash", "args_hash", "local_hash", "eval_hash"):
             assert _HEX64.match(s[key]), f"步骤 {sid} 的 {key} 非 sha256"
         assert s["stage"] == "VERIFIED" and s["state"] == "done" and s["run_ok"] == 1
@@ -136,13 +146,20 @@ def test_provenance_steps_golden(golden):
     manifest_sha = hashlib.sha256(golden.manifest_bytes).hexdigest()
     for sid in _SKIPPED:
         s = steps[sid]
-        assert set(s) == _STEP_KEYS | {"cloud_evidence"}, f"跳过步骤 {sid} 缺 cloud_evidence"
+        assert set(s) == _step_keys(sid, "cloud_evidence"), f"跳过步骤 {sid} 缺 cloud_evidence"
         assert s["state"] == "skipped" and s["run_ok"] is None and s["commands"] == []
         ce = s["cloud_evidence"]
         assert ce["present"] is True and ce["kind"] == "hyp3_manifest"
         assert ce["path"] == "hyp3_manifest.json"
         assert ce["sha256"] == manifest_sha  # 证据可指纹回查
         assert ce["entries"] == len(_MANIFEST)
+
+    # 条件字段 skill 的形状与哈希对账(loader 是同一事实来源)
+    skills = load_skills()
+    for sid in _SKILLED:
+        sk = steps[sid]["skill"]
+        assert set(sk) == _SKILL_KEYS and _HEX64.match(sk["content_hash"])
+        assert sk["content_hash"] == skills[int(sid)].content_hash
 
     # 依赖边如实进账本(第 11 步质检依赖 10 与 7)
     assert set(steps["11"]["upstream"]) == {"10", "7"}

@@ -11,6 +11,7 @@ from insar_agent.audit.contract import Threshold
 from insar_agent.audit.ladder import cloud_evidence, compute_evidence
 from insar_agent.core.fsio import atomic_write_text
 from insar_agent.core.store import Store
+from insar_agent.skills.loader import load_skills
 
 SCHEMA_VERSION = "1.0"
 
@@ -26,6 +27,7 @@ def export_provenance(store: Store, run_id: str, *, contract: dict[str, Threshol
     evidence = compute_evidence(store, run_id, contract, workspace=workspace)
 
     cloud_ev: dict | None = None  # 全部跳过步骤共享同一份云端证据,惰性求值一次
+    skills = load_skills()  # 步骤技能:目录整扫一次,逐步查表(无技能目录=空表)
     steps_out: dict[str, dict] = {}
     for s in steps:
         upstream = [str(p) for p, c in store.edges(run_id) if c == s.step_id]
@@ -42,6 +44,11 @@ def export_provenance(store: Store, run_id: str, *, contract: dict[str, Threshol
             "run_ok": s.run_ok, "qa": s.qa, "exit_code": s.exit_code,
             "commands": commands,
         }
+        skill = skills.get(s.step_id)
+        if skill is not None:  # 技能版本随步入账(可复现契约);无技能不写字段
+            steps_out[str(s.step_id)]["skill"] = {
+                "name": skill.name, "version": skill.version,
+                "content_hash": skill.content_hash}
         if s.state == "skipped":
             if cloud_ev is None:
                 cloud_ev = cloud_evidence(workspace)
