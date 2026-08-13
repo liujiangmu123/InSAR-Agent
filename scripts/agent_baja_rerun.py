@@ -301,13 +301,17 @@ async def plan_turn(driver: Driver, store: Store, mx: Matrix, *, echo=print) -> 
     ok = all(methods.get(sid) == m for sid, m in STRIPMAP_METHODS.items())
     mx.check("3-6 步为 stripmap 方法", ok,
              " ".join(f"{sid}={methods.get(sid)}" for sid in (3, 4, 5, 6)))
-    p1 = next(s for s in steps if s.step_id == 1).params
+    # 引擎缺失时 make_plan 只落库可行步骤(3-6 步可能整段缺席)—— 按步骤号
+    # 取参数必须容缺,否则预检在此裸崩(StopIteration),矩阵与阻塞项反而出不来
+    by_id = {s.step_id: s for s in steps}
+    p1 = by_id[1].params if 1 in by_id else {}
     mx.check("第 1 步 local_import(WSL 数据源)", methods.get(1) == "local_import",
              f"1={methods.get(1)} source={p1.get('source')}")
+    p2 = by_id[2].params if 2 in by_id else {}
     mx.check("第 2 步 dem_local(本地 DEM)", methods.get(2) == "dem_local",
-             f"2={methods.get(2)} dem={next(s for s in steps if s.step_id == 2).params.get('dem')}")
+             f"2={methods.get(2)} dem={p2.get('dem')}")
     # 3 步参数须与手工 XML 逐字段一致(场景包固化 → 计划落库的闭环)
-    p3 = next(s for s in steps if s.step_id == 3).params
+    p3 = by_id[3].params if 3 in by_id else {}
     manual = xml_props(MANUAL_STRIPMAP_XML)
     expect = {
         "reference_image": manual[("stripmapApp/insar/reference", "IMAGEFILE")],
