@@ -80,7 +80,7 @@ class Brain:
 
     def select(self, cap: Capability, feasible: list[MethodFeasibility], *,
                env_facts: str = "", upstream_summary: str = "",
-               prefer: str | None = None) -> SelectResult:
+               skill_hints: str = "", prefer: str | None = None) -> SelectResult:
         ok_methods = [f for f in feasible if f.ok]
         if not ok_methods:
             raise ValueError(f"步骤 {cap.id} 无可行方法,select 不应被调用")
@@ -98,6 +98,8 @@ class Brain:
                   "不要发明候选之外的方法。")
         user = (f"步骤:{cap.name}\n环境事实:{env_facts or '无'}\n"
                 f"上游摘要:{upstream_summary or '无'}\n候选:\n{menu}")
+        if skill_hints:  # 步骤技能《参数启发式》:只附上下文,候选闭集与越界拒绝不变
+            user += f"\n技能启发式:\n{skill_hints}"
         for _attempt in range(2):  # 同一决策点最多问 2 次(§3.3 约束二)
             try:
                 data = self.provider.complete_json(system=system, user=user, max_tokens=128)  # type: ignore[union-attr]
@@ -116,7 +118,7 @@ class Brain:
 
     # ---------------- triage ----------------
 
-    def triage(self, log_text: str) -> TriageResult:
+    def triage(self, log_text: str, *, skill_notes: str = "") -> TriageResult:
         cls = classify_log(log_text)  # 规则优先:命中不消耗 LLM 也不受幻觉影响
         if cls is not None:
             return TriageResult(cls, "rules")
@@ -124,11 +126,14 @@ class Brain:
             return TriageResult(FailureClass.UNKNOWN, "fallback", "规则未命中且 LLM 未启用")
         window = error_window(log_text)
         valid = [c.value for c in FailureClass]
+        user = f"错误窗口(±5 行):\n{window}"
+        if skill_notes:  # 步骤技能《常见失败与处置》:只进 LLM 上下文,不进规则分类
+            user = f"技能文档《常见失败与处置》(处置参考):\n{skill_notes}\n\n{user}"
         try:
             data = self.provider.complete_json(  # type: ignore[union-attr]
                 system=('你是失败分类器。只输出 JSON:{"class": "<闭集之一>"}。'
                         f"闭集:{valid}。无法判断就输出 unknown,绝不发明新类别。"),
-                user=f"错误窗口(±5 行):\n{window}", max_tokens=64)
+                user=user, max_tokens=64)
             raw = data.get("class")
             if isinstance(raw, str) and raw in valid:
                 return TriageResult(FailureClass(raw), "llm")

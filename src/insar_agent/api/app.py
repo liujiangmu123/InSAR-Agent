@@ -40,6 +40,7 @@ from insar_agent.api.diag_router import create_diag_router
 from insar_agent.api.doctor_router import create_doctor_router
 from insar_agent.api.queue_router import create_queue_router
 from insar_agent.api.setup_router import create_setup_router
+from insar_agent.api.skills_router import router as skills_router
 from insar_agent.api.version_router import router as version_router
 from insar_agent.audit.contract import load_contract
 from insar_agent.brain.facade import Brain
@@ -376,6 +377,7 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_setup_router(home))  # 环境向导(/api/setup/*,settings.json 与 DB 同目录)
     from insar_agent.api.llm_router import create_llm_router; app.include_router(create_llm_router(home))  # LLM 密钥/模型配置
     app.include_router(version_router)             # 版本信息与更新检查(/api/version*)
+    app.include_router(skills_router)              # 步骤技能文档(/api/skills*,规划/分诊知识源)
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
     app.include_router(create_artifacts_router(store))  # 产物清单(/api/artifacts,文件面板数据源)
     app.include_router(create_doctor_router(home))  # 一键体检(/api/doctor,面向排障的秒级只读深检)
