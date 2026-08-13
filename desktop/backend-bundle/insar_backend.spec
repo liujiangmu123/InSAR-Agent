@@ -36,7 +36,10 @@ datas = [
 ]
 
 hiddenimports = sorted(set(
-    collect_submodules("insar_agent")   # engines/* 等惰性 import,静态分析追不全
+    # insar_agent.mcp 是可选依赖组 [mcp] 的独立 stdio 入口(python -m insar_agent.mcp),
+    # 后端 app 不 import 它 —— 过滤掉,保证冻结包内容不随构建 venv 是否装了 mcp SDK 漂移
+    collect_submodules("insar_agent",   # engines/* 等惰性 import,静态分析追不全
+                       filter=lambda name: not name.startswith("insar_agent.mcp"))
     + collect_submodules("uvicorn")     # logging/loops/protocols/lifespan 按字符串动态选择
     + ["numpy", "h5py"]                 # audit.runok / engines.qa 在函数内 import
 ))
@@ -55,7 +58,9 @@ a = Analysis(
     # PIL:requirements.txt 声明为「桌面打包脚本(非 agent 运行时)」,却经
     # pygments.formatters.img 的可选 import 被拖进包(冻结探测复验实测,xref 溯源);
     # 该 formatter 只在显式请求 ImageFormatter 时才 import,后端无此路径,排除安全
-    excludes=["tkinter", "hypothesis", "PIL"],
+    # mcp / insar_agent.mcp:MCP server 属可选组 [mcp](stdio 独立入口),桌面后端
+    # 用不到;双保险排除,防止构建 venv 恰好装了 mcp SDK 时把它连同依赖拖进包
+    excludes=["tkinter", "hypothesis", "PIL", "mcp", "insar_agent.mcp"],
     noarchive=False,
 )
 
