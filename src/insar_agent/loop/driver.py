@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -36,11 +37,35 @@ from insar_agent.planner.plan import PlanResult, make_plan
 from insar_agent.registry.capabilities import REGISTRY, topo_order
 from insar_agent.registry.model import Capability
 from insar_agent.report.script import write_run_script
-from insar_agent.runtime.backend_select import backend_for_step
+from insar_agent.runtime.backend_select import backend_for_job_dir, backend_for_step
 from insar_agent.runtime.executor import ExecContext, execute_step
 from insar_agent.runtime.jobs import JobBackend, LocalJobBackend
 from insar_agent.runtime.probe import ProbeResult, probe_environment
 from insar_agent.runtime.stream import CancelToken
+
+log = logging.getLogger(__name__)
+
+
+def _tail_text(path: Path, limit_kb: int = 64) -> str:
+    """读日志尾部 N KB(口径与 /api/logs 一致:掐掉截断处的半行)。
+
+    分诊只需要错误窗口(设计 §3.3 的 error_window 本就是 ±5 行),真实 ISCE2
+    全链日志数百 MB,整读会瞬时吃满内存(REVIEW-r2 P2-12)。文件消失/不可读
+    (作业目录被清理的竞态)按空日志处置,交由 triage 用 result.detail 兜底。
+    """
+    try:
+        size = path.stat().st_size
+        limit = limit_kb * 1024
+        with path.open("rb") as f:
+            if size > limit:
+                f.seek(size - limit)
+            data = f.read()
+    except OSError:
+        return ""
+    text = data.decode("utf-8", errors="replace")
+    if size > limit and "\n" in text:
+        text = text.split("\n", 1)[1]
+    return text
 
 
 def compute_agent_hash(registry: dict[int, Capability]) -> str:
@@ -77,6 +102,9 @@ class Driver:
         self.bus = EventBus()
         self._probe = probe
         self._tokens: dict[str, CancelToken] = {}
+        # 在途执行任务的强引用(asyncio 只弱引用 task):回合生成器被提前关闭
+        # (断连/关停)后 exec_task 仍要继续跑完当前步,不能被 GC 掐断(P2-2r2)
+        self._exec_tasks: set[asyncio.Task] = set()
         # 本 run 用过的自带保活的后端实例(WslJobBackend),run 收尾统一释放
         # keepalive(WSL P2:此前 sleep infinity 随 run 数量堆积泄漏)
         self._run_backends: dict[str, list[JobBackend]] = {}
@@ -104,15 +132,33 @@ class Driver:
 
     def request_cancel(self, run_id: str) -> None:
         """取消 = control 位不是状态(absorb-E3):意图先落盘(服务重启不丢),
-        token 是同进程快路径。已在途的作业照常结算,只禁止新效果。"""
-        self.store.request_cancel(run_id)
-        self.token_for(run_id).cancel()
+        token 是同进程快路径。已在途的作业照常结算,只禁止新效果。
 
-    def _backend_for(self, run: dict, cap: Capability, method_id: str) -> JobBackend:
-        m = cap.method(method_id)
-        backend = backend_for_step(engine=m.engine if m else "-",
-                                   simulated=bool(run.get("simulated")),
-                                   override=self.backend)
+        资源生命周期:只取消「已存在」的 token,不为不在执行中的 run 凭空创建
+        —— 无执行回合时取消语义完全由持久化 control 位承载(execute 入口消费),
+        凭空创建的 token 没有消费方,只会滞留 _tokens 字典。"""
+        self.store.request_cancel(run_id)
+        token = self._tokens.get(run_id)
+        if token is not None:
+            token.cancel()
+
+    def _backend_for(self, run: dict, cap: Capability, method_id: str,
+                     job_dir: str | None = None) -> JobBackend:
+        if self.backend is not None:
+            backend = self.backend  # 显式注入(测试/运维)永远最优先
+        elif job_dir:
+            # 接回已有作业目录的步骤按目录归属路由(REVIEW-r2 P2-5,admin 侧同款
+            # backend_for_job_dir):引擎+探测路由在探测瞬断(wsl 服务重启)、
+            # INSAR_WSL_DISTRO 改名、强制 INSAR_JOB_BACKEND=local 时会把 WSL 活
+            # 作业交给 LocalJobBackend 判活 —— 无宿主可见 job.hb,两击即被判
+            # orphaned,run 被标 interrupted 而 Linux 侧进程照跑。归属由路径形态
+            # 决定(POSIX/UNC 前缀 → WSL),不受探测波动影响。
+            backend = backend_for_job_dir(job_dir)
+        else:
+            m = cap.method(method_id)
+            backend = backend_for_step(engine=m.engine if m else "-",
+                                       simulated=bool(run.get("simulated")),
+                                       override=None)
         # keepalive 释放钩子:登记本 run 用过的可释放后端(WslJobBackend 每步
         # 新建、不跨 run 共享 → 无需引用计数,run 收尾各释放各的;取舍:并发
         # run 各持一个 sleep infinity,多一两个空转进程可忽略,换来零共享状态。
@@ -179,10 +225,14 @@ class Driver:
         yield self._emit(ev.tool_end(
             "probe", 0, f"{available}/{len(probe.engines)} 个引擎可用"))
 
-        # ---- next_run 干预消费(absorb-E4) ----
+        # ---- next_run 干预收集(absorb-E4) ----
         # next_run 面向"下次规划",无未来 run 可绑定;入队时记录的是当时会话
-        # 最近 run 的 id,消费时据此排除其他会话的预约(无归属的旧行照旧消费)
+        # 最近 run 的 id,据此排除其他会话的预约(无归属的旧行照旧可见)。
+        # 此处只收集不消费:消费点后移到 make_plan 校验通过之后(REVIEW-r2
+        # P2-8 —— 先消费后校验会让过时预约「被消费即蒸发」,既没生效也无法
+        # 重排;计划失败时动作留在队列,下次规划自动重试)。
         overrides: dict[int, dict] = {}
+        pending_next_run: list[tuple[dict, int]] = []
         for action in store.due_actions("next_run"):
             owner = store.get_run(action["run_id"]) if action.get("run_id") else None
             if owner and owner["session_id"] != session_id:
@@ -194,9 +244,7 @@ class Driver:
                     overrides[sid]["method"] = action["payload"]["method"]
                 else:
                     overrides[sid].setdefault("params", {}).update(action["payload"]["params"])
-                store.consume_action(action["id"])
-                yield self._emit(ev.intervention(
-                    f"应用上次预约的变更:第 {sid} 步 {action['payload']}"))
+                pending_next_run.append((action, sid))
 
         # ---- 计划 ----
         # next_run 预约的变更(overrides)只能经 make_plan 进入新计划;复用既有
@@ -218,9 +266,18 @@ class Driver:
             if plan.problems:
                 for p in plan.problems:
                     yield self._emit(ev.note("bad", p))
+                if pending_next_run:
+                    yield self._emit(ev.note(
+                        "warn", f"预约的 {len(pending_next_run)} 项变更未消费,保留在"
+                                f"队列:计划存在问题(见上),解决后重新规划时自动生效"))
                 yield self._emit(ev.say([
                     "环境不满足执行条件(见上)。可安装引擎后重试,或使用模拟模式演示流程。"]))
                 return
+            # 校验通过、计划已落库 —— 此刻才消费预约(消费不可逆,见上方收集处注释)
+            for action, sid in pending_next_run:
+                store.consume_action(action["id"])
+                yield self._emit(ev.intervention(
+                    f"应用上次预约的变更:第 {sid} 步 {action['payload']}"))
             if plan.simulated:
                 yield self._emit(ev.note(
                     "warn", "引擎缺失:本次为模拟执行(演示流程用),证据级别封顶 runnable。"))
@@ -286,6 +343,7 @@ class Driver:
         if run.get("control") == "cancel_requested":
             store.set_run_status(run_id, "interrupted")
             store.clear_cancel(run_id)  # 意图已兑现,复位后允许显式重跑
+            self._tokens.pop(run_id, None)  # run 已终态:入口刚建的 token 一并释放
             yield self._emit(ev.note(
                 "warn", "检测到持久化的取消请求:不启动新步骤,run 收尾为 interrupted"))
             return
@@ -303,12 +361,47 @@ class Driver:
             async for event in self._execute_run(run_id, step_ids, token,
                                                  lease=lease, holder=holder):
                 yield event
+        except Exception as exc:
+            # 意外异常的 run 状态 reconcile(REVIEW-r2 P2-11):未捕获异常打断
+            # 回合时 run 若停在 running 会成僵尸 —— admin 视图误报活 run、turn
+            # 复用分支照常复用、60s 内重试还被运行锁拒绝。收尸为 failed 并留痕
+            # (异常原样上抛,api 层 ndjson 转结构化 note,细节进服务端日志)。
+            # GeneratorExit/CancelledError 是 BaseException,不在此拦截:断连/
+            # 关停不是失败,run 状态交给后台任务与下次 resume。
+            if (store.get_run(run_id) or {}).get("status") == "running":
+                store.set_run_status(run_id, "failed")
+                store.append_trace(
+                    run_id=run_id, phase="driver",
+                    revision_trigger="unexpected_exception", error_occurred=True,
+                    error_type=type(exc).__name__, error_message=str(exc)[:500])
+            raise
         finally:
-            store.release_lease(lease, holder)
+            # 异常序加固(REVIEW-r2 P2-1):release_lease 是一次 DB 写,busy/锁
+            # 超时可抛 OperationalError —— 不隔离的话下面的 keepalive 释放被跳过
+            # (wsl.exe sleep infinity 保活进程泄漏),且原始业务异常被顶替。
+            # 释放失败只意味着租约行残留,超过 stale_after(60s)后自然可被接管。
+            try:
+                store.release_lease(lease, holder)
+            except Exception:
+                log.exception("release_lease 失败(租约行将随 stale 窗口过期,可被接管)")
             # run 收尾(含 done/failed/interrupted/paused 与异常/断流)统一释放
             # 本 run 的 WSL keepalive:暂停/中断后 VM 允许空闲回收,续跑的
             # launch 会重新 ensure_keepalive(§4.8)
             self._release_run_backends(run_id)
+            # 终态后释放取消令牌(资源生命周期:_tokens 此前只增不减,长期服务
+            # 随 run 数量无界增长)。放在拿到运行锁的回合收尾处:锁被并发回合
+            # 占用的早退路径不释放 —— 那个 token 归执行中的回合所有。
+            self._release_token_if_terminal(run_id)
+
+    def _release_token_if_terminal(self, run_id: str) -> None:
+        """run 到达终态(done/failed/interrupted)后释放同进程取消令牌。
+
+        paused/running 不释放:并发 abort 仍需经 token 立即触达在跑回合。
+        释放不丢取消语义 —— 跨回合/重启的取消意图由持久化 control 位兜底
+        (request_cancel 落盘,execute 入口消费)。"""
+        status = (self.store.get_run(run_id) or {}).get("status")
+        if status in ("done", "failed", "interrupted"):
+            self._tokens.pop(run_id, None)
 
     def _release_run_backends(self, run_id: str) -> None:
         for backend in self._run_backends.pop(run_id, []):
@@ -316,6 +409,17 @@ class Driver:
                 backend.release_keepalive()
             except Exception:
                 pass  # 释放失败不影响 run 收尾;残留保活进程随宿主进程退出而消亡
+
+    def _reap_exec_task(self, task: asyncio.Task) -> None:
+        """exec_task 收尾回调:释放强引用 + 取回异常。
+
+        回合生成器在 yield 点被提前关闭(断连/关停)后无人再 await 该任务,
+        不取回异常会积累「Task exception was never retrieved」告警噪音
+        (REVIEW-r2 P2-2)。正常路径异常仍由回合泵的 exec_task.result() 消费,
+        这里只兜底、不处置 —— 步骤终态已由执行器自身落库。"""
+        self._exec_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
 
     async def _execute_run(self, run_id: str, step_ids: list[int] | None,
                            token: CancelToken, *, lease: str, holder: str
@@ -443,9 +547,18 @@ class Driver:
                 _q.put_nowait(event)
                 return event
 
-            backend = self._backend_for(run, cap, step.method)
+            backend = self._backend_for(run, cap, step.method, job_dir=step.job_dir)
             exec_task = asyncio.create_task(
                 execute_step(self._exec_ctx(backend, emit=pump), run_id, sid, token))
+            # GeneratorExit 接缝(REVIEW-r2 P2-2):本生成器在下方 yield 点被提前
+            # 关闭(服务关停取消泵任务/内层生成器 aclose/GC 兜底)后不再恢复;
+            # exec_task 交由事件循环继续跑完当前步 —— 「run 归服务端所有,断连
+            # 不取消」是 api 层 ndjson 的既有决策(app.py),这里与之对齐:
+            # 不 cancel、不等待;强引用集合防任务被 GC 掐断,done-callback
+            # 收割异常防 asyncio 告警。租约随 execute() 的 finally 释放,残余
+            # 双驱窗口仅限当前步,由执行器阶段 CAS(StageConflict → 让位)仲裁。
+            self._exec_tasks.add(exec_task)
+            exec_task.add_done_callback(self._reap_exec_task)
             while not exec_task.done():
                 await asyncio.sleep(min(self._poll, 0.2))
                 while not detail.empty():
@@ -513,10 +626,9 @@ class Driver:
                 yield self._emit(gate)
                 return
 
-            # failed:分诊 → 处置建议(闭集,§4.12)
-            log_text = ""
-            if step.log_path and Path(step.log_path).exists():
-                log_text = Path(step.log_path).read_text(encoding="utf-8", errors="replace")
+            # failed:分诊 → 处置建议(闭集,§4.12)。只读日志尾部:错误几乎
+            # 总在末尾,triage 的 error_window 也只要 ±5 行(REVIEW-r2 P2-12)
+            log_text = _tail_text(Path(step.log_path)) if step.log_path else ""
             triage = self.brain.triage(log_text or (result.detail or ""))
             fc = step.failure_class or triage.failure_class.value
             disposition = DISPOSITIONS.get(FailureClass(fc) if fc in FailureClass._value2member_map_

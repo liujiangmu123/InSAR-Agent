@@ -12,6 +12,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import ipaddress
 import json
 import logging
 import math
@@ -29,6 +32,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.datastructures import MutableHeaders
 
 from insar_agent.api.admin_router import create_admin_router
 from insar_agent.api.artifacts_router import create_artifacts_router
@@ -89,6 +93,139 @@ _TIER_SUFFIXES = ("_browse", "_thumb")
 
 #: 元数据 sidecar(<name>.json)的读取上限:防坏文件/误命名的大 JSON 拖垮列表
 _SIDECAR_MAX_BYTES = 64 * 1024
+
+# ---------------- 安全响应头与 CSP(第二轮加固,AUDIT-security-r2-2026-08-13) ----------------
+
+#: 静态 UI 的 CSP 公共骨架:资源一律同源(img/connect/font 等未列指令回落
+#: default-src 'self':UI 的 API_BASE=''、CSS 零外链、无 data:/blob: 引用,
+#: 均经 grep 实证),并关闭 object / base 篡改 / 被嵌入 / 表单外发四个面。
+_CSP_BASE = ("default-src 'self'; object-src 'none'; base-uri 'none'; "
+             "form-action 'self'; frame-ancestors 'none'")
+
+#: 未在启动扫描表内的 HTML(理论上不存在:表按落盘文件生成)给最严格兜底
+_CSP_STRICT_FALLBACK = _CSP_BASE + "; script-src 'self'; style-src 'self'"
+
+#: 内联 <script> 块(无 src 属性):其正文可用 sha256 哈希白名单放行
+_INLINE_SCRIPT_RE = re.compile(rb"<script\b(?![^>]*\bsrc\s*=)[^>]*>(.*?)</script>",
+                               re.IGNORECASE | re.DOTALL)
+#: 内联事件处理器(onclick= 等)属性形态的脚本:CSP 哈希覆盖不了属性,
+#: 含此形态的页面(仅 v2-backup 历史快照)整页降级 'unsafe-inline'
+_EVENT_HANDLER_RE = re.compile(rb"<[^>]*\son[a-z]+\s*=", re.IGNORECASE)
+#: <style> 块或 style= 属性:出现则该页 style-src 放行 'unsafe-inline'
+#: (CSS 注入面远小于脚本;核心页 index.html 两者皆无,保持全严格)
+_INLINE_STYLE_RE = re.compile(rb"<style\b|\sstyle\s*=", re.IGNORECASE)
+
+
+def _page_csp(raw: bytes) -> str:
+    """按单个 HTML 页面的实际形态生成最小 CSP(启动时算一次)。
+
+    哈希口径:HTML 解析器把输入流的 CRLF 归一为 LF 后才取脚本正文,
+    浏览器按归一后的文本算 sha256 —— 这里必须保持同一口径,否则
+    Windows 检出(CRLF)的页面哈希对不上,内联脚本会被静默拦截。
+    """
+    body = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    if _EVENT_HANDLER_RE.search(body):
+        # CSP 语义:script-src 同时给哈希与 'unsafe-inline' 时后者被忽略,
+        # 两者不能混用 —— 含事件处理器属性的页面只能整页放行内联
+        script_src = "'self' 'unsafe-inline'"
+    else:
+        hashes = [
+            "'sha256-" + base64.b64encode(hashlib.sha256(m.group(1)).digest()).decode() + "'"
+            for m in _INLINE_SCRIPT_RE.finditer(body)
+        ]
+        script_src = " ".join(["'self'", *hashes])
+    style_src = "'self' 'unsafe-inline'" if _INLINE_STYLE_RE.search(body) else "'self'"
+    return f"{_CSP_BASE}; script-src {script_src}; style-src {style_src}"
+
+
+def scan_ui_csp(ui_dir: Path) -> dict[str, str]:
+    """静态 UI 目录 → {URL 路径: 按页 CSP}(create_app 启动时扫一次)。
+
+    index.html 同时注册目录索引路径(/ 与 /sub/,对齐 StaticFiles html=True
+    的服务语义);UI 目录不存在(无 UI 部署形态)返回空表。
+    运行中改动 HTML 内联脚本需重启服务才会重算哈希(生产形态 UI 只读,
+    源码调试改完内联块后重启即可,静态外部 js/css 不受影响)。
+    """
+    table: dict[str, str] = {}
+    if not ui_dir.is_dir():
+        return table
+    for f in sorted(ui_dir.rglob("*.html")):
+        try:
+            policy = _page_csp(f.read_bytes())
+        except OSError:
+            continue  # 单页不可读不拖垮启动:该页命中严格兜底
+        rel = f.relative_to(ui_dir).as_posix()
+        table["/" + rel] = policy
+        if f.name == "index.html":
+            table["/" + rel[: -len("index.html")]] = policy
+    return table
+
+
+class SecurityHeadersMiddleware:
+    """安全响应头中间件(纯 ASGI 形态:不用 BaseHTTPMiddleware,后者会把
+    响应重包一层 —— 本服务的 NDJSON 回合流 / SSE 事件流不必冒这个险)。
+
+    - 全部响应:X-Content-Type-Options / Referrer-Policy / X-Frame-Options。
+      X-Frame-Options 取 DENY:UI 无 iframe,桌面壳(Tauri)以
+      WebviewUrl::External 做「顶层导航」加载 http://127.0.0.1:<port>/,
+      不受该头约束(它只管被嵌入),故无需 SAMEORIGIN(desktop/src/main.rs 实证);
+    - /api/*:Cache-Control: no-store —— 状态/日志/图件都是随 run 演化的
+      易变数据,浏览器缓存会展示过期状态;回环链路重取成本可忽略;
+    - 静态 UI 的 HTML 文档:按页 CSP(启动扫描表,scan_ui_csp)。
+    端点已自设的同名头一律不覆写。
+    """
+
+    def __init__(self, app, csp_by_path: dict[str, str] | None = None) -> None:
+        self.app = app
+        self.csp_by_path = csp_by_path or {}
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+
+        async def send_with_headers(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(raw=message.setdefault("headers", []))
+                headers.setdefault("X-Content-Type-Options", "nosniff")
+                headers.setdefault("Referrer-Policy", "no-referrer")
+                headers.setdefault("X-Frame-Options", "DENY")
+                if path == "/api" or path.startswith("/api/"):
+                    headers.setdefault("Cache-Control", "no-store")
+                elif headers.get("content-type", "").startswith("text/html"):
+                    headers.setdefault("Content-Security-Policy",
+                                       self.csp_by_path.get(path, _CSP_STRICT_FALLBACK))
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+def _host_is_loopback(host: str) -> bool:
+    """host 是否回环:localhost 或 127.0.0.0/8、::1 等回环 IP。"""
+    if host.strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip()).is_loopback
+    except ValueError:
+        return False  # 主机名/空串等按非回环对待:宁可多告警
+
+
+def resolve_bind_host(default: str = "127.0.0.1") -> str:
+    """解析监听地址(INSAR_HOST)并对非回环绑定显式告警(放行不拦截)。
+
+    本应用是本地单用户形态:全部端点无鉴权,信任边界就是回环接口。
+    绑定 0.0.0.0 等于把无鉴权的 /api/admin/*(外部终结)、产物文件读取、
+    会话操作面整个暴露给所在网络 —— 不硬禁止(内网联调是正当用法),
+    但必须留下告警痕迹(边界声明见 README「安全边界」节)。
+    """
+    host = os.environ.get("INSAR_HOST", default)
+    if not _host_is_loopback(host):
+        log.warning(
+            "INSAR_HOST=%s 不是回环地址:全部 API(含无鉴权的 /api/admin/*)"
+            "将暴露给该网络接口。本应用按本地单用户设计,不得绑 0.0.0.0 对外暴露;"
+            "确属内网联调请自行确保网络边界(见 README 安全边界节)。", host)
+    return host
 
 
 def read_sidecar_meta(image: Path) -> dict | None:
@@ -925,6 +1062,10 @@ def create_app(home: Path | None = None) -> FastAPI:
     if PROTOTYPE_DIR.exists():
         app.mount("/", StaticFiles(directory=str(PROTOTYPE_DIR), html=True), name="ui")
 
+    # 安全响应头(最外层包裹,对含静态 UI 在内的全部响应生效;
+    # CSP 表按落盘 HTML 启动时算一次,见 scan_ui_csp)
+    app.add_middleware(SecurityHeadersMiddleware, csp_by_path=scan_ui_csp(PROTOTYPE_DIR))
+
     return app
 
 
@@ -932,7 +1073,7 @@ def main() -> None:
     import uvicorn
 
     app = create_app()
-    uvicorn.run(app, host=os.environ.get("INSAR_HOST", "127.0.0.1"),
+    uvicorn.run(app, host=resolve_bind_host(),
                 port=int(os.environ.get("INSAR_PORT", "8873")))
 
 

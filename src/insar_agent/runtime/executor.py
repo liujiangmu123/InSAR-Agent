@@ -29,12 +29,14 @@ from typing import Awaitable, Callable
 from insar_agent.audit.contract import Threshold, load_contract
 from insar_agent.audit.runok import evaluate_run_ok
 from insar_agent.core.filehash import fingerprint_target
-from insar_agent.core.store import StepRow, Store
+from insar_agent.core.store import StageConflict, StepRow, Store
 from insar_agent.registry.model import Capability
+from insar_agent.runtime.backend_select import backend_for_job_dir
 from insar_agent.runtime.discover import discover_artifacts, missing_message
 from insar_agent.runtime.jobs import CommandPlan, JobBackend
 from insar_agent.runtime.render import render_plan_files
 from insar_agent.runtime.stream import CancelToken, follow_job
+from insar_agent.runtime.wsl import WslJobBackend
 
 Emit = Callable[[dict], None] | Callable[[dict], Awaitable[None]]
 Builder = Callable[..., CommandPlan]
@@ -74,6 +76,13 @@ class StepResult:
     outcome: str  # done | failed | interrupted | orphaned | gate_stop
     step: StepRow
     detail: str = ""
+
+
+def _is_wsl_dir(path: Path) -> bool:
+    """作业目录是否归属 WSL(POSIX 绝对路径或 \\\\wsl.localhost UNC)。
+    判据与 backend_select.backend_for_job_dir 一致。"""
+    s = str(path)
+    return s.startswith("/") or s.replace("/", "\\").casefold().startswith("\\\\wsl")
 
 
 def _job_dir(ctx: ExecContext, run_id: str, step_id: int, attempt: int) -> Path:
@@ -149,8 +158,16 @@ async def execute_step(
                 # 序列化口径必须与 store.reserve_command 完全一致(默认 ensure_ascii)
                 same_argv = existing["argv"] == json.dumps(plan.argv)
                 prev_dir = Path(existing["stdout_path"]).parent if existing["stdout_path"] else None
+                # 认领判活按作业目录归属路由(REVIEW-r2 P2-5 连带,admin 侧同款):
+                # ctx.backend 是引擎+探测路由的结果,探测瞬断时用 LocalJobBackend
+                # 探 WSL 目录(无宿主可见 job.hb)必误判。仅 WSL 形态目录改道;
+                # 本地形态维持注入后端 —— 测试注入的模拟后端不受影响。
+                probe_backend = ctx.backend
+                if (prev_dir is not None and not isinstance(ctx.backend, WslJobBackend)
+                        and _is_wsl_dir(prev_dir)):
+                    probe_backend = backend_for_job_dir(str(prev_dir))
                 if (same_argv and prev_dir and prev_dir.exists()
-                        and ctx.backend.state(prev_dir).kind != "unknown"):
+                        and probe_backend.state(prev_dir).kind != "unknown"):
                     job_dir = prev_dir
                     log_path = prev_dir / "job.log"
                     command_id = existing["id"]
@@ -300,6 +317,17 @@ async def execute_step(
 
         return StepResult("done", store.load_step(run_id, step_id))
 
+    except StageConflict as exc:
+        # 阶段推进冲突 = 外部终结者/接管回合已改写该行(absorb-E6 竞争的输者)。
+        # 此前全链无人捕获,异常会穿透回合泵砸出「服务内部错误」且 run 遗留
+        # running(REVIEW-r2 P2-3)。分类为可续跑的环境竞争(interrupted 语义):
+        # 本回合让位、不 mark_step —— 赢家(admin 终结事务/接管回合)已写完
+        # 状态与结算,覆写等于抢它的推进。run 收尾交给 driver 的 interrupted
+        # 分支,与取消/orphaned 同一条结构化通路。
+        outcome = "interrupted"
+        detail = f"步骤已被外部终结/并发推进(阶段冲突),本回合让位:{exc}"
+        error_info = {"type": "stage_conflict", "message": str(exc)}
+        return StepResult("interrupted", store.load_step(run_id, step_id), detail)
     except StepExecutionError as exc:
         outcome = "failed"
         detail = str(exc)

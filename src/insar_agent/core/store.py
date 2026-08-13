@@ -32,8 +32,13 @@ DELIVER_AS = ("steer", "follow_up", "next_run")  # 投递语义(§4.5/absorb-E4)
 
 
 def new_run_id(prefix: str = "") -> str:
-    """UUID + 单调时间戳(DESIGN.md:639:不能靠目录名)。"""
-    ts = time.strftime("%Y%m%dT%H%M%S")
+    """UUID + 单调时间戳(DESIGN.md:639:不能靠目录名)。
+
+    时间戳取 UTC(与 provenance generated_at_utc 同口径):本地墙钟跨时区/
+    DST 回拨时不单调,run_id 的字典序会与创建序背离(REVIEW P2)。
+    唯一性由 uuid 段保证,时间段只为人类可读的粗排序。
+    """
+    ts = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     return f"{ts}-{uuid.uuid4().hex[:8]}" + (f"-{prefix}" if prefix else "")
 
 
@@ -455,10 +460,17 @@ class Store:
         COUNT(commands)+1(executor.py),每次崩溃循环都再涨一格。
         刷新(而非只返回 id)是必要的:恢复时的认领判定读该行 stdout_path
         找作业目录,落点必须指向本次真实要启动的目录。
-        argv 变了(重规划)则照常新插 —— 那是另一条意图。
+        argv 变了(重规划)则照常新插 —— 那是另一条意图;此时同 (run,step) 的
+        其它未结算行合成结算入账(-255,superseded,对齐 executor 认领侧的
+        argv 不匹配处置)—— 否则旧意图永久悬挂为「假在途」命令,账本的
+        「凡意图必结算」不变量在这条路径上失守(REVIEW-r2 P2-9)。
         """
         argv_json = json.dumps(argv)
         with self.db.tx() as cur:
+            cur.execute(
+                "UPDATE commands SET exit_code=-255, duration=0.0"
+                " WHERE run_id=? AND step_id=? AND exit_code IS NULL AND argv<>?",
+                (run_id, step_id, argv_json))
             row = cur.execute(
                 "SELECT id FROM commands WHERE run_id=? AND step_id=? AND argv=?"
                 " AND exit_code IS NULL ORDER BY id DESC LIMIT 1",
