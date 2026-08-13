@@ -21,6 +21,14 @@
        向导是居中对话框,断点跟随对话框适宜宽度,略宽于紧凑档。
        生效处:setup.css @media。
 
+   --bp-sider-squeeze 1280px   会话侧栏「挤压档」(1241–1280 区间):
+       侧栏可折叠为贴边细条,悬停/聚焦临时展开,偏好存 localStorage。
+       生效处:responsive.css @media;responsive.js 读取本变量。
+
+   --bp-single-col     768px   单栏档:rail 让位给顶部三段导航
+       (会话/聊天/面板),侧栏与 dock 全宽覆层,触控目标加大。
+       生效处:responsive.css @media;responsive.js 读取本变量。
+
    注意:CSS 的 @media 条件不能引用 var(),各文件 @media 里的数值是
    这份清单的手工镜像(均已用变量名注释标注);JS 侧读下方变量。
    动效降级(prefers-reduced-motion)统一在 tokens.css,不属于宽度档。
@@ -31,6 +39,8 @@
   --bp-dock-drawer: 1240px;
   --bp-compact: 480px;
   --bp-setup-narrow: 560px;
+  --bp-sider-squeeze: 1280px;
+  --bp-single-col: 768px;
 }
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }

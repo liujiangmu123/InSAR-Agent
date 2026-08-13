@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>InSAR-Agent · 工作区</title>
 <link rel="stylesheet" href="css/tokens.css">
@@ -23,6 +23,7 @@
 <link rel="stylesheet" href="css/bridge.css">
 <link rel="stylesheet" href="css/slash.css">
 <link rel="stylesheet" href="css/states.css">
+<link rel="stylesheet" href="css/responsive.css">
 <script type="module">
   // 桌面/首启增强:环境向导(后端就绪则静默)+ 窗口标题状态同步;均安全降级
   import('./js/setup.js').then((m) => m.maybeShowSetupWizard()).catch(() => {});
@@ -185,5 +186,6 @@
 <script type="module" src="js/slash.js"></script>
 <script type="module" src="js/figcompare.js"></script><!-- 影像网格双图对比(卷帘/闪烁/并排),事件委托注入,可安全降级 -->
 <script type="module" src="js/provview.js"></script><!-- 审计面板下半区:provenance 账本浏览(自初始化) -->
+<script type="module" src="js/responsive.js"></script>
 </body>
 </html>
