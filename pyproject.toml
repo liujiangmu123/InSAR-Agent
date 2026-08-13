@@ -46,6 +46,8 @@ markers = [
     # 高负载机器上设 INSAR_TEST_TIME_FACTOR=3 放宽判定窗(conftest.TIME_FACTOR);
     # CI 中与常规用例分 job:常规 -m "not timing",timing 单独串行跑(ci.yml)
     "timing: 时序敏感(真实时钟判定窗;负载下用 INSAR_TEST_TIME_FACTOR 放宽)",
+    "desktop: 桌面冻结包完整性矩阵(需本地 dist 产物,CI 无产物自动跳过;入口 scripts/check_desktop.py)",
+    "slow: 慢用例(起冻结 exe / 全链冒烟),快速回归可用 -m 'not slow' 排除",
 ]
 
 [tool.ruff]
