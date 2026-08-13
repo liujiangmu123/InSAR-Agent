@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="css/setup.css">
 <link rel="stylesheet" href="css/skillpanel.css">
 <link rel="stylesheet" href="css/plandiff.css">
+<link rel="stylesheet" href="css/tour.css">
 <script type="module">
   // 桌面/首启增强:环境向导(后端就绪则静默)+ 窗口标题状态同步;均安全降级
   import('./js/setup.js').then((m) => m.maybeShowSetupWizard()).catch(() => {});
@@ -47,6 +48,8 @@
     <div class="rail-sp"></div>
 
     <button class="rail-btn" id="btnTheme" type="button" aria-label="切换主题" title="切换主题 Ctrl+J" aria-keyshortcuts="Control+J"></button>
+
+    <button class="rail-btn" id="btnTour" type="button" aria-label="界面引导" title="界面引导（随时重看）">?</button>
 
     <button class="rail-btn" id="railDock" type="button" aria-pressed="true" aria-label="右侧面板" title="右侧面板 Ctrl+B" aria-keyshortcuts="Control+B">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -167,5 +170,6 @@
 <script type="module" src="js/cmdk.js"></script>
 <script type="module" src="js/skillpanel.js"></script>
 <script type="module" src="js/plandiff.js"></script>
+<script type="module" src="js/tour.js"></script>
 </body>
 </html>
