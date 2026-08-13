@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at  REAL NOT NULL,
   mode        TEXT NOT NULL DEFAULT 'expert',     -- expert | guide
   scenario    TEXT,
-  meta        TEXT                                 -- JSON
+  meta        TEXT,                                -- JSON
+  archived    REAL                                 -- 归档时刻;NULL=活跃(软删除,run/工作区一律保留)
 );
 
 CREATE TABLE IF NOT EXISTS chat_messages (

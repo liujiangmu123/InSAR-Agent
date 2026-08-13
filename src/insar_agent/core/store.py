@@ -112,13 +112,66 @@ class Store:
                 (session_id, name, time.time(), mode, scenario, json.dumps(meta or {})),
             )
 
-    def list_sessions(self) -> list[dict]:
-        return [dict(r) for r in self.db.query(
-            "SELECT * FROM sessions ORDER BY created_at DESC")]
+    def list_sessions(self, *, include_archived: bool = False) -> list[dict]:
+        """会话列表。默认过滤已归档(archived 非 NULL)—— 软删除的「不显示」语义;
+        include_archived=True 返回全量(前端「已归档」折叠组的数据源)。"""
+        sql = "SELECT * FROM sessions"
+        if not include_archived:
+            sql += " WHERE archived IS NULL"
+        return [dict(r) for r in self.db.query(sql + " ORDER BY created_at DESC")]
 
     def get_session(self, session_id: str) -> dict | None:
         r = self.db.query_one("SELECT * FROM sessions WHERE session_id=?", (session_id,))
         return dict(r) if r else None
+
+    def rename_session(self, session_id: str, name: str) -> bool:
+        """改显示名(name 只是标签,不是目录名;校验在 API 边界)。不存在返回 False。"""
+        with self.db.tx() as cur:
+            cur.execute("UPDATE sessions SET name=? WHERE session_id=?", (name, session_id))
+            return cur.rowcount > 0
+
+    def archive_session(self, session_id: str) -> bool:
+        """软删除:落归档时刻,列表默认不再显示;run/工作区数据一律保留。
+        幂等(重复归档只刷新时刻);不存在返回 False。运行中拒绝归档是 API 层语义。"""
+        with self.db.tx() as cur:
+            cur.execute("UPDATE sessions SET archived=? WHERE session_id=?",
+                        (time.time(), session_id))
+            return cur.rowcount > 0
+
+    def restore_session(self, session_id: str) -> bool:
+        """还原归档(archived 清 NULL)。幂等;不存在返回 False。"""
+        with self.db.tx() as cur:
+            cur.execute("UPDATE sessions SET archived=NULL WHERE session_id=?", (session_id,))
+            return cur.rowcount > 0
+
+    def purge_session(self, session_id: str) -> bool:
+        """硬删除会话 DB 行(极度保守:仅当会话无任何 run 时允许)。
+
+        只删 sessions 行与其 chat_messages(外键要求先删子行);工作区目录
+        由 API 层改名留人工回收,store 不碰文件系统。有 run 的会话一律
+        ValueError —— run/steps/artifacts 是溯源台账,绝不级联删。
+        不存在返回 False。
+        """
+        with self.db.tx() as cur:
+            row = cur.execute("SELECT COUNT(*) AS n FROM runs WHERE session_id=?",
+                              (session_id,)).fetchone()
+            if row["n"] > 0:
+                raise ValueError(f"会话 {session_id} 含 {row['n']} 个 run,只能归档")
+            cur.execute("DELETE FROM chat_messages WHERE session_id=?", (session_id,))
+            cur.execute("DELETE FROM sessions WHERE session_id=?", (session_id,))
+            return cur.rowcount > 0
+
+    def count_runs(self, session_id: str) -> int:
+        r = self.db.query_one("SELECT COUNT(*) AS n FROM runs WHERE session_id=?",
+                              (session_id,))
+        return int(r["n"])
+
+    def has_running_run(self, session_id: str) -> bool:
+        """该会话是否存在 status='running' 的 run(不限最新 —— 归档守卫要看全量)。"""
+        r = self.db.query_one(
+            "SELECT 1 FROM runs WHERE session_id=? AND status='running' LIMIT 1",
+            (session_id,))
+        return r is not None
 
     def set_session_mode(self, session_id: str, mode: str) -> None:
         with self.db.tx() as cur:

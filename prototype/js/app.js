@@ -11,6 +11,7 @@ import * as Dock from './dock.js';
 import * as API from './backend.sse.js';   // 真实后端;file:// 或后端不可达时自动回退 mock
 import { demoLongTaskEvents } from './backend.mock.js';   // §7.4 新条目静态演示（仅 mock）
 import * as Notify from './notify.js';     // 桌面/网页通知 + 会话状态归组（机制 #4/#8）
+import * as Ops from './sessionops.js';    // 会话重命名/归档/还原的纯逻辑（可单测）
 
 /* ---------------- 元素引用 ---------------- */
 const el = {};
@@ -450,53 +451,249 @@ const ADMIN_STATUS_ZH = {
   failed: '失败', paused: '已暂停', interrupted: '已中断', done: '已完成',
 };
 
-/** 单条会话行：状态圆点（组色）+ 可选运维徽标 + 原有名称/副标题。 */
+/* ---- 会话生命周期操作（重命名/归档/还原）----
+   数据操作走 sessionops.js 纯函数（本地 SESSIONS 乐观更新），
+   服务端同步走 PATCH/DELETE /api/sessions/{id}:
+   不可达/404（会话尚未在服务端建立）→ 保持本地语义;
+   400/409（校验失败/运行中拒绝归档）→ 回滚本地并把 detail 报给用户。 */
+const undoWindow = Ops.createUndoWindow({ timeoutMs: 5000 });
+let archivedOpen = false;   // 「已归档」折叠组展开态（页面内记忆,不持久化）
+
+async function sessionApi(method, id, body = null) {
+  if (location.protocol === 'file:') return null;   // 纯本地演示:无后端可言
+  try {
+    return await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    return null;   // 后端不可达:操作只落在本地列表
+  }
+}
+
+/** 服务端是否拒绝了操作(2xx 通过)。按本地语义放行的例外:
+    404=会话尚未在服务端建立;405/501=静态文件服务器,视为「无后端」
+    (与 backend.sse.js 的 isNoBackend 同口径,纯演示模式不误报)。 */
+function rejected(resp) {
+  return resp && !resp.ok && ![404, 405, 501].includes(resp.status);
+}
+
+async function errDetail(resp) {
+  try {
+    const data = await resp.json();
+    return typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+  } catch {
+    return `HTTP ${resp.status}`;
+  }
+}
+
+function switchSession(s) {
+  if (s.id === S.sessionId) return;
+  S.sessionId = s.id;
+  renderSessions();
+  el.subtitle.textContent = s.name;
+  reset();
+  hydrateFromServer();      // 新会话的服务端状态与历史
+  connectGlobalEvents();    // SSE 重新挂到新会话
+  toast(`已切换会话：${s.name}`);
+}
+
+/** 行内重命名：名称处换成输入框,Enter/失焦提交、Esc 取消;后端拒绝则回滚。 */
+function startRename(row, s) {
+  if (row.querySelector('.sess-edit')) return;
+  const main = row.querySelector('.sess-main');
+  const ops = row.querySelector('.sess-ops');
+  main.hidden = true;
+  ops.hidden = true;
+  let done = false;
+  const input = h('input', {
+    class: 'sess-edit', type: 'text', value: s.name,
+    'aria-label': `重命名会话 ${s.name}`,
+  });
+  const commit = async () => {
+    if (done) return;
+    done = true;
+    const v = Ops.validateSessionName(input.value);
+    if (!v.ok) { renderSessions(); toast(`重命名失败：${v.error}`); return; }
+    if (v.name === s.name) { renderSessions(); return; }
+    const old = s.name;
+    Ops.applyRename(SESSIONS, s.id, v.name);   // 乐观更新,后端拒绝再回滚
+    if (s.id === S.sessionId) el.subtitle.textContent = v.name;
+    renderSessions();
+    const resp = await sessionApi('PATCH', s.id, { name: v.name });
+    if (rejected(resp)) {
+      Ops.applyRename(SESSIONS, s.id, old);
+      if (s.id === S.sessionId) el.subtitle.textContent = old;
+      renderSessions();
+      toast(`重命名被拒绝：${await errDetail(resp)}`, 4000);
+      return;
+    }
+    toast(`已重命名：${v.name}`);
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') { done = true; renderSessions(); }
+  });
+  input.addEventListener('blur', () => commit());
+  row.appendChild(input);
+  input.focus();
+  input.select();
+}
+
+/** 归档（软删除）：乐观入「已归档」组,toast 内 5 秒撤销;运行中会拒绝(409)。 */
+async function archiveSession(s) {
+  Ops.applyArchive(SESSIONS, s.id);
+  renderSessions();
+  const resp = await sessionApi('DELETE', s.id);
+  if (rejected(resp)) {   // 典型:409 有正在运行的 run
+    Ops.applyRestore(SESSIONS, s.id);
+    renderSessions();
+    toast(`归档被拒绝：${await errDetail(resp)}`, 4200);
+    return;
+  }
+  undoWindow.start(s.id);
+  const undoBtn = h('button', { class: 'toast-undo', type: 'button' }, '撤销');
+  undoBtn.addEventListener('click', () => {
+    if (!undoWindow.cancel(s.id)) return;   // 窗口已过:按钮成空操作
+    undoBtn.closest('.toast')?.remove();
+    restoreSession(s);
+  });
+  // toast 停留时长略长于撤销窗口:窗口先关,残留按钮点击无效,不会假撤销
+  toast(h('span', null, `已归档：${s.name}`, undoBtn), 5600);
+}
+
+/** 还原归档会话（撤销按钮与「已归档」组的还原按钮共用）。 */
+async function restoreSession(s) {
+  Ops.applyRestore(SESSIONS, s.id);
+  renderSessions();
+  const resp = await sessionApi('PATCH', s.id, { archived: false });
+  if (rejected(resp)) {   // 还原无守卫,理论上不该拒;诚实回滚以防万一
+    Ops.applyArchive(SESSIONS, s.id);
+    renderSessions();
+    toast(`还原失败：${await errDetail(resp)}`, 4000);
+    return;
+  }
+  toast(`已还原：${s.name}`);
+}
+
+/** 行尾悬停小按钮（hover / 键盘聚焦时显现,样式见 ensureSessOpsStyle）。 */
+function opButton(label, aria, onClick) {
+  return h('button', {
+    class: 'sess-op', type: 'button', 'aria-label': aria, title: aria,
+    onclick: (e) => { e.stopPropagation(); onClick(); },
+  }, label);
+}
+
+/** 单条会话行：状态圆点（组色）+ 可选运维徽标 + 名称/副标题 + 悬停操作。 */
 function sessionRow(s, groupKey) {
   const adminZh = adminRuns ? ADMIN_STATUS_ZH[adminRuns[s.id]] : null;
-  return h('button', {
-    class: 'sess', type: 'button', 'aria-current': String(s.id === S.sessionId),
-    dataset: { group: groupKey },
-    onclick: () => {
-      if (s.id === S.sessionId) return;
-      S.sessionId = s.id;
-      renderSessions();
-      el.subtitle.textContent = s.name;
-      reset();
-      hydrateFromServer();      // 新会话的服务端状态与历史
-      connectGlobalEvents();    // SSE 重新挂到新会话
-      toast(`已切换会话：${s.name}`);
+  const row = h('div', {
+    class: 'sess', 'aria-current': String(s.id === S.sessionId),
+    dataset: { group: groupKey, sid: s.id },
+  },
+    h('button', {
+      class: 'sess-main', type: 'button',
+      onclick: () => switchSession(s),
+    },
+      h('span', { class: 'nm' }, s.name),
+      h('span', { class: 'mt' },
+        h('span', { class: 'led', title: Notify.GROUP_LABEL[groupKey], style: {
+          width: '6px', height: '6px', borderRadius: '50%', flexShrink: '0',
+          background: GROUP_LED[groupKey] || 'var(--border-strong)',
+        } }),
+        adminZh ? h('span', { class: 'badge', style: {
+          padding: '0 5px', borderRadius: '999px', border: '1px solid var(--border)',
+          fontSize: '10px', color: 'var(--text-2)', flexShrink: '0',
+        } }, adminZh) : null,
+        s.sub)),
+    h('span', { class: 'sess-ops' },
+      opButton('重命名', `重命名会话 ${s.name}`, () => startRename(row, s)),
+      opButton('归档', `归档会话 ${s.name}`, () => archiveSession(s))));
+  return row;
+}
+
+/** 「已归档」组内的会话行：名称淡显,操作只剩「还原」。 */
+function archivedRow(s) {
+  const row = h('div', {
+    class: 'sess is-archived', 'aria-current': String(s.id === S.sessionId),
+    dataset: { group: 'archived', sid: s.id },
+  },
+    h('button', {
+      class: 'sess-main', type: 'button',
+      onclick: () => switchSession(s),
+    },
+      h('span', { class: 'nm', style: { color: 'var(--text-3)' } }, s.name),
+      h('span', { class: 'mt' }, s.sub)),
+    h('span', { class: 'sess-ops' },
+      opButton('还原', `还原会话 ${s.name}`, () => restoreSession(s))));
+  return row;
+}
+
+function groupHeader(key, label, count, extra = {}) {
+  return h(extra.onclick ? 'button' : 'div', {
+    class: 'sess-group', dataset: { group: key },
+    ...(extra.onclick
+      ? { type: 'button', 'aria-expanded': String(!!extra.expanded), onclick: extra.onclick }
+      : { role: 'heading', 'aria-level': '3' }),
+    style: {
+      display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
+      padding: '10px 10px 4px', fontSize: '11px', fontWeight: '600',
+      color: 'var(--text-3)', letterSpacing: '.02em', textAlign: 'left',
     },
   },
-    h('span', { class: 'nm' }, s.name),
-    h('span', { class: 'mt' },
-      h('span', { class: 'led', title: Notify.GROUP_LABEL[groupKey], style: {
-        width: '6px', height: '6px', borderRadius: '50%', flexShrink: '0',
-        background: GROUP_LED[groupKey] || 'var(--border-strong)',
-      } }),
-      adminZh ? h('span', { class: 'badge', style: {
-        padding: '0 5px', borderRadius: '999px', border: '1px solid var(--border)',
-        fontSize: '10px', color: 'var(--text-2)', flexShrink: '0',
-      } }, adminZh) : null,
-      s.sub));
+    h('span', { class: 'lbl' }, label),
+    h('span', { class: 'cnt', style: { fontWeight: '400' } }, String(count)));
+}
+
+/* 悬停操作样式随组件注入一次（组件私有,不进全局样式表）:
+   opacity 而非 display 隐藏 —— 键盘 Tab 仍可达,:focus-within 时显现。 */
+let sessOpsStyled = false;
+function ensureSessOpsStyle() {
+  if (sessOpsStyled) return;
+  sessOpsStyled = true;
+  document.head.appendChild(h('style', null, `
+    #sessions .sess { position: relative; display: flex; align-items: stretch; padding: 0; }
+    #sessions .sess-main { flex: 1 1 auto; min-width: 0; text-align: left;
+      padding: 8px 10px; border-radius: var(--r); }
+    #sessions .sess-main .nm { display: block; }
+    #sessions .sess-ops { position: absolute; right: 6px; top: 6px; display: flex; gap: 4px;
+      opacity: 0; pointer-events: none; transition: opacity .12s; }
+    #sessions .sess:hover .sess-ops, #sessions .sess:focus-within .sess-ops {
+      opacity: 1; pointer-events: auto; }
+    #sessions .sess-op { font-size: 10px; line-height: 1.6; color: var(--text-2);
+      padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px;
+      background: var(--bg); flex-shrink: 0; }
+    #sessions .sess-op:hover { background: var(--bg-hover); color: var(--text); }
+    #sessions .sess-edit { flex: 1 1 auto; min-width: 0; margin: 4px 6px;
+      padding: 4px 8px; font-size: 13px; border: 1px solid var(--border-focus);
+      border-radius: var(--r-sm); background: var(--bg); color: var(--text); }
+    #sessions .sess-group[data-group='archived']:hover { color: var(--text-2); }
+    .toast .toast-undo { margin-left: 10px; padding: 1px 8px; border: 1px solid var(--border);
+      border-radius: 999px; font-size: 11px; color: var(--accent); background: none; }
+  `));
 }
 
 function renderSessions() {
+  ensureSessOpsStyle();
+  const { active, archived } = Ops.splitArchived(SESSIONS);
   const groups = Notify.groupSessions(
-    SESSIONS, { currentId: S.sessionId, busy: S.busy, phase: S.phase }, adminRuns);
-  el.sessions.replaceChildren(...groups.flatMap((g) => [
-    h('div', {
-      class: 'sess-group', dataset: { group: g.key },
-      role: 'heading', 'aria-level': '3',
-      style: {
-        display: 'flex', alignItems: 'center', gap: '6px',
-        padding: '10px 10px 4px', fontSize: '11px', fontWeight: '600',
-        color: 'var(--text-3)', letterSpacing: '.02em',
-      },
-    },
-      h('span', { class: 'lbl' }, g.label),
-      h('span', { class: 'cnt', style: { fontWeight: '400' } }, String(g.items.length))),
+    active, { currentId: S.sessionId, busy: S.busy, phase: S.phase }, adminRuns);
+  const nodes = groups.flatMap((g) => [
+    groupHeader(g.key, g.label, g.items.length),
     ...g.items.map((s) => sessionRow(s, g.key)),
-  ]));
+  ]);
+  if (archived.length) {   // 折叠组:点标题展开,行内可还原
+    nodes.push(groupHeader('archived', `${archivedOpen ? '▾' : '▸'} 已归档`,
+      archived.length, {
+        expanded: archivedOpen,
+        onclick: () => { archivedOpen = !archivedOpen; renderSessions(); },
+      }));
+    if (archivedOpen) nodes.push(...archived.map(archivedRow));
+  } else {
+    archivedOpen = false;   // 组清空(全部还原)后复位,下次归档从收起态开始
+  }
+  el.sessions.replaceChildren(...nodes);
 }
 // 步骤状态 / 回合结束会改变当前会话的分组归属 → 跟随重绘（仅数条会话，代价可忽略）
 St.on('steps', () => renderSessions());
