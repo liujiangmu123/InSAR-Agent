@@ -52,6 +52,22 @@ from insar_agent.skills.loader import SECTION_FAILURES, SECTION_PARAMS, skill_se
 
 log = logging.getLogger(__name__)
 
+#: 数据集类型的中文标签(键与 data/catalog.KINDS 闭集对齐)
+_DATASET_KIND_LABELS = {"hyp3": "HyP3 产品", "alos_raw": "ALOS 原始条带",
+                        "slc_stack": "SLC 栈", "dem": "DEM", "unknown": "未识别"}
+
+#: 数据集清单缓存 TTL(秒):与 /api/datasets 的清单缓存同一口径
+_DATASETS_TTL_S = 60.0
+
+
+def _human_size(num_bytes: float) -> str:
+    """字节数 → 人类可读(数据集摘要用,GB/MB/KB 粗粒度足够)。"""
+    for unit, factor in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
+        if num_bytes >= factor:
+            value = num_bytes / factor
+            return f"{value:.1f} {unit}" if unit == "GB" else f"{value:.0f} {unit}"
+    return f"{num_bytes:.0f} B"
+
 
 def _tail_text(path: Path, limit_kb: int = 64) -> str:
     """读日志尾部 N KB(口径与 /api/logs 一致:掐掉截断处的半行)。
@@ -119,6 +135,9 @@ class Driver:
         self._startup_grace = startup_grace
         self._idle_override = idle_timeout_override
         self._total_override = total_timeout_override
+        # 数据集清单缓存 (扫描时刻, 条目列表):converse 每回合都注入一行摘要,
+        # TTL 与 /api/datasets 同款(60s),挡住高频对话的重复扫描
+        self._datasets_cache: tuple[float, list[dict]] | None = None
         self.agent_hash = compute_agent_hash(self.registry)
 
     # ---------------- 基础设施 ----------------
@@ -205,16 +224,35 @@ class Driver:
         # Brain(provider=None)/未配置不进此块,直接走下方规则路径 —— 「无 LLM
         # 时系统退化为手动流水线、行为逐字节不变」的铁律(守护测试锁死)不动。
         if self.brain.enabled:
+            # 会话自动命名触发条件(二期):会话名还是默认值(= 会话 id)且本条
+            # 恰是首条用户消息。短路序:名字判断零成本,先挡掉绝大多数回合。
+            # 无 LLM 时天然不改名(本块整体不进)。
+            want_title = (session["name"] == session_id and sum(
+                1 for m in store.chat_history(session_id)
+                if m.get("role") == "user") == 1)
+            state_summary = self._converse_state(session_id)
+            if want_title:
+                # 与 system prompt 的 session_title 契约呼应:提示只在首条消息出现
+                state_summary += ("\n会话命名:本条是会话首条消息,请在输出 JSON 里"
+                                  "附 session_title(不超过 12 字的中文标题,"
+                                  "概括用户想做的事)")
             outcome: ConverseResult | None = None
             try:
                 outcome = self.brain.converse(
                     text, history=history,
-                    state_summary=self._converse_state(session_id),
+                    state_summary=state_summary,
                     registry=self.registry)
             except BrainUnavailable:
                 # 诚实降级:LLM 失败不装哑,说明一句后走规则路径(与无 LLM 同轨)
                 yield self._emit(ev.note("warn", "LLM 暂不可用,已退化为关键词模式"))
             if outcome is not None:
+                if want_title and outcome.session_title:
+                    # 只信触发条件不信 LLM 时机:非首条消息带回的标题一律忽略
+                    # (want_title=False 不进此支);标题已在 facade 消毒截断
+                    if store.rename_session(session_id, outcome.session_title):
+                        yield self._emit(ev.note(
+                            "ok", f"已把本会话命名为「{outcome.session_title}」"
+                                  f"(可在会话列表改名)"))
                 if (outcome.action or {}).get("type") == "plan":
                     # plan 动作:reply 是规划前的过渡语;场景已过闭集校验,
                     # 之后与规则路径共用同一套规划流程(绝不绕过校验/状态机)
@@ -419,6 +457,14 @@ class Driver:
             store.append_chat(session_id, "agent", f"{outcome.reply}\n{env_text}")
             return
 
+        if kind == "list_data":
+            # 与 status/check_env 同款:reply 是过渡语,真实清单由系统扫描附上
+            # (LLM 绝不编造数据集;数据口径 = data/catalog 只读元数据识别)
+            data_text = self._datasets_text()
+            yield self._emit(ev.say([outcome.reply, data_text]))
+            store.append_chat(session_id, "agent", f"{outcome.reply}\n{data_text}")
+            return
+
         # set_params / set_method:闭集校验已在 facade 完成,这里入队。
         # deliver_as=steer:在跑 run 步间生效;空闲 run 由下次 execute 的
         # 检查点/入口消费 —— 与前端「改参数」按钮同一条队列语义。
@@ -442,14 +488,126 @@ class Driver:
             f"已排队:第 {action['step']} 步 {act_name} {payload}"
             f"(steer,下一检查点生效)", affected=[action["step"]]))
 
+    @staticmethod
+    def _peek_wsl_probe() -> dict | None:
+        """只窥视 WSL 引擎探测的模块级 TTL 缓存,绝不触发探测(同 doctor._peek_wsl_cache)。
+
+        真探测约 20s(VM 启动 + conda 冷启动),绝不落在对话回合;缓存由
+        /api/env、/api/setup/status(setup_router 的 probe_wsl_engines_cached)
+        预热,TTL 语义与其完全一致。冷缓存返回 None,调用方标注「未预热」。
+        """
+        from insar_agent.runtime import wsl_probe
+        from insar_agent.runtime.backend_select import wsl_distro
+
+        hit = wsl_probe._PROBE_CACHE.get(wsl_distro())
+        if hit and time.monotonic() - hit[0] < wsl_probe._PROBE_CACHE_TTL:
+            return hit[1]
+        return None
+
     def _env_summary_text(self) -> str:
-        """环境探测一行摘要(check_env 动作回复与 converse 状态注入共用)。"""
+        """环境探测一行摘要(check_env 动作回复与 converse 状态注入共用)。
+
+        口径对齐 setup_router(2026-08-13 浏览器实测缺口):本机探测(check_wsl=False)
+        会把 WSL 里实际可用的 isce2/snaphu 报成缺失 —— 合并 WSL 引擎缓存
+        (merge_wsl_probe 同款,本机优先、WSL 兜底),并标注每个引擎的来源。
+        合并落在探测副本上:共享的 self._probe 不动,规则路径(_plan_turn 的
+        引擎清单、feasibility 收窄)行为逐字节不变。
+        """
+        from insar_agent.runtime.wsl_probe import merge_wsl_probe
+
         probe = self.probe()
-        ok = [f"{e} {v}" for e, v in sorted(probe.engines.items()) if v]
-        missing = [e for e, v in sorted(probe.engines.items()) if not v]
+        merged = dataclasses.replace(probe, engines=dict(probe.engines),
+                                     wsl=dict(probe.wsl))
+        cached = self._peek_wsl_probe()
+        if cached is not None:
+            merge_wsl_probe(merged, cached)
+        suffix = " (wsl)"
+        names = {e for e in merged.engines if not e.endswith(suffix)}
+        names |= {e[:-len(suffix)] for e in merged.engines if e.endswith(suffix)}
+        ok, missing = [], []
+        for name in sorted(names):
+            local, wsl = merged.engines.get(name), merged.engines.get(name + suffix)
+            if local:
+                ok.append(f"{name} {local}(本机)")
+            elif wsl:
+                ok.append(f"{name} {wsl}(WSL)")
+            else:
+                missing.append(name)
+        note = ("" if cached is not None else
+                ";注:WSL 引擎探测未预热,缺失清单未含 WSL 侧"
+                "(打开环境面板或稍后再问可获得完整口径)")
         return (f"引擎可用:{'、'.join(ok) if ok else '无(将以模拟模式演示)'};"
                 f"缺失:{'、'.join(missing) if missing else '无'};"
-                f"磁盘 {probe.disk_free_gb:.0f} GB 可用,CPU {probe.cpu_count} 核")
+                f"磁盘 {probe.disk_free_gb:.0f} GB 可用,CPU {probe.cpu_count} 核{note}")
+
+    def _scan_datasets(self) -> list[dict]:
+        """本地数据集清单(60s TTL 缓存),扫描根口径与 /api/datasets 一致:
+        INSAR_DATA_DIR 环境变量 + <home>/datasets + <home>/datasets_roots.json
+        自定义根。home 按 create_app 同一规则解析(INSAR_HOME,缺省 ./workspace)
+        —— driver.workspace 是会话工作区(home/sessions/<id>),不是 home 本身。
+        识别器是 data/catalog 的只读元数据扫描(有界遍历,绝不读文件内容),秒级。
+        """
+        now = time.monotonic()
+        if self._datasets_cache and now - self._datasets_cache[0] < _DATASETS_TTL_S:
+            return self._datasets_cache[1]
+        from insar_agent.data.catalog import dataset_id, scan_roots
+
+        home = Path(os.environ.get("INSAR_HOME", "workspace")).resolve()
+        candidates: list[Path] = []
+        env_dir = (os.environ.get("INSAR_DATA_DIR") or "").strip()
+        if env_dir:
+            candidates.append(Path(env_dir))
+        candidates.append(home / "datasets")
+        try:
+            raw = json.loads((home / "datasets_roots.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = []
+        if isinstance(raw, list):
+            candidates.extend(Path(x) for x in raw if isinstance(x, str) and x)
+        roots: list[Path] = []
+        seen: set[str] = set()
+        for p in candidates:
+            try:
+                if not p.is_dir():
+                    continue
+            except OSError:
+                continue
+            key = dataset_id(p)  # 与 /api/datasets 同一套路径归一去重
+            if key not in seen:
+                seen.add(key)
+                roots.append(p)
+        datasets = scan_roots(roots)
+        self._datasets_cache = (now, datasets)
+        return datasets
+
+    def _datasets_summary_line(self) -> str:
+        """数据集一行摘要(converse 系统状态注入用):几个、什么类型。"""
+        datasets = self._scan_datasets()
+        if not datasets:
+            return "未发现本地数据集"
+        counts: dict[str, int] = {}
+        for d in datasets:
+            counts[d["kind"]] = counts.get(d["kind"], 0) + 1
+        kinds = "、".join(
+            f"{_DATASET_KIND_LABELS.get(k, k)} {n} 个"
+            for k, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+        return f"共 {len(datasets)} 个({kinds})"
+
+    def _datasets_text(self) -> str:
+        """数据集清单详情(list_data 动作回复用):类型/大小/日期范围,最多 8 条。"""
+        datasets = self._scan_datasets()
+        if not datasets:
+            return ("本地未发现数据集:可设置 INSAR_DATA_DIR 指向数据目录,"
+                    "或在文件面板「数据集」区添加扫描根后再问一次。")
+        lines = []
+        for d in datasets[:8]:
+            rng = d.get("date_range") or {}
+            span = f",{rng['start']}~{rng['end']}" if rng else ""
+            lines.append(f"- {d['name']}:{_DATASET_KIND_LABELS.get(d['kind'], d['kind'])},"
+                         f"{_human_size(d['size_bytes'])}{span}")
+        head = (f"本地数据集共 {len(datasets)} 个"
+                + ("(仅列前 8 个)" if len(datasets) > 8 else "") + ":")
+        return head + "\n" + "\n".join(lines)
 
     def _run_status_text(self, session_id: str) -> str:
         """最近 run 状态 + 步骤矩阵一行摘要(status 动作回复与状态注入共用)。"""
@@ -464,11 +622,32 @@ class Driver:
         return (f"最近 run {run['run_id']}{sim}:场景 {run.get('scenario') or '-'},"
                 f"状态 {run['status']};步骤:{matrix or '无'}")
 
+    def _memory_snippets(self, session_id: str) -> list[str]:
+        """用户记忆片段(brain/memory.py 由并行代理实现,经契约解耦):
+
+        契约:get_context_snippets(store, session_id, limit=5) -> list[str],
+        返回该用户的记忆条目(如「常用区域:玉树」「偏好 SBAS」)。
+        契约防御:模块不存在 / 接口缺失 / 调用抛错 / 返回形状不对 —— 一律回
+        空列表,零影响对话(import 失败绝不炸 converse)。
+        """
+        import importlib
+
+        try:
+            memory = importlib.import_module("insar_agent.brain.memory")
+            snippets = memory.get_context_snippets(self.store, session_id, limit=5)
+        except Exception:  # noqa: BLE001 —— 可选依赖,任何失败都按「无记忆」处置
+            return []
+        if not isinstance(snippets, list):
+            return []
+        return [s.strip()[:200] for s in snippets[:5]
+                if isinstance(s, str) and s.strip()]
+
     def _converse_state(self, session_id: str) -> str:
         """converse 的系统状态摘要(注入 user 消息;system prompt 保持静态)。
 
-        四行:环境探测、最近 run 状态与步骤矩阵、可用场景闭集、数据源配置。
-        全部只读、一行一项 —— 上下文预算纪律(§3.3 约束四)对会话职责同样成立。
+        五行:环境探测(本机+WSL 合并口径)、最近 run 状态与步骤矩阵、可用场景
+        闭集、数据源配置、数据集一行摘要;有用户记忆时追加一行。全部只读、
+        一行一项 —— 上下文预算纪律(§3.3 约束四)对会话职责同样成立。
         """
         from insar_agent.registry.scenarios import SCENARIOS
 
@@ -478,12 +657,17 @@ class Driver:
         else:
             data_line = f"{src}({'在位' if Path(src).is_dir() else '路径不存在'})"
         scenarios = "、".join(f"{s.key}({s.label})" for s in SCENARIOS)
-        return "\n".join([
+        lines = [
             f"环境:{self._env_summary_text()}",
             f"运行:{self._run_status_text(session_id)}",
             f"可用场景:{scenarios}",
             f"数据源:{data_line}",
-        ])
+            f"数据集:{self._datasets_summary_line()}",
+        ]
+        snippets = self._memory_snippets(session_id)
+        if snippets:
+            lines.append("用户记忆:" + ";".join(snippets))
+        return "\n".join(lines)
 
     # ---------------- 执行回合 ----------------
 

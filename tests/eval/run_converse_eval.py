@@ -649,6 +649,8 @@ def main(argv=None) -> int:
                         help="mock 用假 provider:oracle=按金标作弊;naive=永远纯聊天(阴性对照)")
     parser.add_argument("--pipeline-only", action="store_true",
                         help="mock 时跳过 converse 注入,纯管道自检")
+    parser.add_argument("--ids", default=None,
+                        help="只评测这些条目(逗号分隔 id 清单;真实小样本实测用)")
     parser.add_argument("--out", default=None, help="评测报告 JSON 输出路径")
     parser.add_argument("--fail-under", type=float, default=None,
                         help="real 模式:总体准确率低于该值(0-1)则 exit 1")
@@ -669,6 +671,15 @@ def main(argv=None) -> int:
         print_stats(stats)
         print("\n金标集格式校验通过(jsonl 可解析 / 字段闭集 / 无重复 id / 总数达标)。")
         return 0
+
+    if args.ids:  # 样本过滤只作用于评测执行;格式校验与 ≥60 条下限仍按全集把关
+        want = {s.strip() for s in args.ids.split(",") if s.strip()}
+        unknown = want - {e["id"] for e in entries}
+        if unknown:
+            print(f"--ids 含金标集中不存在的 id:{sorted(unknown)}")
+            return 1
+        entries = [e for e in entries if e["id"] in want]
+        print(f"[样本过滤] --ids 选中 {len(entries)}/{stats['total']} 条\n")
 
     if args.mode == "mock":
         return _mode_mock(entries, args)

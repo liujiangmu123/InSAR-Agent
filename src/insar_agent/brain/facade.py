@@ -51,10 +51,14 @@ class ConverseResult:
     reply: str
     action: dict | None = None  # 已过闭集校验的动作;None = 纯聊天
     rejected: str = ""  # 非空 = LLM 给过动作但越界被拦截(原因;reply 已附注记)
+    # 可选会话标题(二期):仅会话首条消息时 LLM 给出,≤12 字;是否采纳由
+    # driver 按触发条件把关(非首条消息带回来的标题一律忽略)
+    session_title: str = ""
 
 
-#: converse 动作闭集(第一期,宁小勿大;§3.4:输出永远是闭集,越界即拦截)
-CONVERSE_ACTION_TYPES = ("plan", "execute", "status", "check_env",
+#: converse 动作闭集(宁小勿大;§3.4:输出永远是闭集,越界即拦截)。
+#: 二期新增 list_data:盘点本地数据集(数据由 driver 按 data/catalog 真实扫描)。
+CONVERSE_ACTION_TYPES = ("plan", "execute", "status", "check_env", "list_data",
                          "set_params", "set_method")
 
 #: converse 的 system prompt。保持静态(动态系统状态走 user 消息注入,利于
@@ -63,15 +67,18 @@ CONVERSE_ACTION_TYPES = ("plan", "execute", "status", "check_env",
 CONVERSE_SYSTEM = """\
 你是 InSAR 数据处理助手,帮用户完成干涉测量(InSAR)数据处理,也能正常聊天、答疑。
 
-能做:按场景规划处理流水线(plan);触发执行(execute);查运行状态(status);查环境探测(check_env);修改某步的参数/方法(set_params/set_method,入队后在检查点生效)。
+能做:按场景规划处理流水线(plan);触发执行(execute);查运行状态(status);查环境探测(check_env);盘点本地数据集(list_data);修改某步的参数/方法(set_params/set_method,入队后在检查点生效)。
 不能做:发明闭集之外的场景/步骤/方法/参数名;绕过系统校验;直接执行任意命令;下载数据或安装引擎(只能口头指引用户操作)。
 
 只输出一个 JSON 对象,契约:{"reply": "<给用户的中文回复>", "action": null 或下列动作之一}
+可选字段 "session_title":仅当系统状态里出现「会话命名」提示(会话首条消息)时附上,
+值为概括本次会话主题的中文短标题(不超过 12 字);其余时候不要输出该字段。
 动作闭集(字段不多不少,值必须来自下方闭集):
 - {"type": "plan", "scenario": "<场景key>", "region": "<可选>", "timerange": "<可选>"} 规划流水线
 - {"type": "execute"} 开始/继续执行当前计划
 - {"type": "status"} 查询当前运行状态
 - {"type": "check_env"} 查询环境探测结果
+- {"type": "list_data"} 盘点本地已有的数据集(类型/大小/时间范围)
 - {"type": "set_params", "step": <步骤号整数>, "params": {"<参数名>": <值>}} 修改某步参数
 - {"type": "set_method", "step": <步骤号整数>, "method": "<方法id>"} 修改某步方法
 
@@ -80,7 +87,8 @@ CONVERSE_SYSTEM = """\
 {STEP_LINES}
 
 判断规则:
-- status/check_env 的具体数据由系统在你的 reply 之后附上真实状态文本,你不要编造数值。
+- status/check_env/list_data 的具体数据由系统在你的 reply 之后附上真实状态文本,你不要编造数值。
+- 用户问「本地有什么数据 / 数据在哪 / 数据全不全 / 下好了没」这类盘点本地数据的问题 → list_data。
 - 用户明确表达了对应意图才给动作;拿不准就 action=null 纯聊天,先向用户确认(宁可多问,不猜)。
 - 闲聊、提问、寒暄、讨论 → action=null。
 reply 要求:中文、口语化、简洁,不用 markdown 标题;直接回应用户说的话,不要复读系统状态。
@@ -186,14 +194,19 @@ class Brain:
 
     # ---------------- converse ----------------
 
-    def converse(self, text: str, *, history: list[dict], state_summary: str,
-                 registry: dict[int, Capability]) -> ConverseResult:
+    def converse(self, text: str, *, history: list[dict] | None = None,
+                 state_summary: str = "",
+                 registry: dict[int, Capability] | None = None) -> ConverseResult:
         """会话职责(第五职责):自然语言回复 + 可选闭集动作。
 
         边界注记:converse 是「会话角色」,允许携带短滚动历史(最近 8 条,
         每条截 500 字)—— 与 select/triage 的「决策请求不带历史」(§3.3 约束四)
         不同轨:那两个是独立决策点,历史只会引入无关偏置;converse 的任务本身
         就是接住对话上下文。历史仍有硬预算,绝不全量重发。
+
+        kwargs 均有缺省值:评测 harness(tests/eval/run_converse_eval.py)以
+        Brain(provider).converse(text) 单参调用,registry 缺省取全流水线闭集,
+        闭集校验纪律与 driver 注入时完全一致。
 
         失败语义:LLM 未启用/调用失败/截断/响应缺 reply(坏形状)→
         BrainUnavailable,调用方(driver.turn)降级到规则路径;
@@ -202,6 +215,11 @@ class Brain:
         if not self.enabled:
             raise BrainUnavailable("LLM 未启用,converse 不可用")
         from insar_agent.registry.scenarios import SCENARIOS
+
+        if registry is None:
+            from insar_agent.registry.capabilities import REGISTRY
+            registry = REGISTRY
+        history = history or []
 
         keys = [s.key for s in SCENARIOS]
         step_lines = "\n".join(
@@ -226,15 +244,17 @@ class Brain:
             # 坏形状与截断同语义:整体拒绝,调用方降级到规则路径
             raise BrainUnavailable(f"converse 响应缺 reply:{str(data)[:200]}")
         reply = reply.strip()
+        title = _sanitize_session_title(data.get("session_title"))
         raw_action = data.get("action")
         if raw_action is None:
-            return ConverseResult(reply=reply)
+            return ConverseResult(reply=reply, session_title=title)
         action, why = _validate_converse_action(raw_action, scenario_keys=keys,
                                                 registry=registry)
         if action is None:
             # 越界动作只拦不炸:reply 仍可用,注记让用户知道有动作被丢弃
-            return ConverseResult(reply=reply + "(动作越界已拦截)", rejected=why)
-        return ConverseResult(reply=reply, action=action)
+            return ConverseResult(reply=reply + "(动作越界已拦截)", rejected=why,
+                                  session_title=title)
+        return ConverseResult(reply=reply, action=action, session_title=title)
 
     # ---------------- narrate ----------------
 
@@ -265,6 +285,17 @@ def _numbers_preserved(original: str, polished: str) -> bool:
     return all(n in polished for n in nums)
 
 
+def _sanitize_session_title(raw) -> str:
+    """会话标题的护栏:非字符串一律弃用;压掉换行/连续空白;硬截 12 字。
+
+    截断而非拒绝:标题只是展示标签,超长是小瑕疵不是越界动作,
+    砍到契约上限比整条丢弃更符合用户利益。
+    """
+    if not isinstance(raw, str):
+        return ""
+    return re.sub(r"\s+", " ", raw).strip()[:12]
+
+
 def _validate_converse_action(action, *, scenario_keys: list[str],
                               registry: dict[int, Capability]
                               ) -> tuple[dict | None, str]:
@@ -290,7 +321,7 @@ def _validate_converse_action(action, *, scenario_keys: list[str],
             if isinstance(v, str) and v.strip():
                 out[key] = v.strip()
         return out, ""
-    if kind in ("execute", "status", "check_env"):
+    if kind in ("execute", "status", "check_env", "list_data"):
         return {"type": kind}, ""  # 无参数动作:多余字段一律不透传
     step = action.get("step")
     if isinstance(step, bool) or not isinstance(step, int) or step not in registry:

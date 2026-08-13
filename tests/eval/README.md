@@ -101,9 +101,24 @@ harness 按优先级探测:`Brain.converse(text)` 方法 → `insar_agent.brain.
 - 不进常规 CI:`run_converse_eval.py` 的 mock / real 评测本体(real 涉及真实出网,
   mock 供开发期手动自检)。
 
-## 准确率基线(留白,converse 落地后填)
+## 准确率基线
+
+真实小样本用 `--ids` 过滤(逗号分隔 id 清单,如 `--ids "chat-05,env-02,..."`),
+格式校验与 ≥60 条下限仍按全集把关,只有评测执行按样本跑。
 
 | 日期 | 模型/路由 | 总体 | chat | env | data | plan | param | exec | attack | fuzzy | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-|  |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |
+| 2026-08-13 | deepseek-v4-flash(tokenrhythm 中转,主仓 workspace/llm.json) | 93.3%(14/15) | 2/2 | 2/2 | 2/2 | 3/3 | 2/2 | 1/2 | 1/1 | 1/1 | 15 条代表性样本(每类 ≥1,`--ids` 过滤);唯一失分 exec-01「开始跑吧」→ 模型选纯聊天先确认跑什么(评测态无 run 上下文,与 prompt「宁可多问不猜」纪律一致,金标期望 execute);中转站当日限流,分 5 批跑、503 重试 1 条 |
+
+样本清单(15 条):chat-05/09、env-02/08、data-04/07、plan-01/06/12、
+param-01/11、exec-01/05、attack-02、fuzzy-04。
+
+### mock 模式口径(converse 已落地后)
+
+- `--mode mock --pipeline-only`:oracle 100%(77/77),金标集与判定管道自洽;
+  `--provider naive` 阴性对照与独立谓词逐条一致 —— 管道正确性以这两项为准。
+- `--mode mock`(真 converse + oracle):70/77。7 条 param 类失败全部是 oracle
+  的占位动作参数(`min_coherence`/`icu` 硬套到第 2/4/5/7/8 步)被 facade 的
+  registry 闭集校验正确拦截 —— 这是 oracle 造数局限,恰好反向验证了越界拦截
+  端到端生效;真实 LLM 按 system prompt 里的分步参数闭集产出对应参数名,不受
+  此局限(见上表 param 2/2)。
