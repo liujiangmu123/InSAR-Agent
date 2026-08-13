@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 import uuid
@@ -44,6 +45,11 @@ def new_run_id(prefix: str = "") -> str:
 
 class StageConflict(RuntimeError):
     """乐观并发失败:行已被别人推进/终结(absorb-E6)。"""
+
+
+def _escape_like(text: str) -> str:
+    r"""LIKE 模式转义:让用户输入里的 % _ \ 按字面匹配(配 ESCAPE '\' 使用)。"""
+    return text.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
 
 
 @dataclass
@@ -765,3 +771,101 @@ class Store:
     def trace_of(self, run_id: str) -> list[dict]:
         return [dict(r) for r in self.db.query(
             "SELECT * FROM trace WHERE run_id=? ORDER BY id", (run_id,))]
+
+    # ---------------- 键集分页(纯增量段:上面的既有方法一概不动) ----------------
+    # cursor 是不透明字符串:base64url(JSON [ts, key])。ts 取排序时间列
+    # (created_at / trace.ts),key 是同 ts 多行的稳定 tie-break(session_id /
+    # run_id / trace.id)。键集谓词代替 OFFSET:深页成本与页深无关,翻页间隙
+    # 新插入/删除的行不会让窗口滑移(不重不漏;tests/test_pagination.py)。
+
+    @staticmethod
+    def _encode_cursor(ts: float, key: Any) -> str:
+        raw = json.dumps([ts, key], ensure_ascii=False).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_cursor(cursor: str, key_type: type) -> tuple[float, Any]:
+        """解游标;一切畸形(坏 base64/坏 JSON/形状不对/键型不符)→ ValueError
+        (API 层统一转 400)。key_type 校验防跨端点串用游标:SQLite 的跨类型
+        比较序里数字恒小于文本,串了会静默漏页/重页而不是报错。"""
+        try:
+            raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+            ts, key = json.loads(raw.decode("utf-8"))
+        except (ValueError, TypeError) as exc:  # base64/JSON/解包/解码错误的闭集
+            raise ValueError(f"cursor 不合法:{cursor!r}") from exc
+        if (not isinstance(ts, (int, float)) or isinstance(ts, bool)
+                or not isinstance(key, key_type) or isinstance(key, bool)):
+            raise ValueError(f"cursor 不合法:{cursor!r}")
+        return float(ts), key
+
+    def _page(self, sql: str, params: list, limit: int | None,
+              ts_col: str, key_col: str) -> dict:
+        """LIMIT+1 探页:多取一行判断有无下一页,截断后以末行 (ts, key) 造游标。
+        limit=None 表示不分页(全量,next_cursor 恒 None)—— API 老路径语义。"""
+        if limit is not None:
+            if limit < 1:
+                raise ValueError(f"limit 必须 ≥1,收到 {limit}")
+            sql += " LIMIT ?"
+            params = params + [limit + 1]
+        rows = [dict(r) for r in self.db.query(sql, tuple(params))]
+        next_cursor = None
+        if limit is not None and len(rows) > limit:
+            rows = rows[:limit]
+            next_cursor = self._encode_cursor(rows[-1][ts_col], rows[-1][key_col])
+        return {"items": rows, "next_cursor": next_cursor}
+
+    def list_sessions_page(self, limit: int | None, cursor: str | None = None,
+                           include_archived: bool = False, q: str | None = None) -> dict:
+        """会话列表的键集分页/过滤版(排序同 list_sessions:created_at 倒序,
+        同 ts 行按 session_id 倒序 tie-break;走 idx_sessions_created,零临时排序)。
+
+        q 是名称子串过滤(LIKE,%/_/\\ 已转义按字面匹配;仅 ASCII 大小写不敏感,
+        SQLite LIKE 语义)。返回 {"items", "next_cursor"}:next_cursor 仅在给了
+        limit 且确有下一页时非 None,原样回传即取下一页。
+        """
+        where, params = [], []
+        if not include_archived:
+            where.append("archived IS NULL")
+        if q:
+            where.append(r"name LIKE ? ESCAPE '\'")
+            params.append("%" + _escape_like(q) + "%")
+        if cursor:
+            ts, key = self._decode_cursor(cursor, str)
+            where.append("(created_at < ? OR (created_at = ? AND session_id < ?))")
+            params += [ts, ts, key]
+        sql = "SELECT * FROM sessions"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at DESC, session_id DESC"
+        return self._page(sql, params, limit, "created_at", "session_id")
+
+    def list_runs_page(self, session_id: str, limit: int | None,
+                       cursor: str | None = None, status: str | None = None) -> dict:
+        """run 历史的键集分页/过滤版(排序同 list_runs:created_at 倒序,同 ts 行
+        按 run_id 倒序 tie-break)。走 idx_runs_session;tie-break 只引入 LAST TERM
+        级的组内小排序(同 created_at 的 run 极少,组常为 1 行),不物化全量。
+        status 是 runs.status 闭集的精确匹配过滤。"""
+        where, params = ["session_id=?"], [session_id]
+        if status:
+            where.append("status=?")
+            params.append(status)
+        if cursor:
+            ts, key = self._decode_cursor(cursor, str)
+            where.append("(created_at < ? OR (created_at = ? AND run_id < ?))")
+            params += [ts, ts, key]
+        sql = ("SELECT * FROM runs WHERE " + " AND ".join(where)
+               + " ORDER BY created_at DESC, run_id DESC")
+        return self._page(sql, params, limit, "created_at", "run_id")
+
+    def events_page(self, run_id: str, limit: int | None,
+                    cursor: str | None = None) -> dict:
+        """trace 事件回放的键集分页(ts 升序、id 升序 tie-break;走 idx_trace_run_ts,
+        索引序即回放序)。与 trace_of 的按 id 全量序在时钟不回拨时逐行一致;
+        时钟回拨时 (ts, id) 仍是全序,分页照样不重不漏。cursor 键型是 int(trace.id)。"""
+        where, params = ["run_id=?"], [run_id]
+        if cursor:
+            ts, key = self._decode_cursor(cursor, int)
+            where.append("(ts > ? OR (ts = ? AND id > ?))")
+            params += [ts, ts, key]
+        sql = "SELECT * FROM trace WHERE " + " AND ".join(where) + " ORDER BY ts, id"
+        return self._page(sql, params, limit, "ts", "id")

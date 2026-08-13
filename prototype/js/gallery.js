@@ -18,6 +18,7 @@ import { h } from './dom.js';
 import { S } from './state.js';
 import { figureNode, IMAGES } from './figures.js';
 import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
+import * as ES from './emptystate.js';          // states 接入:空态/骨架/错误态统一构造器
 
 /* ---------------- 数据源 ---------------- */
 
@@ -136,7 +137,8 @@ function demoItem(g) {
 export function galleryView() {
   const box = h('div', { class: 'glx' },
     h('h3', { class: 'sect' }, '产物图件 · 点击查看大图'),
-    h('p', { class: 'blurb' }, '正在读取产物列表(GET /api/figures)…'));
+    // states 接入:请求中分支 → 网格骨架(此前是一行裸文本)
+    ES.renderSkeleton(null, { kind: 'grid', rows: 4, label: '正在读取产物列表(GET /api/figures)' }));
   load(box);
   return box;
 }
@@ -147,21 +149,31 @@ async function load(box) {
 
   const real = Array.isArray(data?.figures) && data.figures.length > 0;
   const items = real ? data.figures.map(realItem) : IMAGES.map(demoItem);
+  // states 接入:非 real 的两个分支交给统一构造器 —— 后端不可达(catch 归一为
+  // null)= 错误态带「重试」;可达但无产物 = 空态卡 + 既有运行入口(自定义事件
+  // 解耦);演示网格保留在下方,卡片自身已带「演示图件」角标。
+  const stateNode = real ? null : (data === null
+    ? ES.renderError(null, {
+        message: '产物列表读取失败——后端不可达或响应异常;以下为演示图件(手绘 SVG,非真实产物)。',
+        retry: () => { invalidate(); load(box); } })
+    : ES.renderEmpty(null, { icon: 'image', title: '还没有产物图件',
+        hint: '运行流水线的出图步骤即可生成——以下为演示图件(手绘 SVG,非真实产物)。',
+        action: { label: '运行流水线以生成图件', event: 'states:run-pipeline' } }));
   const note = real
     ? `真实运行产物 · ${items.length} 张(GET /api/figures)。网格用缩略档,灯箱用 2048px 浏览档,原图另开。`
-    : data === null
-      ? '后端不可达 —— 以下为演示图件(手绘 SVG,非真实产物)。'
-      : '该会话暂无图像产物 —— 运行出图步骤后此处显示真实 PNG;以下为演示图件。';
+    : '';
 
-  box.replaceChildren(
+  box.replaceChildren(...[
     h('h3', { class: 'sect' }, real ? '产物图件 · 点击查看大图' : '产物图件(演示) · 点击查看大图',
       real ? h('button', {
         class: 'glx-refresh', type: 'button', title: '重新读取产物列表',
         'aria-label': '刷新产物列表',
         onclick: () => { invalidate(); load(box); },
       }, '刷新') : null),
+    stateNode,
     grid(items),
-    h('p', { class: 'blurb' }, note));
+    note ? h('p', { class: 'blurb' }, note) : null,
+  ].filter(Boolean));
 }
 
 /** 网格节点(导出供 node 单测校验 DOM 结构)。 */

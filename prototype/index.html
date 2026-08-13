@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>InSAR-Agent · 工作区</title>
 <link rel="stylesheet" href="css/tokens.css">
@@ -11,12 +11,24 @@
 <link rel="stylesheet" href="css/dock.css">
 <link rel="stylesheet" href="css/rail.css">
 <link rel="stylesheet" href="css/gallery.css">
+<link rel="stylesheet" href="css/figcompare.css">
 <link rel="stylesheet" href="css/audit.css">
+<link rel="stylesheet" href="css/provview.css">
 <link rel="stylesheet" href="css/setup.css">
+<link rel="stylesheet" href="css/skillpanel.css">
+<link rel="stylesheet" href="css/plandiff.css">
+<link rel="stylesheet" href="css/tour.css">
+<link rel="stylesheet" href="css/llmsettings.css">
+<link rel="stylesheet" href="css/doctorpanel.css">
+<link rel="stylesheet" href="css/bridge.css">
+<link rel="stylesheet" href="css/slash.css">
+<link rel="stylesheet" href="css/states.css">
+<link rel="stylesheet" href="css/responsive.css">
 <script type="module">
   // 桌面/首启增强:环境向导(后端就绪则静默)+ 窗口标题状态同步;均安全降级
   import('./js/setup.js').then((m) => m.maybeShowSetupWizard()).catch(() => {});
   import('./js/titlebar.js').then((m) => m.initTitleSync()).catch(() => {});
+  import('./js/emptystate.js').then((m) => m.watchSessionsEmpty()).catch(() => {});   // states 接入:会话列表空态守望
 </script>
 </head>
 <body>
@@ -45,6 +57,8 @@
     <div class="rail-sp"></div>
 
     <button class="rail-btn" id="btnTheme" type="button" aria-label="切换主题" title="切换主题 Ctrl+J" aria-keyshortcuts="Control+J"></button>
+
+    <button class="rail-btn" id="btnTour" type="button" aria-label="界面引导" title="界面引导（随时重看）">?</button>
 
     <button class="rail-btn" id="railDock" type="button" aria-pressed="true" aria-label="右侧面板" title="右侧面板 Ctrl+B" aria-keyshortcuts="Control+B">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -163,5 +177,17 @@
 <!-- 可达性增强层:快捷键帮助浮层 + aria-modal 浮层的焦点圈定(独立于业务逻辑,可安全降级) -->
 <script type="module" src="js/a11y.js"></script>
 <script type="module" src="js/cmdk.js"></script>
+<script type="module" src="js/skillpanel.js"></script>
+<script type="module" src="js/plandiff.js"></script>
+<script type="module" src="js/tour.js"></script>
+<script type="module" src="js/llmsettings.js"></script>
+<script type="module" src="js/doctorpanel.js"></script>
+<script type="module" src="js/bridge.js" defer></script>
+<script type="module" src="js/slash.js"></script>
+<script type="module" src="js/figcompare.js"></script><!-- 影像网格双图对比(卷帘/闪烁/并排),事件委托注入,可安全降级 -->
+<script type="module" src="js/provview.js"></script><!-- 审计面板下半区:provenance 账本浏览(自初始化) -->
+<script type="module" src="js/responsive.js"></script>
+<!-- 诊断包导出:环境面板「导出诊断包」按钮(自初始化,可安全降级) -->
+<script type="module" src="js/diagexport.js"></script>
 </body>
 </html>

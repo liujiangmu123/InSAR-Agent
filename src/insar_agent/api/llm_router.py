@@ -1,0 +1,154 @@
+"""LLM 配置面(/api/llm/*):界面「填密钥 → 获取模型 → 选模型 → 测试」闭环。
+
+安全纪律:
+  - api_key 只写 workspace/llm.json(gitignore 排除),响应永远只回掩码;
+  - /models 与 /test 都在服务端持钥出网,密钥不下发浏览器;
+  - 测试调用消耗极小(chat 单次 JSON、vision 内置 8×8 纯色图 + max_tokens=64)。
+"""
+
+from __future__ import annotations
+
+import base64
+import struct
+import time
+import zlib
+from pathlib import Path
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from insar_agent.brain.llm_config import (DEFAULT_BASE_URL, load_llm_config,
+                                          mask_key, routes_from_config,
+                                          save_llm_config,
+                                          vision_route_from_config)
+from insar_agent.brain.provider import (BrainUnavailable, LLMProvider, LLMRoute,
+                                        describe_image_stream, list_models)
+
+
+class LLMConfigBody(BaseModel):
+    base_url: str | None = None
+    api_key: str | None = None
+    chat_model: str | None = None
+    vision_model: str | None = None
+
+
+class ModelsBody(BaseModel):
+    base_url: str | None = None
+    api_key: str | None = None
+
+
+class TestBody(BaseModel):
+    kind: str = "chat"  # chat | vision
+    model: str | None = None  # 未保存前试选:临时指定模型
+
+
+def _tiny_png_data_url() -> str:
+    """内置识图测试图:8×8 纯红 PNG(零依赖构造,数据 URL 形态)。"""
+    w = h = 8
+    raw = b"".join(b"\x00" + bytes([220, 30, 30]) * w for _ in range(h))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+           + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+def _config_view(home: Path) -> dict:
+    cfg = load_llm_config(home)
+    file_ready = bool(cfg.get("base_url") and cfg.get("api_key")
+                      and cfg.get("chat_model"))
+    env_routes = [r for r in routes_from_config(home)
+                  if not file_ready or r.model != cfg.get("chat_model")]
+    source = "file" if file_ready else ("env" if env_routes else "none")
+    return {
+        "configured": bool(routes_from_config(home)),
+        "source": source,
+        "base_url": cfg.get("base_url") or DEFAULT_BASE_URL,
+        "chat_model": cfg.get("chat_model", ""),
+        "vision_model": cfg.get("vision_model", ""),
+        "api_key_masked": mask_key(cfg.get("api_key", "")),
+    }
+
+
+def create_llm_router(home: Path) -> APIRouter:
+    router = APIRouter(prefix="/api/llm", tags=["llm"])
+
+    @router.get("/config")
+    def get_config() -> dict:
+        return _config_view(home)
+
+    @router.post("/config")
+    def post_config(body: LLMConfigBody) -> dict:
+        save_llm_config(home, body.model_dump())
+        return _config_view(home)
+
+    @router.post("/models")
+    def post_models(body: ModelsBody) -> dict:
+        """获取模型列表:优先用请求体里的(未保存先试),缺省用已存配置。"""
+        cfg = load_llm_config(home)
+        base = (body.base_url or "").strip() or cfg.get("base_url") or DEFAULT_BASE_URL
+        key = (body.api_key or "").strip() or cfg.get("api_key", "")
+        if not key:
+            return {"ok": False, "error": "未提供密钥:先在密钥框粘贴,再获取模型"}
+        try:
+            models = list_models(base, key)
+        except BrainUnavailable as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "models": [{
+            "id": m["id"],
+            "vision": bool(m.get("supports_vision")),
+            "tools": bool(m.get("supports_tools")),
+            "reasoning": bool(m.get("supports_reasoning")),
+            "context_length": m.get("context_length"),
+            "price_in": m.get("effective_input_price_per_million"),
+            "price_out": m.get("effective_output_price_per_million"),
+            "currency": m.get("currency", ""),
+        } for m in models]}
+
+    @router.post("/test")
+    def post_test(body: TestBody) -> dict:
+        """连通性测试。chat:单次 JSON 补全;vision:内置小图流式识别
+        (识图必须流式 —— 接入方约束,provider.describe_image_stream 强制)。"""
+        cfg = load_llm_config(home)
+        t0 = time.monotonic()
+        if body.kind == "vision":
+            route = vision_route_from_config(home)
+            if body.model and cfg.get("base_url") and cfg.get("api_key"):
+                route = LLMRoute(cfg["base_url"].rstrip("/"), cfg["api_key"],
+                                 body.model)
+            if route is None:
+                return {"ok": False, "error": "未配置识图模型:先保存 vision_model"}
+            try:
+                reply = describe_image_stream(
+                    route, prompt="这张图片主要是什么颜色?只答颜色名。",
+                    image_data_url=_tiny_png_data_url(), max_tokens=64)
+            except BrainUnavailable as exc:
+                return {"ok": False, "model": route.model, "error": str(exc)}
+            return {"ok": True, "model": route.model, "kind": "vision",
+                    "latency_ms": int((time.monotonic() - t0) * 1000),
+                    "reply": reply[:120]}
+        routes = routes_from_config(home)
+        if body.model and cfg.get("base_url") and cfg.get("api_key"):
+            routes = [LLMRoute(cfg["base_url"].rstrip("/"), cfg["api_key"],
+                               body.model)]
+        if not routes:
+            return {"ok": False, "error": "未配置对话模型:先保存 base_url/密钥/chat_model"}
+        provider = LLMProvider(routes)
+        try:
+            # max_tokens 给足:推理型模型(deepseek/glm 等)先产思维链再产正文,
+            # 32 会在正文前就撞上限触发 BrainTruncated(2026-08-13 实测)
+            data = provider.complete_json(
+                system="你是连通性探针。只输出 JSON。",
+                user='原样返回 {"ok": true}', max_tokens=2048)
+        except BrainUnavailable as exc:
+            return {"ok": False, "model": routes[0].model, "error": str(exc)}
+        return {"ok": bool(data.get("ok") is True), "model": routes[0].model,
+                "kind": "chat",
+                "latency_ms": int((time.monotonic() - t0) * 1000),
+                "reply": str(data)[:120]}
+
+    return router

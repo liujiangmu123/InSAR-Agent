@@ -36,6 +36,9 @@ from starlette.datastructures import MutableHeaders
 
 from insar_agent.api.admin_router import create_admin_router
 from insar_agent.api.artifacts_router import create_artifacts_router
+from insar_agent.api.diag_router import create_diag_router
+from insar_agent.api.doctor_router import create_doctor_router
+from insar_agent.api.queue_router import create_queue_router
 from insar_agent.api.setup_router import create_setup_router
 from insar_agent.api.skills_router import router as skills_router
 from insar_agent.api.version_router import router as version_router
@@ -48,6 +51,7 @@ from insar_agent.core.ledger import export_provenance
 from insar_agent.core.stale import preview_change
 from insar_agent.core.store import DELIVER_AS, Store
 from insar_agent.loop.driver import Driver
+from insar_agent.loop.queue import QueueScheduler, RunQueue
 from insar_agent.planner.feasibility import narrow_methods
 from insar_agent.planner.plan import fork_run
 from insar_agent.registry.capabilities import PIPELINE, REGISTRY
@@ -97,10 +101,16 @@ _SIDECAR_MAX_BYTES = 64 * 1024
 
 # ---------------- 安全响应头与 CSP(第二轮加固,AUDIT-security-r2-2026-08-13) ----------------
 
-#: 静态 UI 的 CSP 公共骨架:资源一律同源(img/connect/font 等未列指令回落
+#: 静态 UI 的 CSP 公共骨架:资源一律同源(img/font 等未列指令回落
 #: default-src 'self':UI 的 API_BASE=''、CSS 零外链、无 data:/blob: 引用,
 #: 均经 grep 实证),并关闭 object / base 篡改 / 被嵌入 / 表单外发四个面。
-_CSP_BASE = ("default-src 'self'; object-src 'none'; base-uri 'none'; "
+#: connect-src 额外放行 Tauri IPC 通道(ipc: 与 http://ipc.localhost):桌面壳
+#: 的 invoke 首选 fetch 型 IPC,缺此项会命中 CSP 拦截→回退 postMessage(功能
+#: 不破但每页首个 invoke 多一次失败往返 + 控制台告警,desktop/ALIGNMENT-2026-08-13
+#: 实证);浏览器侧对未知 scheme 直接忽略,无副作用。
+_CSP_BASE = ("default-src 'self'; "
+             "connect-src 'self' ipc: http://ipc.localhost; "
+             "object-src 'none'; base-uri 'none'; "
              "form-action 'self'; frame-ancestors 'none'")
 
 #: 未在启动扫描表内的 HTML(理论上不存在:表按落盘文件生成)给最严格兜底
@@ -365,22 +375,34 @@ def create_app(home: Path | None = None) -> FastAPI:
         return JSONResponse(status_code=422, content=safe)
 
     app.include_router(create_setup_router(home))  # 环境向导(/api/setup/*,settings.json 与 DB 同目录)
+    from insar_agent.api.llm_router import create_llm_router; app.include_router(create_llm_router(home))  # LLM 密钥/模型配置
     app.include_router(version_router)             # 版本信息与更新检查(/api/version*)
     app.include_router(skills_router)              # 步骤技能文档(/api/skills*,规划/分诊知识源)
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
     app.include_router(create_artifacts_router(store))  # 产物清单(/api/artifacts,文件面板数据源)
+    app.include_router(create_doctor_router(home))  # 一键体检(/api/doctor,面向排障的秒级只读深检)
     from insar_agent.api.data_router import create_data_router; app.include_router(create_data_router(store))  # 点位时序数据
+    app.include_router(create_diag_router(home))  # 诊断包一键导出(/api/diagnostics*)
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
         with drivers_lock:
             if session_id not in drivers:
                 ws = home / "sessions" / session_id
+                # LLM 路由:workspace/llm.json(界面可配)优先,环境变量兜底;
+                # 都未配置 = brain 禁用,系统退化为手动流水线(§3.5 铁律)
+                from insar_agent.brain.llm_config import routes_from_config
                 drivers[session_id] = Driver(
-                    store, workspace=ws, brain=Brain(LLMProvider()),
+                    store, workspace=ws,
+                    brain=Brain(LLMProvider(routes_from_config(home))),
                     allow_simulated=os.environ.get("INSAR_ALLOW_SIMULATED", "1") == "1")
                 store.create_session(session_id, session_id)
             return drivers[session_id]
+
+    # 运行队列:全局串行调度(并发=1,对齐本机重计算管控),startup 恢复 pending
+    run_queue = RunQueue(store)
+    QueueScheduler(run_queue, driver_of).install(app)
+    app.include_router(create_queue_router(store, run_queue, driver_of))
 
     # 回合泵任务的强引用(asyncio 只弱引用 task,不留强引用会被 GC 掐断)
     turn_tasks: set[asyncio.Task] = set()
@@ -448,9 +470,17 @@ def create_app(home: Path | None = None) -> FastAPI:
         return {"ok": True, "version": app.version}
 
     @app.get("/api/sessions")
-    def sessions(include_archived: bool = False):
+    def sessions(include_archived: bool = False,
+                 limit: int | None = Query(None, ge=1, le=1000),
+                 cursor: str | None = None, q: str | None = None):
         # 默认不含已归档(软删除的「列表不显示」);?include_archived=1 给
         # 前端「已归档」折叠组当数据源
+        if limit is not None or cursor is not None or q is not None:
+            try:  # 分页/过滤路径(键集游标);带 limit 才有 next_cursor;坏 cursor → 400
+                page = store.list_sessions_page(limit, cursor, include_archived, q)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
+            return page if limit is not None else page["items"]
         return store.list_sessions(include_archived=include_archived)
 
     @app.post("/api/sessions")
@@ -591,7 +621,8 @@ def create_app(home: Path | None = None) -> FastAPI:
         }
 
     @app.get("/api/runs")
-    def runs(session: str):
+    def runs(session: str, limit: int | None = Query(None, ge=1, le=1000),
+             cursor: str | None = None, status: str | None = None):
         """该会话的 run 清单(前端 run 历史切换器的数据源,轻量窄集)。
 
         - 归属口径同 resolve_run:只列属于该会话的 run,不泄露其他会话的
@@ -601,9 +632,17 @@ def create_app(home: Path | None = None) -> FastAPI:
         - 每条附 parent_run_id(fork 谱系)与步骤终态统计
           (total|done|skipped|failed),不含 intent/tool_versions 等大字段。
         - 纯读端点:不走 driver_of,不为未知会话创建目录/会话行。
+        - 可选 limit/cursor/status 走键集分页/过滤(store.list_runs_page);
+          全不传时与老响应逐字节一致,next_cursor 字段仅在带 limit 时出现。
         """
+        page = None
+        if limit is not None or cursor is not None or status is not None:
+            try:  # 分页/过滤路径(键集游标);坏 cursor → 400
+                page = store.list_runs_page(session, limit, cursor, status)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
         items = []
-        for run in store.list_runs(session):
+        for run in (page["items"] if page is not None else store.list_runs(session)):
             steps = store.load_steps(run["run_id"])
             counts = {"done": 0, "skipped": 0, "failed": 0}
             for s in steps:
@@ -617,7 +656,8 @@ def create_app(home: Path | None = None) -> FastAPI:
                 "scenario": run["scenario"],
                 "steps": {"total": len(steps), **counts},
             })
-        return {"session": session, "runs": items}
+        extra = {"next_cursor": page["next_cursor"]} if limit is not None else {}
+        return {"session": session, "runs": items, **extra}
 
     @app.get("/api/state")
     def state(session: str, run_id: str | None = None):
@@ -843,10 +883,17 @@ def create_app(home: Path | None = None) -> FastAPI:
         })
 
     @app.get("/api/trace")
-    def trace(session: str, run_id: str | None = None):
+    def trace(session: str, run_id: str | None = None,
+              limit: int | None = Query(None, ge=1, le=1000), cursor: str | None = None):
         run = resolve_run(session, run_id, required=False)
         if run is None:
-            return []
+            return [] if limit is None else {"items": [], "next_cursor": None}
+        if limit is not None or cursor is not None:
+            try:  # 事件回放分页(键集游标);带 limit 才有 next_cursor;坏 cursor → 400
+                page = store.events_page(run["run_id"], limit, cursor)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
+            return page if limit is not None else page["items"]
         return store.trace_of(run["run_id"])
 
     @app.get("/api/logs")

@@ -1,0 +1,116 @@
+/* ============================================================
+   计划 diff 卡(js/plandiff.js)
+   全部取色复用 tokens.css 设计令牌,且只用 check_a11y_contrast.py
+   审计清单里的「前景 × 背景」组合 —— 深浅主题 AA 由令牌层保证:
+     文本   --text / --text-2 / --text-3  于 --bg(-sub/-mute)
+     徽章   --accent-text/--accent-weak · --ok-text/--ok-weak
+            --stale-text/--stale-weak   · --bad-text/--bad-weak
+   动效尊重 prefers-reduced-motion(tokens.css 全局降级块)。
+   ============================================================ */
+
+/* ---- 卡体:与 .result / .plan 同一族的流内卡片 ---- */
+.plandiff {
+  border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--surface); overflow: hidden; box-shadow: var(--sh-1);
+}
+.plandiff .hd {
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 12px; border-bottom: 1px solid var(--border);
+  font-weight: 600; font-size: 13px; color: var(--text);
+}
+/* icon() 不带尺寸属性,必须显式约束(否则按替换元素固有尺寸撑满卡片) */
+.plandiff .hd svg { width: 15px; height: 15px; flex-shrink: 0; color: var(--accent) }
+.plandiff .hd .sub {
+  font-size: var(--fs-xs); color: var(--text-3); font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 一句人话总结 ---- */
+.plandiff .pd-sum {
+  margin: 0; padding: 8px 12px 0; font-size: var(--fs-sm);
+  color: var(--text-2); overflow-wrap: anywhere;
+}
+
+/* ---- 紧凑表格:步骤号 / 能力 / 方法 / 变化徽章 ---- */
+.plandiff .bd { padding: 8px 12px 10px }
+.pd-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm) }
+.pd-table th {
+  text-align: left; font-weight: 600; font-size: var(--fs-xs);
+  color: var(--text-3); padding: 3px 8px 5px; border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.pd-table td {
+  padding: 4px 8px; border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.pd-table tr:last-child td { border-bottom: none }
+.pd-row { cursor: pointer; transition: background .12s }
+.pd-row:hover { background: var(--bg-sub) }
+.pd-row .no {
+  font-family: var(--mono); color: var(--text-3);
+  font-variant-numeric: tabular-nums; width: 26px;
+}
+.pd-row .nm { color: var(--text); min-width: 0 }
+.pd-row .mth {
+  font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.pd-row .chg { white-space: nowrap; text-align: right }
+
+/* 变化行高亮:失效橙左边条 + 弱底(语义 = 本行相对上次计划有变) */
+.pd-row.is-changed { background: var(--stale-weak); box-shadow: inset 2px 0 0 var(--stale) }
+.pd-row.is-changed:hover { background: var(--stale-weak) }
+.pd-row.is-changed .nm, .pd-row.is-changed .mth { color: var(--stale-text) }
+/* 方法变更:旧值删除线灰,新值加重 */
+.pd-row .pd-old { color: var(--text-3); text-decoration: line-through }
+.pd-row .pd-new { color: var(--stale-text); font-weight: 700 }
+/* 参数变更明细(逐键 from → to) */
+.pd-row .pd-sub {
+  margin-top: 2px; font-family: var(--mono); font-size: var(--fs-xs);
+  color: var(--stale-text); overflow-wrap: anywhere;
+}
+/* 被移除的步骤:整行弱化 + 删除线,不可点击 */
+.pd-row.is-removed { cursor: default; color: var(--text-3) }
+.pd-row.is-removed .nm { color: var(--text-3); text-decoration: line-through }
+
+/* ---- 变化徽章(色 + 文字双通道,色盲可读) ---- */
+.pd-tag {
+  display: inline-block; margin-left: 4px; padding: 1px 7px;
+  border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 600;
+  border: 1px solid var(--border); background: var(--bg-mute); color: var(--text-3);
+}
+.pd-tag.k-added, .pd-tag.k-run {
+  background: var(--accent-weak); border-color: var(--accent-border); color: var(--accent-text);
+}
+.pd-tag.k-cache {
+  background: var(--ok-weak); border-color: var(--ok-border); color: var(--ok-text);
+}
+.pd-tag.k-method, .pd-tag.k-params, .pd-tag.k-rerun {
+  background: var(--stale-weak); border-color: var(--stale-border); color: var(--stale-text);
+}
+.pd-tag.k-removed {
+  background: var(--bad-weak); border-color: var(--bad-border); color: var(--bad-text);
+}
+/* k-skip / k-skipped 保持缺省灰(--text-3 于 --bg-mute,审计过的小徽标组合) */
+
+.plandiff .pd-hint {
+  margin: 6px 0 0; font-size: var(--fs-xs); color: var(--text-3);
+}
+
+/* ---- 「为什么有流水线」一次性说明 ---- */
+.pd-why { border-top: 1px solid var(--border); background: var(--bg-sub) }
+.pd-why > summary {
+  display: flex; align-items: flex-start; gap: 6px;
+  padding: 8px 12px; cursor: pointer; list-style: none; user-select: none;
+  font-size: var(--fs-xs); color: var(--text-2);
+}
+.pd-why > summary::-webkit-details-marker { display: none }
+.pd-why > summary:hover { background: var(--bg-mute) }
+.pd-why .cv { color: var(--text-3); transition: transform .18s; display: flex; margin-top: 1px }
+.pd-why .cv svg { width: 12px; height: 12px }
+.pd-why[open] > summary .cv { transform: rotate(90deg) }
+.pd-why .why-line { flex: 1; min-width: 0 }
+.pd-why .why-bd { padding: 0 12px 10px 30px }
+.pd-why .why-bd p {
+  margin: 0 0 6px; font-size: var(--fs-xs); color: var(--text-2); line-height: 1.6;
+}

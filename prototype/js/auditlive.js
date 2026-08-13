@@ -20,6 +20,7 @@ import { h, icon } from './dom.js';
 import { S } from './state.js';
 import { demoBanner, fetchEnvLive, thresholdSourceLabel } from './envlive.js';
 import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
+import * as ES from './emptystate.js';          // states 接入:骨架统一构造器
 
 export { demoBanner };   // 演示回落横幅:与 env 面板同款样式,由 auditView 复用
 
@@ -258,26 +259,14 @@ export function renderLive(data, { onRefresh, gotoStep } = {}) {
   ];
 }
 
-/** 骨架屏:证据链到达前的占位(与 envlive.skeleton 同风格,区段贴审计面板)。 */
+/** 骨架屏:证据链到达前的占位。states 接入:委托统一构造器(微光 + reduced-motion 降级)。 */
 export function skeleton() {
-  const bar = (w) => h('div', {
-    'aria-hidden': 'true',
-    style: {
-      height: '11px', width: w, borderRadius: '4px',
-      background: 'var(--border-strong)', opacity: '.35',
-    },
-  });
-  const card = (...bars) => h('div', {
-    class: 'envcard',
-    style: { display: 'grid', gap: '11px', padding: '12px' },
-  }, ...bars);
-
   return h('div', { 'aria-busy': 'true', 'aria-label': '正在读取证据链' },
     h('h3', { class: 'sect' }, '六级证据阶梯'),
-    card(bar('92%'), bar('58%')),
+    ES.renderSkeleton(null, { kind: 'list', rows: 2, label: '正在读取证据阶梯' }),
     h('h3', { class: 'sect' }, '每步证据来源'),
-    card(bar('84%'), bar('76%'), bar('88%'), bar('63%')),
+    ES.renderSkeleton(null, { kind: 'list', rows: 4, label: '正在读取每步证据来源' }),
     h('h3', { class: 'sect' }, '质量门阈值台账'),
-    card(bar('88%'), bar('71%'), bar('80%')),
+    ES.renderSkeleton(null, { kind: 'list', rows: 3, label: '正在读取阈值台账' }),
     h('p', { class: 'blurb' }, '正在读取证据链(GET /api/provenance + GET /api/env)…'));
 }
