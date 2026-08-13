@@ -52,4 +52,5 @@
 }
 
 #btnLlmSettings { display: inline-flex; align-items: center; gap: 5px; }
-@media (max-width: 900px) { #btnLlmSettings .lbl { display: none; } }
+/* 抽屉档(--bp-dock-drawer)以下顶栏变挤:齿轮按钮只留图标 */
+@media (max-width: 1240px) { #btnLlmSettings .lbl { display: none; } }

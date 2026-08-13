@@ -97,10 +97,16 @@ _SIDECAR_MAX_BYTES = 64 * 1024
 
 # ---------------- 安全响应头与 CSP(第二轮加固,AUDIT-security-r2-2026-08-13) ----------------
 
-#: 静态 UI 的 CSP 公共骨架:资源一律同源(img/connect/font 等未列指令回落
+#: 静态 UI 的 CSP 公共骨架:资源一律同源(img/font 等未列指令回落
 #: default-src 'self':UI 的 API_BASE=''、CSS 零外链、无 data:/blob: 引用,
 #: 均经 grep 实证),并关闭 object / base 篡改 / 被嵌入 / 表单外发四个面。
-_CSP_BASE = ("default-src 'self'; object-src 'none'; base-uri 'none'; "
+#: connect-src 额外放行 Tauri IPC 通道(ipc: 与 http://ipc.localhost):桌面壳
+#: 的 invoke 首选 fetch 型 IPC,缺此项会命中 CSP 拦截→回退 postMessage(功能
+#: 不破但每页首个 invoke 多一次失败往返 + 控制台告警,desktop/ALIGNMENT-2026-08-13
+#: 实证);浏览器侧对未知 scheme 直接忽略,无副作用。
+_CSP_BASE = ("default-src 'self'; "
+             "connect-src 'self' ipc: http://ipc.localhost; "
+             "object-src 'none'; base-uri 'none'; "
              "form-action 'self'; frame-ancestors 'none'")
 
 #: 未在启动扫描表内的 HTML(理论上不存在:表按落盘文件生成)给最严格兜底
