@@ -141,7 +141,16 @@ export function renderHero(onPick, onDemoEvents = null) {
         '带参数级失效检测、完整证据链、步骤级断点续跑，直接产出论文级图表与方法章节。'),
       h('div', { class: 'chips' },
         ...prompts.map((p) => h('button', {
-          class: 'chip', type: 'button', onclick: () => onPick(p.text),
+          class: 'chip', type: 'button',
+          // states 接入:聊天空态引导卡 —— 示例任务点击只填充输入框、不自动发送,
+          // 用户看清并可改写后再回车;不经 onPick(其回调会立即 submit)。
+          onclick: () => {
+            const inp = document.getElementById('prompt');
+            if (!inp) { onPick(p.text); return; }   // 输入框缺失(非常规宿主)回落旧行为
+            inp.value = p.text;
+            inp.dispatchEvent(new Event('input', { bubbles: true }));   // 让发送键启用/高度自适应
+            inp.focus();
+          },
           title: p.ready ? '有真实数据（11 个 HyP3 干涉对）' : '数据待获取，仅演示决策流程',
         }, p.text,
            h('span', { class: `dot-tag ${p.ready ? 'ok' : 'wait'}` },

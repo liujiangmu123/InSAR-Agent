@@ -13,6 +13,7 @@ import { galleryView } from './gallery.js';
 import { ENV_NOTE, WSL, WORKSPACE, ENGINES, DISKS, TERM_LOGS, cmdSh, TRACE } from './envdata.js';
 import * as API from './backend.sse.js';   // 面板 7/8 实时数据；离线时各视图回落演示数据
 import * as RS from './runswitch.js';       // run 历史切换器(仅流水线面板顶部挂载)
+import * as ES from './emptystate.js';      // states 接入:空态/骨架/错误态统一构造器(零依赖)
 
 const TABS = [
   { id: 'pipeline', label: '流水线', ic: 'list' },
@@ -454,8 +455,8 @@ function filesView() {
      后端不可达 → 回落 fileTree() 演示派生并顶部醒目标注「演示数据」。
      fileslive.js 走动态 import，不新增模块级 import（同 envView 做法，
      与并行分支的 dock.js 改动解耦）。 */
-  const root = h('div', null,
-    h('p', { class: 'blurb' }, '正在读取产物清单（GET /api/artifacts）…'));
+  const root = h('div', null,   // states 接入:请求中分支 → 树形骨架(fileslive 动态 import 前的首帧)
+    ES.renderSkeleton(null, { kind: 'tree', rows: 6, label: '正在读取产物清单（GET /api/artifacts）' }));
 
   // ---- 演示回落：原 fileTree() 派生树原样保留，仅加顶部横幅 ----
   const demoBody = (FILES) => {
@@ -556,8 +557,8 @@ function auditView() {
      无 run(404)/后端不可达 → 回落本地演示渲染并顶部醒目标注「演示数据」
      (横幅与 env 面板同款)。auditlive.js 走动态 import,不新增模块级
      import(与并行分支的 dock.js 改动解耦)。 */
-  const root = h('div', null,
-    h('p', { class: 'blurb' }, '正在读取证据链(GET /api/provenance)…'));
+  const root = h('div', null,   // states 接入:请求中分支 → 列表骨架(auditlive 动态 import 前的首帧)
+    ES.renderSkeleton(null, { kind: 'list', rows: 6, label: '正在读取证据链(GET /api/provenance)' }));
 
   // ---- 演示回落:state.js 本地演示逻辑(仅离线/无 run 时展示) ----
   const demoBody = (AUD) => {
@@ -664,8 +665,8 @@ function reportView() {
      Blob 下载；草稿里的〔prov-N〕可溯引用渲染为特殊样式（.cite）。
      无 run（404）/ 后端不可达 → 回落原静态演示草稿 + 「演示数据」横幅。
      reportlive.js 走动态 import，不新增模块级 import（与并行分支解耦）。 */
-  const root = h('div', null,
-    h('p', { class: 'blurb' }, '正在获取方法草稿（GET /api/methods.md）…'));
+  const root = h('div', null,   // states 接入:请求中分支 → 段落骨架(报告面板此前只有一行裸文本)
+    ES.renderSkeleton(null, { kind: 'text', rows: 7, label: '正在获取方法草稿（GET /api/methods.md）' }));
 
   // ---- 演示回落：原静态草稿（数字为示意值），顶部醒目标注 ----
   const demoBody = (RPT) => [
@@ -1118,8 +1119,8 @@ function envView() {
 const termLive = { step: null, filter: '' };
 
 function termView() {
-  const body = h('div', null,
-    h('p', { class: 'blurb' }, '正在读取运行状态（GET /api/state）…'));
+  const body = h('div', null,   // states 接入:请求中分支 → 段落骨架(等待 /api/state)
+    ES.renderSkeleton(null, { kind: 'text', rows: 5, label: '正在读取运行状态（GET /api/state）' }));
   /* 后端可达 → loadTermView 沿用实时路径（/api/state 选步骤 + /api/logs 读日志）；
      不可达 → 回落 envdata.js 的 TERM_LOGS 演示日志，顶部醒目标注「演示数据」。
      state 有 3 秒短缓存（cachedFetch），紧随其后的 loadTermView 同键读取直接复用。 */
@@ -1144,10 +1145,11 @@ async function loadTermView(body) {
   if (!body.isConnected) return;                      // 面板已切走/重渲染，丢弃过期结果
   if (state === null) { body.replaceChildren(termDemoView()); return; }
   if (!state.steps?.length) {
-    body.replaceChildren(h('div', null,
+    body.replaceChildren(h('div', null,   // states 接入:无数据分支 → 空态卡 + 既有运行入口(自定义事件解耦)
       h('h3', { class: 'sect' }, '终端 · 步骤日志（服务端）'),
-      h('div', { class: 'fview' }, h('div', { class: 'empty' },
-        '本会话还没有运行记录 —— 发起一次执行后，每步日志（log_path 尾部）在此可读。'))));
+      ES.renderEmpty(null, { icon: 'terminal', title: '还没有运行记录',
+        hint: '运行一次流水线即可生成——每步日志（log_path 尾部）在此可读、可过滤。',
+        action: { label: '运行流水线', event: 'states:run-pipeline' } })));
     return;
   }
   body.replaceChildren(termLiveView(state));
@@ -1207,12 +1209,15 @@ function termLiveView(state) {
       () => API.fetchLogs(termLive.step, { runId }));
     if (!logBox.isConnected) return;
     if (log === null) {
-      logBox.replaceChildren(h('span', { class: 'tl is-warn' }, '后端不可达，无法读取日志。'));
+      // states 接入:catch/不可达分支 → 错误态(必带重试:清该步日志缓存后重渲染)
+      logBox.replaceChildren(ES.renderError(null, { message: '日志读取失败——后端不可达或响应异常。',
+        retry: () => { liveCache.delete(`logs:${S.sessionId}:${runId}:${termLive.step}`); refresh(); } }));
       return;
     }
     if (log.missing) {
-      logBox.replaceChildren(h('span', { class: 'tl is-dim' },
-        '该步骤暂无日志文件（未执行过，或日志已被清理）—— /api/logs 返回 404。'));
+      // states 接入:无数据分支 → 空态卡(该步未执行过,/api/logs 404)
+      logBox.replaceChildren(ES.renderEmpty(null, { icon: 'terminal', title: '这一步还没有日志',
+        hint: '执行过该步骤即可生成——日志文件（log_path）落盘后在此可读；也可能已被清理。' }));
       meta.textContent = '0 行';
       return;
     }
@@ -1393,8 +1398,8 @@ function issueTemplate(stepId, lines) {
    后端不可达 → 回落 envdata.js 演示轨迹。
    ============================================================ */
 function traceView() {
-  const body = h('div', null,
-    h('p', { class: 'blurb' }, '正在读取轨迹（GET /api/trace）…'));
+  const body = h('div', null,   // states 接入:请求中分支 → 列表骨架(等待 /api/trace)
+    ES.renderSkeleton(null, { kind: 'list', rows: 6, label: '正在读取轨迹（GET /api/trace）' }));
   loadTraceView(body);
   return body;
 }
@@ -1464,9 +1469,10 @@ function traceLiveView(rows) {
         class: 'btn btn-gho btn-sm', type: 'button', 'aria-label': '刷新轨迹',
         onclick: () => { liveCache.delete(`trace:${S.sessionId}`); refresh(); },
       }, icon('refresh'), '刷新')),
-    rows.length ? table : h('div', { class: 'fview' },
-      h('div', { class: 'empty' },
-        '本会话还没有轨迹记录 —— 发起一次规划/执行后，每一步的 phase / action / error 在此可审。')),
+    // states 接入:无数据分支 → 空态卡 + 既有运行入口(自定义事件解耦)
+    rows.length ? table : ES.renderEmpty(null, { icon: 'trace', title: '还没有轨迹记录',
+      hint: '发起一次规划或执行即可生成——每一步的 phase / action / error 在此可审。',
+      action: { label: '运行流水线', event: 'states:run-pipeline' } }),
     h('p', { class: 'blurb' },
       'schema 对齐 OpenDiscoveryTrace：step_no / phase / action / error / revision_trigger。' +
       '悬停行可见 thought 与 observation；导出 JSON 含全部字段。'));

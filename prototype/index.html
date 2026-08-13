@@ -21,10 +21,12 @@
 <link rel="stylesheet" href="css/doctorpanel.css">
 <link rel="stylesheet" href="css/bridge.css">
 <link rel="stylesheet" href="css/slash.css">
+<link rel="stylesheet" href="css/states.css">
 <script type="module">
   // 桌面/首启增强:环境向导(后端就绪则静默)+ 窗口标题状态同步;均安全降级
   import('./js/setup.js').then((m) => m.maybeShowSetupWizard()).catch(() => {});
   import('./js/titlebar.js').then((m) => m.initTitleSync()).catch(() => {});
+  import('./js/emptystate.js').then((m) => m.watchSessionsEmpty()).catch(() => {});   // states 接入:会话列表空态守望
 </script>
 </head>
 <body>

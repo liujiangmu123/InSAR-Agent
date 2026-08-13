@@ -18,6 +18,7 @@
 import { h, icon, toast } from './dom.js';
 import { S } from './state.js';
 import { timeSeriesSvg, mapSvg, POINTS, DATES } from './figures.js';
+import * as ES from './emptystate.js';   // states 接入:空态/骨架统一构造器
 
 /* ---------------- 纯函数(Node 单测直接可跑,零 DOM 依赖) ---------------- */
 
@@ -352,7 +353,8 @@ function tsCard(host) {
     return h('div', { class: 'tscard', dataset: { mode: 'loading' } },
       h('div', { class: 'hd' }, '点位时序',
         h('span', { class: 'mono' }, 'GET /api/timeseries-point')),
-      h('p', { class: 'blurb' }, '正在探测真实时序产物…'));
+      // states 接入:请求中分支 → 段落骨架(探测真实时序产物期间)
+      ES.renderSkeleton(null, { kind: 'text', rows: 3, label: '正在探测真实时序产物' }));
   }
   return T.real ? realCard(host) : demoCard();
 }
@@ -367,9 +369,10 @@ function realCard() {
   if (!T.curves.length) {
     return h('div', { class: 'tscard', dataset: { mode: 'real' } },
       head(T.grid.source || ''),
-      h('p', { class: 'blurb' },
-        '点击左侧小地图任意位置,读取该像元的真实时序曲线(MintPy ' +
-        (T.grid.source || 'timeseries*.h5') + ');Shift+点击叠加至多 3 条对比。'));
+      // states 接入:无数据分支 → 空态卡(真实模式已就绪,引导选点)
+      ES.renderEmpty(null, { icon: 'target', title: '还没有选择点位',
+        hint: '点击上方小地图任意位置即可生成——读取该像元的真实时序曲线(MintPy ' +
+          (T.grid.source || 'timeseries*.h5') + ');Shift+点击叠加至多 3 条对比。' }));
   }
 
   const named = T.curves.map((c, i) => ({ ...c, name: `P${i + 1}`, color: COLORS[i] }));
