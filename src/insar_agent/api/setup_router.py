@@ -152,8 +152,7 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
         # WSL 执行(runtime/backend_select),宿主 PATH 探测不到 ≠ 系统跑不了——
         # 2026-08-12 用户实测反馈:snaphu/pyaps 明明在 WSL 里有,向导却报"未探测到"
         try:
-            from insar_agent.runtime.wsl_probe import (merge_wsl_probe,
-                                                       probe_wsl_engines_cached)
+            from insar_agent.runtime.wsl_probe import merge_wsl_probe, probe_wsl_engines_cached
 
             # 实测探测约 20s:带 TTL 缓存,首次付全价,之后秒回(与 /api/env 共享)。
             # force=1(向导「重新检测」)穿透缓存强制重探:用户刚在 WSL 里装完引擎,
@@ -211,9 +210,13 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
                 "engine_prefix", True,
                 f"自动发现引擎环境:{discovered_prefix}(未固化,建议保存)")
         elif engines_ok:
+            # 2026-08-13 隐式 conda 回退(probe.py _implicit_engine_prefix)落地后,
+            # 引擎可能来自 PATH、已知 conda 安装位扫描或 WSL 兜底 —— 措辞不再断言
+            # 只来自 PATH(具体来源看下方引擎检查行:present / present(<env>) / *(wsl))
             prefix_check = _check(
                 "engine_prefix", True,
-                "未配置 INSAR_ENGINE_PREFIX,但 PATH 中已能探测到 mintpy/gdal")
+                "未配置 INSAR_ENGINE_PREFIX,但已探测到可用的 mintpy/gdal"
+                "(来源见下方引擎检查行:PATH / 已知 conda 安装位 / WSL)")
         else:
             prefix_check = _check(
                 "engine_prefix", False, "未配置引擎环境(INSAR_ENGINE_PREFIX)",
@@ -225,8 +228,11 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
         # ASF 在线检索路线都不依赖本地 HyP3 目录。配置了但路径/内容有问题时仍
         # 如实报错(用户显然想用它,坏配置不该沉默)。
         if source and source_exists and pair_count > 0:
+            # required 恒为 False:可选是检查项的属性,不随好/坏状态翻转(好状态下
+            # 标 required=True 虽因 ok=True 不影响 ready,但前端按 required 分组展示)
             data_check = _check(
-                "data_source", True, f"数据源:{source}(解缠相位栅格 {pair_count} 个)")
+                "data_source", True, f"数据源:{source}(解缠相位栅格 {pair_count} 个)",
+                required=False)
         elif source and source_exists:
             data_check = _check(
                 "data_source", False,
