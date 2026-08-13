@@ -167,6 +167,12 @@ const {
   classifyEvent, phaseVerdict, createNotifyStore, createNotifySettings,
   relativeTime, dayLabel, createNotifyCenter, initNotifyCenter,
 } = Notify;
+// 会话镜像不再内置演示数据:按服务端 /api/sessions 行的形状播种,
+// 默认 session 提供器(SESSIONS.find)才有名可显
+const St = await import('./js/state.js');
+St.S.sessionId = 'ridgecrest-2019';
+St.setSessions([{ session_id: 'ridgecrest-2019', name: 'Ridgecrest 同震形变',
+                  mode: 'expert', created_at: 1755000000 }]);
 
 /* ============================================================
    A. 收集规则：哪些事件产生通知

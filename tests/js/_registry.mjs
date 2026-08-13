@@ -1,34 +1,20 @@
-﻿/* ============================================================
+/* ============================================================
    注册表夹具 —— GET /api/registry（无 session 探测）载荷的快照。
    由服务端能力声明（src/insar_agent/registry/capabilities.py）生成,
-   与 api/app.py registry() 端点逐字段一致（probe=None 分支）。
+   与 api/app.py registry() 端点逐字段一致（probe=None 分支:
+   ok=True / simulated=False / blocked=""）。
 
    用途:前端测试/校验脚本喂 state.setRegistry(REGISTRY),
    在 Node 里复现「注册表水合后的 STEP_DEFS」——这是真实服务端
-   目录的快照,不是手写演示数据。registry 声明变更后按下方命令重生成。
-
-   重生成（项目根目录,内容替换 REGISTRY 常量）:
-     python - <<'PY'
-     import json, sys; from pathlib import Path
-     sys.path.insert(0, str(Path('src').resolve()))
-     from insar_agent.registry.capabilities import PIPELINE
-     out = [{'id': c.id, 'name': c.name, 'deps': list(c.deps), 'method': c.default_method,
-             'methods': [{'id': m.id, 'label': m.label, 'engine': m.engine, 'why': m.why,
-                          'recommend': m.recommend, 'extra': m.extra,
-                          'ok': True, 'simulated': False, 'blocked': ''} for m in c.methods],
-             'params': {k: {'default': p.default, 'kind': p.kind, 'type': p.type,
-                            'min': p.min, 'max': p.max, 'hint': p.hint} for k, p in c.params.items()},
-             'outputs': [{'path': a.candidates[0], 'kind': a.kind, 'layout': a.layout} for a in c.artifacts],
-             'replay': c.replay, 'timeouts': {'idle': c.timeouts.idle, 'total': c.timeouts.total}}
-            for c in PIPELINE]
-     print(json.dumps(out, ensure_ascii=False, indent=2))
-     PY
+   目录的快照,不是手写演示数据。registry 声明变更后重生成:
+     .venv\Scripts\python scripts\dump_registry_fixture.py
+   （若脚本已删除,按本文件头的字段映射从 capabilities.py 重导即可。）
    ============================================================ */
 export const REGISTRY =
 [
   {
     "id": 1,
-    "name": "鏁版嵁鑾峰彇",
+    "name": "数据获取",
     "deps": [],
     "method": "local_import",
     "methods": [
@@ -36,7 +22,7 @@ export const REGISTRY =
         "id": "asf_search_slc",
         "label": "asf_search_slc",
         "engine": "asf_api",
-        "why": "涓嬭浇鍘熷 SLC,鍙帶鎬ф渶寮?,
+        "why": "下载原始 SLC,可控性最强",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -47,9 +33,9 @@ export const REGISTRY =
         "id": "hyp3_submit",
         "label": "hyp3_submit",
         "engine": "hyp3",
-        "why": "浜戠澶勭悊,璺宠繃 2-6 姝?澶卞幓涓棿浜х墿鎺у埗鏉?,
+        "why": "云端处理,跳过 2-6 步,失去中间产物控制权",
         "recommend": false,
-        "extra": "闇€ ASF 閰嶉",
+        "extra": "需 ASF 配额",
         "ok": true,
         "simulated": false,
         "blocked": ""
@@ -58,7 +44,7 @@ export const REGISTRY =
         "id": "local_import",
         "label": "local_import",
         "engine": "-",
-        "why": "宸叉湁鏈湴鏁版嵁",
+        "why": "已有本地数据",
         "recommend": true,
         "extra": "",
         "ok": true,
@@ -73,7 +59,7 @@ export const REGISTRY =
         "type": "int",
         "min": 2,
         "max": 200,
-        "hint": "鏅暟 2-200"
+        "hint": "景数 2-200"
       },
       "platform": {
         "default": "sentinel-1",
@@ -97,7 +83,7 @@ export const REGISTRY =
         "type": "str",
         "min": null,
         "max": null,
-        "hint": "local_import 鐨勬暟鎹簮鐩綍(HyP3 浜у搧鐩綍鎴?SLC 鐩綍)"
+        "hint": "local_import 的数据源目录(HyP3 产品目录或 SLC 目录)"
       }
     },
     "outputs": [
@@ -125,7 +111,7 @@ export const REGISTRY =
   },
   {
     "id": 2,
-    "name": "杈呭姪鏁版嵁",
+    "name": "辅助数据",
     "deps": [
       1
     ],
@@ -135,7 +121,7 @@ export const REGISTRY =
         "id": "dem_copernicus",
         "label": "dem_copernicus",
         "engine": "dem_service",
-        "why": "Copernicus 30 m,瑕嗙洊鍏ㄧ悆涓旇川閲忕ǔ瀹?,
+        "why": "Copernicus 30 m,覆盖全球且质量稳定",
         "recommend": true,
         "extra": "",
         "ok": true,
@@ -146,7 +132,7 @@ export const REGISTRY =
         "id": "dem_srtm",
         "label": "dem_srtm",
         "engine": "dem_service",
-        "why": "SRTM 30 m,楂樼含搴﹁鐩栫己鍙?,
+        "why": "SRTM 30 m,高纬度覆盖缺口",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -157,7 +143,7 @@ export const REGISTRY =
         "id": "dem_local",
         "label": "dem_local",
         "engine": "-",
-        "why": "浣跨敤鏈湴 DEM 鐡︾墖",
+        "why": "使用本地 DEM 瓦片",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -198,7 +184,7 @@ export const REGISTRY =
   },
   {
     "id": 3,
-    "name": "閰嶅噯",
+    "name": "配准",
     "deps": [
       1,
       2
@@ -209,7 +195,7 @@ export const REGISTRY =
         "id": "isce2_tops_geom_esd",
         "label": "isce2_tops_geom_esd",
         "engine": "isce2",
-        "why": "S1 IW 鏍囧噯璺緞:鍑犱綍閰嶅噯 + ESD 绮惧寲",
+        "why": "S1 IW 标准路径:几何配准 + ESD 精化",
         "recommend": true,
         "extra": "",
         "ok": true,
@@ -220,7 +206,7 @@ export const REGISTRY =
         "id": "isce2_stripmap_xcorr",
         "label": "isce2_stripmap_xcorr",
         "engine": "isce2",
-        "why": "鏉″甫妯″紡(ALOS raw,2026-08 WSL 瀹炴祴鍏ㄩ摼閫氳繃)",
+        "why": "条带模式(ALOS raw,2026-08 WSL 实测全链通过)",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -231,7 +217,7 @@ export const REGISTRY =
         "id": "snap_backgeocoding",
         "label": "snap_backgeocoding",
         "engine": "snap",
-        "why": "璧?SNAP 閾?闇€鎹?layout",
+        "why": "走 SNAP 链,需换 layout",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -246,7 +232,7 @@ export const REGISTRY =
         "type": "number",
         "min": 0,
         "max": 1,
-        "hint": "ESD 鐩稿共闃堝€?0-1"
+        "hint": "ESD 相干阈值 0-1"
       },
       "reference_image": {
         "default": "data/raw/reference/IMG-HH",
@@ -254,7 +240,7 @@ export const REGISTRY =
         "type": "str",
         "min": null,
         "max": null,
-        "hint": "stripmap:鍙傝€?raw 褰卞儚 IMG 鐩稿璺緞"
+        "hint": "stripmap:参考 raw 影像 IMG 相对路径"
       },
       "reference_leader": {
         "default": "data/raw/reference/LED",
@@ -262,7 +248,7 @@ export const REGISTRY =
         "type": "str",
         "min": null,
         "max": null,
-        "hint": "stripmap:鍙傝€冨奖鍍?LED 澶存枃浠剁浉瀵硅矾寰?
+        "hint": "stripmap:参考影像 LED 头文件相对路径"
       },
       "secondary_image": {
         "default": "data/raw/secondary/IMG-HH",
@@ -270,7 +256,7 @@ export const REGISTRY =
         "type": "str",
         "min": null,
         "max": null,
-        "hint": "stripmap:浠?raw 褰卞儚 IMG 鐩稿璺緞"
+        "hint": "stripmap:从 raw 影像 IMG 相对路径"
       },
       "secondary_leader": {
         "default": "data/raw/secondary/LED",
@@ -278,7 +264,7 @@ export const REGISTRY =
         "type": "str",
         "min": null,
         "max": null,
-        "hint": "stripmap:浠庡奖鍍?LED 澶存枃浠剁浉瀵硅矾寰?
+        "hint": "stripmap:从影像 LED 头文件相对路径"
       },
       "resample_flag": {
         "default": "",
@@ -286,7 +272,7 @@ export const REGISTRY =
         "type": "str",
         "min": null,
         "max": null,
-        "hint": "stripmap:FBD 浠庡奖鍍忛厤 FBS 涓诲奖鍍忔椂鐢?dual2single,绌?涓嶉噸閲囨牱"
+        "hint": "stripmap:FBD 从影像配 FBS 主影像时用 dual2single,空=不重采样"
       },
       "dem_path": {
         "default": "data/dem/dem.wgs84",
@@ -294,7 +280,7 @@ export const REGISTRY =
         "type": "str",
         "min": null,
         "max": null,
-        "hint": "stripmap:ISCE 鏍煎紡 DEM 鐩稿璺緞"
+        "hint": "stripmap:ISCE 格式 DEM 相对路径"
       },
       "threads": {
         "default": 8,
@@ -302,7 +288,7 @@ export const REGISTRY =
         "type": "int",
         "min": 1,
         "max": 32,
-        "hint": "绾跨▼鏁?1-32(鏈満 24 鏍?鐣?4 鏍哥粰绯荤粺)"
+        "hint": "线程数 1-32(本机 24 核,留 4 核给系统)"
       }
     },
     "outputs": [
@@ -320,7 +306,7 @@ export const REGISTRY =
   },
   {
     "id": 4,
-    "name": "骞叉秹",
+    "name": "干涉",
     "deps": [
       3
     ],
@@ -330,7 +316,7 @@ export const REGISTRY =
         "id": "isce2_ifg_multilook",
         "label": "isce2_ifg_multilook",
         "engine": "isce2",
-        "why": "鍙皟澶氳姣斻€傚皬鍩虹嚎缃戠粶鎸夋椂绌哄熀绾垮壀鏋?闈炲叏缁勫悎",
+        "why": "可调多视比。小基线网络按时空基线剪枝,非全组合",
         "recommend": true,
         "extra": "",
         "ok": true,
@@ -341,7 +327,7 @@ export const REGISTRY =
         "id": "snap_interferogram",
         "label": "snap_interferogram",
         "engine": "snap",
-        "why": "SNAP 閾惧搴旀楠?,
+        "why": "SNAP 链对应步骤",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -352,9 +338,9 @@ export const REGISTRY =
         "id": "isce2_stripmap_ifg",
         "label": "isce2_stripmap_ifg",
         "engine": "isce2",
-        "why": "鏉″甫閾惧共娑?stripmapApp 鍒嗛璋扁啋骞叉秹鈫掓护娉㈡(ALOS raw)",
+        "why": "条带链干涉:stripmapApp 分频谱→干涉→滤波段(ALOS raw)",
         "recommend": false,
-        "extra": "瀹炴祴(ALOS Baja):闃舵1 startup鈫抐ilter 绾?20 min;鍏ㄩ摼 33 min/32 GB",
+        "extra": "实测(ALOS Baja):阶段1 startup→filter 约 20 min;全链 33 min/32 GB",
         "ok": true,
         "simulated": false,
         "blocked": ""
@@ -367,7 +353,7 @@ export const REGISTRY =
         "type": "int",
         "min": 1,
         "max": 40,
-        "hint": "璺濈鍚戝瑙?1-40"
+        "hint": "距离向多视 1-40"
       },
       "azimuth_looks": {
         "default": 2,
@@ -375,7 +361,7 @@ export const REGISTRY =
         "type": "int",
         "min": 1,
         "max": 40,
-        "hint": "鏂逛綅鍚戝瑙?1-40"
+        "hint": "方位向多视 1-40"
       },
       "pairs": {
         "default": 11,
@@ -409,7 +395,7 @@ export const REGISTRY =
   },
   {
     "id": 5,
-    "name": "婊ゆ尝",
+    "name": "滤波",
     "deps": [
       4
     ],
@@ -419,7 +405,7 @@ export const REGISTRY =
         "id": "goldstein",
         "label": "goldstein",
         "engine": "isce2",
-        "why": "浣庣浉骞插尯鎺ㄨ崘",
+        "why": "低相干区推荐",
         "recommend": true,
         "extra": "",
         "ok": true,
@@ -430,7 +416,7 @@ export const REGISTRY =
         "id": "boxcar",
         "label": "boxcar",
         "engine": "isce2",
-        "why": "绠€鍗曞揩閫?浣嗚竟缂樻ā绯?,
+        "why": "简单快速,但边缘模糊",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -441,7 +427,7 @@ export const REGISTRY =
         "id": "none",
         "label": "none",
         "engine": "-",
-        "why": "涓嶆护娉?淇濈暀鍏ㄩ儴缁嗚妭",
+        "why": "不滤波,保留全部细节",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -452,9 +438,9 @@ export const REGISTRY =
         "id": "isce2_stripmap_filter",
         "label": "isce2_stripmap_filter",
         "engine": "isce2",
-        "why": "鏉″甫閾炬护娉?stripmapApp filter 鍗曟(ALOS raw)",
+        "why": "条带链滤波:stripmapApp filter 单步(ALOS raw)",
         "recommend": false,
-        "extra": "鍗曟閲嶈窇,鍒嗛挓绾?瀹炴祴鍏ㄩ摼 33 min 鍐呭崰姣斿緢灏?",
+        "extra": "单步重跑,分钟级(实测全链 33 min 内占比很小)",
         "ok": true,
         "simulated": false,
         "blocked": ""
@@ -493,7 +479,7 @@ export const REGISTRY =
   },
   {
     "id": 6,
-    "name": "瑙ｇ紶",
+    "name": "解缠",
     "deps": [
       5
     ],
@@ -503,9 +489,9 @@ export const REGISTRY =
         "id": "snaphu_mcf",
         "label": "snaphu_mcf",
         "engine": "snaphu",
-        "why": "Minimum Cost Flow銆備綆鐩稿共鍖虹ǔ鍋?MintPy 鍘熺敓鍏煎",
+        "why": "Minimum Cost Flow。低相干区稳健,MintPy 原生兼容",
         "recommend": true,
-        "extra": "鑰楁椂/鍐呭瓨寰呭疄娴?,
+        "extra": "耗时/内存待实测",
         "ok": true,
         "simulated": false,
         "blocked": ""
@@ -514,9 +500,9 @@ export const REGISTRY =
         "id": "snaphu_smooth",
         "label": "snaphu_smooth",
         "engine": "snaphu",
-        "why": "绮惧害鏇撮珮浣嗛渶浜哄伐璋?cost function",
+        "why": "精度更高但需人工调 cost function",
         "recommend": false,
-        "extra": "闇€浜や簰閰嶇疆",
+        "extra": "需交互配置",
         "ok": true,
         "simulated": false,
         "blocked": ""
@@ -525,7 +511,7 @@ export const REGISTRY =
         "id": "icu",
         "label": "icu",
         "engine": "isce2",
-        "why": "鍖哄煙澧為暱娉?澶ц寖鍥翠綆鐩稿共鍖烘槗浜х敓瑙ｇ紶瀛ゅ矝",
+        "why": "区域增长法,大范围低相干区易产生解缠孤岛",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -536,7 +522,7 @@ export const REGISTRY =
         "id": "3D_FULL",
         "label": "3D_FULL",
         "engine": "unw3d",
-        "why": "闇€ 3D 鐩镐綅瑙ｇ紶宸ュ叿閾?杈撳嚭鏍煎紡涓庝笅娓镐笉鍏煎",
+        "why": "需 3D 相位解缠工具链,输出格式与下游不兼容",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -547,9 +533,9 @@ export const REGISTRY =
         "id": "isce2_stripmap_unwrap_snaphu",
         "label": "isce2_stripmap_unwrap_snaphu",
         "engine": "isce2",
-        "why": "鏉″甫閾捐В缂?stripmapApp 鍐呯疆 snaphu + 鍦扮悊缂栫爜(ALOS raw)",
+        "why": "条带链解缠:stripmapApp 内置 snaphu + 地理编码(ALOS raw)",
         "recommend": false,
-        "extra": "瀹炴祴 filter_low_band鈫抔eocode 绾?13 min(snaphu 绾?10 min)",
+        "extra": "实测 filter_low_band→geocode 约 13 min(snaphu 约 10 min)",
         "ok": true,
         "simulated": false,
         "blocked": ""
@@ -562,7 +548,7 @@ export const REGISTRY =
         "type": "number",
         "min": 0,
         "max": 1,
-        "hint": "鐩稿共鎬ч槇鍊?0-1"
+        "hint": "相干性阈值 0-1"
       },
       "cost_mode": {
         "default": "SMOOTH",
@@ -601,7 +587,7 @@ export const REGISTRY =
   },
   {
     "id": 7,
-    "name": "鏃跺簭鍙嶆紨",
+    "name": "时序反演",
     "deps": [
       6
     ],
@@ -611,7 +597,7 @@ export const REGISTRY =
         "id": "mintpy_sbas",
         "label": "mintpy_sbas",
         "engine": "mintpy",
-        "why": "灏忓熀绾块泦,閫傚悎浣庣浉骞查潰鐘跺舰鍙樺尯",
+        "why": "小基线集,适合低相干面状形变区",
         "recommend": true,
         "extra": "",
         "ok": true,
@@ -622,7 +608,7 @@ export const REGISTRY =
         "id": "pystamps_ps",
         "label": "pystamps_ps",
         "engine": "pystamps",
-        "why": "姘镐箙鏁ｅ皠浣?閫傚悎楂樼浉骞茬偣鐘剁洰鏍?闇€ ISCE2鈫扨yStamps 妗?,
+        "why": "永久散射体,适合高相干点状目标;需 ISCE2→PyStamps 桥",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -645,7 +631,7 @@ export const REGISTRY =
         "type": "int",
         "min": 6,
         "max": 730,
-        "hint": "鏃堕棿鍩虹嚎 6-730 澶?
+        "hint": "时间基线 6-730 天"
       },
       "parallel_workers": {
         "default": 4,
@@ -671,7 +657,7 @@ export const REGISTRY =
   },
   {
     "id": 8,
-    "name": "璇樊鏍℃",
+    "name": "误差校正",
     "deps": [
       7
     ],
@@ -681,7 +667,7 @@ export const REGISTRY =
         "id": "tropo_era5_pyaps",
         "label": "tropo_era5_pyaps",
         "engine": "pyaps",
-        "why": "ERA5 澶ф皵鏍℃(闇€ CDS 鍑嵁鎴栧凡缂撳瓨鐨?ERA5.h5)",
+        "why": "ERA5 大气校正(需 CDS 凭据或已缓存的 ERA5.h5)",
         "recommend": true,
         "extra": "",
         "ok": true,
@@ -692,7 +678,7 @@ export const REGISTRY =
         "id": "tropo_gacos",
         "label": "tropo_gacos",
         "engine": "gacos",
-        "why": "GACOS 浜у搧,闇€鍦ㄧ嚎鐢宠",
+        "why": "GACOS 产品,需在线申请",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -703,7 +689,7 @@ export const REGISTRY =
         "id": "tropo_height_corr",
         "label": "tropo_height_corr",
         "engine": "mintpy",
-        "why": "鏃犳皵璞℃暟鎹椂鐨勯檷绾ф柟妗?璇佹嵁绾у埆涓嬮檷)",
+        "why": "无气象数据时的降级方案(证据级别下降)",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -752,7 +738,7 @@ export const REGISTRY =
   },
   {
     "id": 9,
-    "name": "褰㈠彉妯″瀷",
+    "name": "形变模型",
     "deps": [
       8
     ],
@@ -762,7 +748,7 @@ export const REGISTRY =
         "id": "poly_periodic",
         "label": "poly_periodic(1,[1,0.5])",
         "engine": "mintpy",
-        "why": "绾挎€?+ 骞村懆鏈?+ 鍗婂勾鍛ㄦ湡,鍖归厤瀛ｈ妭鍐昏瀺鏈虹悊",
+        "why": "线性 + 年周期 + 半年周期,匹配季节冻融机理",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -773,7 +759,7 @@ export const REGISTRY =
         "id": "linear",
         "label": "linear",
         "engine": "mintpy",
-        "why": "浠呯嚎鎬ц秼鍔?,
+        "why": "仅线性趋势",
         "recommend": true,
         "extra": "",
         "ok": true,
@@ -784,7 +770,7 @@ export const REGISTRY =
         "id": "step",
         "label": "step(date)",
         "engine": "mintpy",
-        "why": "鍚岄渿闃惰穬",
+        "why": "同震阶跃",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -795,7 +781,7 @@ export const REGISTRY =
         "id": "exponential",
         "label": "exponential",
         "engine": "mintpy",
-        "why": "闇囧悗/鐭垮尯琛板噺褰㈠彉",
+        "why": "震后/矿区衰减形变",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -847,7 +833,7 @@ export const REGISTRY =
   },
   {
     "id": 10,
-    "name": "鍑哄浘瀵煎嚭",
+    "name": "出图导出",
     "deps": [
       9
     ],
@@ -857,7 +843,7 @@ export const REGISTRY =
         "id": "figure_journal",
         "label": "figure_journal",
         "engine": "-",
-        "why": "鏈熷垔绾ф帓鐗?600 dpi銆佽壊鐩插畨鍏ㄨ壊甯︺€佹瘮渚嬪昂",
+        "why": "期刊级排版:600 dpi、色盲安全色带、比例尺",
         "recommend": true,
         "extra": "",
         "ok": true,
@@ -868,7 +854,7 @@ export const REGISTRY =
         "id": "mintpy_geocode",
         "label": "mintpy_geocode",
         "engine": "mintpy",
-        "why": "浠呭湴鐞嗙紪鐮?涓嶅仛鎺掔増",
+        "why": "仅地理编码,不做排版",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -879,7 +865,7 @@ export const REGISTRY =
         "id": "gdal_warp",
         "label": "gdal_warp",
         "engine": "gdal",
-        "why": "瀵煎嚭 GeoTIFF 渚?GIS 浣跨敤",
+        "why": "导出 GeoTIFF 供 GIS 使用",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -894,7 +880,7 @@ export const REGISTRY =
         "type": "int",
         "min": 72,
         "max": 1200,
-        "hint": "鍑哄浘 DPI 72-1200"
+        "hint": "出图 DPI 72-1200"
       },
       "cmap": {
         "default": "roma",
@@ -928,7 +914,7 @@ export const REGISTRY =
   },
   {
     "id": 11,
-    "name": "璐ㄦ",
+    "name": "质检",
     "deps": [
       10,
       7
@@ -939,7 +925,7 @@ export const REGISTRY =
         "id": "crossval_ps_sbas",
         "label": "crossval_ps_sbas",
         "engine": "-",
-        "why": "PS/SBAS 鍙岄摼浜ゅ弶楠岃瘉 鈥斺€?鏈」鐩嫭鏈夎川閲忛棬",
+        "why": "PS/SBAS 双链交叉验证 —— 本项目独有质量门",
         "recommend": true,
         "extra": "",
         "ok": true,
@@ -950,7 +936,7 @@ export const REGISTRY =
         "id": "loop_closure",
         "label": "loop_closure",
         "engine": "mintpy",
-        "why": "闂悎鍥炶矾娈嬪樊妫€鏌?鍙獙瑙ｇ紶涓嶉獙鍙嶆紨",
+        "why": "闭合回路残差检查,只验解缠不验反演",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -961,7 +947,7 @@ export const REGISTRY =
         "id": "coherence_mask",
         "label": "coherence_mask",
         "engine": "mintpy",
-        "why": "鐩稿共鎬ф帺鑶?鏈€寮辩殑璐ㄦ",
+        "why": "相干性掩膜,最弱的质检",
         "recommend": false,
         "extra": "",
         "ok": true,
@@ -976,7 +962,7 @@ export const REGISTRY =
         "type": "number",
         "min": 0,
         "max": 1,
-        "hint": "浜ゅ弶楠岃瘉鐩稿叧闃堝€?0-1"
+        "hint": "交叉验证相关阈值 0-1"
       }
     },
     "outputs": [

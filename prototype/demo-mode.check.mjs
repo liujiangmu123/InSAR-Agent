@@ -1,9 +1,10 @@
 /* ============================================================
    演示回落模式的无浏览器自查脚本（node prototype/demo-mode.check.mjs）
-   —— 三波大改(gallery/envlive/fileslive/auditlive/reportlive/tspoint/
-   pipelinerail/queue/notify/a11y + dock/app/stream 大改)之后,验证
-   「file:// 打开或后端不可达时回落 mock 演示模式」承诺仍然成立:
+   —— 核心层演示脚手架删除(state.js 不再内置会话/步骤种子)之后,
+   验证「file:// 打开或后端不可达时回落 mock」的降级链路仍然成立:
 
+   0. 启动空态:SESSIONS/STEP_DEFS/S.steps 启动全空,演示种子已删除
+      (界面数据只来自 /api/sessions、/api/registry、/api/state);
    A. file:// 短路:backend.sse 与各 *live 模块不发任何 API 请求,直接
       resolve null / 走 mock;
    B. 后端不可达(fetch 全部拒绝):每个取数入口 resolve null 而非抛错,
@@ -12,9 +13,9 @@
       mock 事件流;此后同实例的只读查询不再发请求;
    D. 演示 UI 兜底:gallery 演示图件网格 + 标注、tspoint 演示曲线卡 +
       回落原因横幅、demoBanner/skeleton 组件、queue 排队语义;
-   E. mock 种子完整性:STEP_DEFS 11 步 / SESSIONS / fileTree / THRESHOLDS /
-      figures(IMAGES/POINTS/DATES) / envdata(TRACE/TERM_LOGS/ENGINES…)
-      仍在且形状满足 dock 演示视图的消费;
+   E. 注册表水合与镜像种子:setRegistry(真实 /api/registry 快照)→
+      STEP_DEFS 11 步;setSessions 映射服务端行;seedSteps 模拟
+      服务端计划;fileTree 从注册表 outputs 派生;
    F. 源码级对齐:mock 事件类型 ⊆ app.js consume 分支;各 dock 演示
       回落带「演示数据」标注;各取数模块保留 file:// 判据。
 
@@ -193,8 +194,21 @@ const Queue = await import('./js/queue.js');
 const Figures = await import('./js/figures.js');
 const Envdata = await import('./js/envdata.js');
 const Mock = await import('./js/backend.mock.js');
+const { REGISTRY, seedSteps } = await import('../tests/js/_registry.mjs');
 
-St.initSteps(5);   // 演示种子:前 5 步 done,6–11 pending
+/* ---------------- 启动空态:演示种子已彻底删除 ---------------- */
+console.log('== 0. 启动空态(演示种子已删除) ==');
+check('01 启动时 SESSIONS 为空(不再内置 Ridgecrest/玉树/雅鲁藏布江演示会话)',
+  SESSIONS.length === 0);
+check('02 启动时 STEP_DEFS 为空(步骤目录只来自 /api/registry)',
+  STEP_DEFS.length === 0);
+check('03 启动时步骤镜像为空 + 无会话 id(计划只来自 /api/state)',
+  S.steps.size === 0 && S.sessionId === null);
+
+// 后续 mock 链路用真实注册表快照水合 + 模拟服务端计划(前 5 步 done)
+St.setRegistry(REGISTRY);
+seedSteps(St, 5);
+S.sessionId = 'ridgecrest-2019';   // mock 剧情引用的会话 id(仅测试进程内)
 
 /* ============================================================
    A. file:// 短路 —— 不发任何 API 请求
@@ -256,9 +270,15 @@ const stopPoll = Notify.startAdminPoll((m) => adminSeen.push(m), {
 await sleep(30);
 stopPoll();
 check('B7 notify.startAdminPoll:不可达 → onRuns(null)', adminSeen.length >= 1 && adminSeen[0] === null);
-check('B8 notify.groupSessions(adminMap=null) 按本地 tone 归组',
+// 会话镜像按服务端 /api/sessions 行播种(tone 统一 idle;真实状态由运维视图/实时态覆盖)
+St.setSessions([
+  { session_id: 'ridgecrest-2019', name: 'Ridgecrest 同震形变', mode: 'expert', created_at: 1755000000 },
+  { session_id: 's-b', name: '会话乙', mode: 'guide', created_at: 1755000100 },
+]);
+check('B8 notify.groupSessions(adminMap=null):服务端播种的会话统一按 idle 归组',
   JSON.stringify(Notify.groupSessions(SESSIONS, {}, null).map((g) => g.key))
-  === JSON.stringify(['active', 'idle']));
+  === JSON.stringify(['idle'])
+  && Notify.groupSessions(SESSIONS, {}, null)[0].items.length === 2);
 
 /* ============================================================
    C. useMock 切换链路(http 实例):失败 → note 警示 + mock 接管
@@ -367,20 +387,21 @@ check('D12 queue:恢复后 flush FIFO 发出并清空', sent[0] === '排队消�
 /* ============================================================
    E. mock 种子完整性(state / figures / envdata)
    ============================================================ */
-console.log('\n== E. mock 种子完整性 ==');
-check('E1 STEP_DEFS = 11 步且 id 连续,每步含 methods/params/outputs',
+console.log('\n== E. 注册表水合与镜像种子(演示种子已删除) ==');
+check('E1 setRegistry(注册表快照)→ STEP_DEFS = 11 步且 id 连续,每步含 methods/params/outputs',
   STEP_DEFS.length === 11
   && STEP_DEFS.every((d, i) => d.id === i + 1 && d.methods.length > 0 && d.params && Array.isArray(d.outputs)));
-check('E2 演示会话 SESSIONS ≥3 且含 ridgecrest 主会话',
-  SESSIONS.length >= 3 && SESSIONS.some((s) => s.id === 'ridgecrest-2019' && s.tone && s.sub));
-check('E3 initSteps(5) 后 workSummary:待跑恰为第 6–11 步',
+check('E2 setSessions 映射 /api/sessions 行:session_id→id,name/sub 齐备,不再有内置演示会话',
+  SESSIONS.length === 2 && SESSIONS.every((s) => s.id && s.name && s.sub && s.tone === 'idle')
+  && SESSIONS.some((s) => s.id === 'ridgecrest-2019'));
+check('E3 seedSteps(服务端计划,前 5 步 done)后 workSummary:待跑恰为第 6–11 步',
   JSON.stringify(workSummary().all) === JSON.stringify([6, 7, 8, 9, 10, 11]));
 
 const tree = fileTree();
-check('E4 fileTree 演示产物树非空且每项含 path/kind/step/hash',
+check('E4 fileTree 从注册表 outputs 派生:非空且每项含 path/kind/step/hash',
   tree.length >= 10 && tree.every((f) => f.path && f.kind && f.step && 'hash' in f));
-check('E5 fileTree 覆盖 dock 演示预览的三个文本文件(FILE_TEXT 键对齐)',
-  ['params/unwrap.yaml', 'provenance.json', 'products/report/methods_draft.md']
+check('E5 fileTree 覆盖注册表声明的配置/质检产物(unwrap.yaml + qa.json)',
+  ['params/unwrap.yaml', 'products/report/qa.json']
     .every((p) => tree.some((f) => f.path === p)));
 check('E6 THRESHOLDS 5 项(3 项 PENDING)→ evidenceCeiling 封顶 audited(2)',
   THRESHOLDS.length === 5

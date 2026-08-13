@@ -26,7 +26,7 @@ HEADER = """\
    用途:前端测试/校验脚本喂 state.setRegistry(REGISTRY),
    在 Node 里复现「注册表水合后的 STEP_DEFS」——这是真实服务端
    目录的快照,不是手写演示数据。registry 声明变更后重生成:
-     .venv\\Scripts\\python -c "import runpy; runpy.run_path('scripts/dump_registry_fixture.py', run_name='__main__')"
+     .venv\\Scripts\\python scripts\\dump_registry_fixture.py
    （若脚本已删除,按本文件头的字段映射从 capabilities.py 重导即可。）
    ============================================================ */
 export const REGISTRY =
