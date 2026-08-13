@@ -19,6 +19,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -29,6 +31,43 @@ from typing import Protocol
 from insar_agent.core.fsio import atomic_write_text
 
 HB_STALE_SECONDS = 5.0  # 心跳超过此秒数未更新 → orphaned(wrapper 每 0.3s 刷一次)
+
+
+def wrapper_python() -> str:
+    """本地作业的 Python 解释器(wrapper 与 python 型脚本共用)。
+
+    冻结态(PyInstaller)sys.executable 是后端 exe 本身 —— 引导器不解释脚本
+    参数,直接用会**误派生第二个后端实例**且作业永无心跳(DESKTOP-PARITY
+    GAP-1 实测)。解析序:INSAR_PYTHON 显式指定 > 引擎前缀(显式/隐式发现)
+    的 python > PATH;全部落空按显式失败抛错(§1.4),绝不静默派生。
+    源码运行零行为变化(直接返回 sys.executable)。
+    """
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    explicit = os.environ.get("INSAR_PYTHON", "").strip()
+    if explicit:
+        if Path(explicit).exists():
+            return explicit
+        raise RuntimeError(f"INSAR_PYTHON 指向不存在的解释器:{explicit}")
+    prefix = os.environ.get("INSAR_ENGINE_PREFIX", "").strip()
+    if not prefix:
+        try:  # 隐式 conda 前缀发现(与 probe 同源;函数内 import 防环)
+            from insar_agent.runtime.probe import _implicit_engine_prefix
+            prefix = str(_implicit_engine_prefix() or "")
+        except Exception:
+            prefix = ""
+    if prefix:
+        for cand in (Path(prefix) / "python.exe", Path(prefix) / "python",
+                     Path(prefix) / "bin" / "python"):
+            if cand.exists():
+                return str(cand)
+    found = shutil.which("python") or shutil.which("python3")
+    if found:
+        return found
+    raise RuntimeError(
+        "冻结包执行本地作业需要外部 Python 解释器:请设置 INSAR_PYTHON 指向"
+        " python.exe,或配置 INSAR_ENGINE_PREFIX / 安装 Miniforge(见"
+        " docs/DESKTOP-PARITY.md GAP-1)")
 
 
 @dataclass(frozen=True)
@@ -121,7 +160,7 @@ class LocalJobBackend:
         wrapper_err = open(job_dir / "wrapper.err", "ab")
         try:
             subprocess.Popen(
-                [sys.executable, str(wrapper_path), str(job_dir)],
+                [wrapper_python(), str(wrapper_path), str(job_dir)],
                 stdout=subprocess.DEVNULL, stderr=wrapper_err, stdin=subprocess.DEVNULL,
                 **kwargs)
         finally:

@@ -2,6 +2,28 @@
 
 ## 24 代理波次(2026-08-13 晚)接力项
 
+- 【AUDIT-api-r3 两 P2】①diagbundle 并发生成命名竞态(8 并发实测只产 6 文件,
+  建议 mkstemp 原子占名);②fsio.atomic_write_text 并发写同文件时 os.replace
+  WinError 5 偶发 500(建议 replace 短重试)。均非安全性,下波修。
+- 【本机基线噪声】Python 3.14 下 test_a11y_dom 8 项失败为 html.parser 行为
+  差异(CI 钉 3.11 不受影响)——advisor 代理已用 HEAD 原版复现实证非回归。
+- 【下波候选(串行依赖,勿并行)】①图件类型扩展(时序曲线/基线网络图/相干
+  直方图/剖面提取)——等 C3-C8 代理释放 figures.py+capabilities.py;②投稿包
+  一键导出(figures+captions+methods+results+引用)——等图注与结果章节落地;
+  ③下载进度可视化(asf per-file 事件化);④前端性能审计(30+ 自初始化模块的
+  首屏/懒加载);⑤交互地图视图(离线底图)。
+- 【手册核对发现】①顶栏 DEMO 徽章硬编码常驻(index.html),后端接入后应动态
+  移除——归演示清除代理(复活中);②运行队列 POST /api/queue 无界面入口,
+  只有聊天排队提示,应补「排队执行」按钮(下波候选)。
+- 【实测缺口】converse 的环境摘要(_env_summary_text/_converse_state)用
+  check_wsl=False 的本机探测,把 WSL 里实际可用的 isce2/snaphu 报成缺失——
+  应改用 setup 同款 merge_wsl_probe 缓存合并口径(2026-08-13 浏览器实测)。
+- 【合并时接线】对话大脑(converse)落地后:①其 list_data 动作接 /api/datasets
+  目录(数据集摘要注入系统上下文,让「我本地有什么数据/怎么处理好」可答);
+  ②「按此路线开始对话」预填话术(recommend 代理)与 converse 的 plan 动作打通
+  验证;③advisor 建议卡的 chat_prefill 与 converse 联测;④triage 的 LLM 增强
+  (facade 解锁后)与 next-steps 的 narrate 增强作为后续小波。
+
 - 【P0,来自 RESEARCH-chat-vs-pipeline】聊天自然语言参数指令闭环:用户在聊天说
   「把第 6 步 min_coherence 改成 0.3」应产生 SET_PARAMS 动作(brain 意图解析
   → /api/actions 队列),当前 driver 意图解析只识别场景。斜杠命令(/param)只

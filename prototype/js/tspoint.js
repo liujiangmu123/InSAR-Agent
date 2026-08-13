@@ -3,22 +3,26 @@
    —— RESEARCH-insar-viewer-ux 头号结论「点图出时序」的最小闭环,
    与 MintPy tsview / EGMS / InSAR Explorer 同构。
 
-   数据源优先级(与 gallery.js 同策略):
-     1. GET /api/timeseries-point —— run 工作区 MintPy timeseries*.h5 的
-        单像元真实时序;挂载时用 (row=0,col=0) 探测一次,顺带学到
-        extent/shape 网格元数据(打在 NaN 像元上也能从 404 结构化 detail
-        里学到),之后地图点击都能换算坐标;
-     2. 后端不可达 / 模拟运行无真实产物 —— 回落 figures.js 演示曲线
-        (POINTS/DATES),横幅注明原因。
+   数据源:GET /api/timeseries-point —— run 工作区 MintPy timeseries*.h5
+   的单像元真实时序;挂载时用 (row=0,col=0) 探测一次,顺带学到
+   extent/shape 网格元数据(打在 NaN 像元上也能从 404 结构化 detail
+   里学到),之后地图点击都能换算坐标。
+
+   失败语义(无演示回落,states 统一构造器):
+     - 后端不可达 / file:// / 响应异常 → renderError(带重试=重新探测);
+     - 可达但无真实时序(无 run / 模拟运行 / 未出 h5)→ renderEmpty
+       (带运行引导),并保留「重新探测」;绝不渲染演示假曲线。
 
    交互(EGMS 式 hold-on):点击选点换曲线;Shift+点击叠加对比,
    至多 3 条(不同色);「清除」重置。真实曲线附最小二乘线性拟合虚线
    (零依赖)与「速率 X±σ mm/yr」标注,σ 由拟合残差估计。
+   timeSeriesSvg / mapSvg 在此只作渲染器:折线画的是后端真实数据,
+   小地图为示意底图(仅承接点击换算坐标,已在注记说明)。
    ============================================================ */
 import { h, icon, toast } from './dom.js';
 import { S } from './state.js';
-import { timeSeriesSvg, mapSvg, POINTS, DATES } from './figures.js';
-import * as ES from './emptystate.js';   // states 接入:空态/骨架统一构造器
+import { timeSeriesSvg, mapSvg } from './figures.js';
+import * as ES from './emptystate.js';   // states 接入:空态/骨架/错误态统一构造器
 
 /* ---------------- 纯函数(Node 单测直接可跑,零 DOM 依赖) ---------------- */
 
@@ -123,11 +127,10 @@ const T = {
   key: '',          // 会话键:切会话时整体重置
   probed: false,    // 探测是否已完成(未完成 → 加载态)
   probing: null,    // in-flight 探测 promise(去重)
-  real: false,      // 真实模式?
-  reason: '',       // 演示回落原因(横幅文案)
+  state: 'error',   // 探测结论:real(有真实时序)| empty(可达但无数据)| error(不可达/异常)
+  reason: '',       // empty / error 的原因文案
   grid: null,       // { extent, shape, refPoint, source }
   curves: [],       // 真实曲线 [{ dates, values, point, source }]
-  demoSel: [POINTS[0].id],   // 演示模式选中点 id(hold-on 至多 3)
   busy: false,      // 点击取数中
 };
 
@@ -135,11 +138,10 @@ function resetForSession(key) {
   T.key = key;
   T.probed = false;
   T.probing = null;
-  T.real = false;
+  T.state = 'error';
   T.reason = '';
   T.grid = null;
   T.curves = [];
-  T.demoSel = [POINTS[0].id];
   T.busy = false;
 }
 
@@ -164,34 +166,34 @@ function probe() {
   if (T.probing) return T.probing;
   T.probing = (async () => {
     if (typeof location !== 'undefined' && location.protocol === 'file:') {
-      T.real = false;
-      T.reason = '静态打开(file://)无后端 —— 展示演示曲线。';
+      T.state = 'error';
+      T.reason = '静态打开(file://)无后端,无法读取真实时序。';
       return;
     }
     try {
       const { status, body } = await fetchPoint({ row: '0', col: '0' });
       const detail = body && body.detail;
       if (status === 200 && body) {
-        T.real = true;
+        T.state = 'real';
         T.grid = gridOf(body);
       } else if (status === 404 && detail && detail.error === 'pixel_invalid') {
         // 探测像元恰好无效:仍是真实模式,网格元数据从结构化 detail 学
-        T.real = true;
+        T.state = 'real';
         T.grid = gridOf(detail);
       } else if (status === 404 && detail
                  && (detail.error === 'placeholder' || detail.error === 'no_timeseries')) {
-        T.real = false;
-        T.reason = '模拟运行无真实时序,展示演示曲线。';
+        T.state = 'empty';
+        T.reason = '本次为模拟运行,没有真实时序产物。';
       } else if (status === 404) {
-        T.real = false;
-        T.reason = '该会话还没有运行记录 —— 展示演示曲线。';
+        T.state = 'empty';
+        T.reason = '该会话还没有运行记录。';
       } else {
-        T.real = false;
-        T.reason = `后端响应异常(HTTP ${status})—— 展示演示曲线。`;
+        T.state = 'error';
+        T.reason = `后端响应异常(HTTP ${status})。`;
       }
     } catch {
-      T.real = false;
-      T.reason = '后端不可达 —— 展示演示曲线。';
+      T.state = 'error';
+      T.reason = '后端不可达。';
     } finally {
       T.probed = true;
     }
@@ -243,19 +245,6 @@ async function pickReal(u, v, hold, host) {
   render(host);
 }
 
-/** 演示模式点击:Shift 叠加/取消,普通点击单选(与旧 tsCard 行为兼容)。 */
-function pickDemo(id, hold) {
-  if (hold) {
-    T.demoSel = T.demoSel.includes(id)
-      ? T.demoSel.filter((x) => x !== id)
-      : [...T.demoSel, id].slice(-MAX_CURVES);
-    if (!T.demoSel.length) T.demoSel = [id];
-  } else {
-    T.demoSel = [id];
-  }
-  S.selectedPoint = T.demoSel[T.demoSel.length - 1];
-}
-
 /* ---------------- 视图 ---------------- */
 
 /** 面板 2 下半区入口:dock.js 只调用这一个函数。 */
@@ -266,7 +255,57 @@ export function mountSpatial(host) {
 }
 
 function render(host) {
-  host.replaceChildren(mapCard(host), tsCard(host));
+  if (!T.probed) {
+    host.replaceChildren(loadingCard());
+    return;
+  }
+  // 无真实时序可用:整个下半区只给一张诚实的状态卡(空态/错误态),
+  // 不再渲染演示地图与演示曲线
+  if (T.state !== 'real') {
+    host.replaceChildren(stateCard(host));
+    return;
+  }
+  host.replaceChildren(mapCard(host), realCard(host));
+}
+
+/** 重新探测:清探测缓存后重跑 probe(真实产物落盘后无需刷新页面)。 */
+function reprobe(host) {
+  T.probed = false;
+  T.probing = null;
+  render(host);
+  probe().then(() => { if (host.isConnected) render(host); });
+}
+
+/** 探测期占位卡。 */
+function loadingCard() {
+  return h('div', { class: 'tscard', dataset: { mode: 'loading' } },
+    h('div', { class: 'hd' }, '点位时序',
+      h('span', { class: 'mono' }, 'GET /api/timeseries-point')),
+    // states 接入:请求中分支 → 段落骨架(探测真实时序产物期间)
+    ES.renderSkeleton(null, { kind: 'text', rows: 3, label: '正在探测真实时序产物' }));
+}
+
+/** 空态/错误态卡:后端不可达 → 错误态带重试;可达但无数据 → 空态带运行引导。 */
+function stateCard(host) {
+  const body = T.state === 'error'
+    ? ES.renderError(null, {
+        message: `点位时序读取失败——${T.reason}`,
+        retry: () => reprobe(host),
+      })
+    : ES.renderEmpty(null, {
+        icon: 'target', title: '还没有真实时序产物',
+        hint: `${T.reason}运行流水线产出 mintpy/timeseries*.h5 后,点击地图即可读取单像元真实时序。`,
+        action: { label: '运行流水线', event: 'states:run-pipeline' },
+      });
+  return h('div', { class: 'tscard', dataset: { mode: T.state } },
+    h('div', { class: 'hd' }, '点位时序',
+      h('span', { class: 'mono' }, 'GET /api/timeseries-point')),
+    body,
+    // 空态保留「重新探测」:运行完成后无需刷新页面即可切到真实模式
+    T.state === 'empty' ? h('div', { class: 'pins' }, h('button', {
+      class: 'pin', type: 'button', 'aria-label': '重新探测真实时序产物',
+      onclick: () => reprobe(host),
+    }, '重新探测')) : null);
 }
 
 function fmt(x, digits = 3) {
@@ -274,61 +313,38 @@ function fmt(x, digits = 3) {
 }
 
 function mapCard(host) {
-  const real = T.probed && T.real;
-  const markers = real ? T.curves.map((c, i) => {
+  const markers = T.curves.map((c, i) => {
     const rel = (c.point.lat !== null && T.grid && T.grid.extent)
       ? latLonToRel(c.point.lat, c.point.lon, T.grid.extent)
       : { u: (c.point.col + 0.5) / ((T.grid && T.grid.shape && T.grid.shape.cols) || 1),
           v: (c.point.row + 0.5) / ((T.grid && T.grid.shape && T.grid.shape.rows) || 1) };
     return { x: rel.u * 300, y: rel.v * 170, color: COLORS[i], label: `P${i + 1}` };
-  }) : [];
-  const note = real
-    ? (T.grid && T.grid.extent
-        ? `覆盖 ${fmt(T.grid.extent.lat_min, 2)}°—${fmt(T.grid.extent.lat_max, 2)}°N(底图为示意)`
-        : `radar 坐标 · ${T.grid.shape.rows}×${T.grid.shape.cols} 网格(相对位置取 row/col)`)
-    : '';
+  });
+  const note = (T.grid && T.grid.extent)
+    ? `覆盖 ${fmt(T.grid.extent.lat_min, 2)}°—${fmt(T.grid.extent.lat_max, 2)}°N(底图为示意)`
+    : `radar 坐标 · ${T.grid.shape.rows}×${T.grid.shape.cols} 网格(相对位置取 row/col)`;
 
+  // mapSvg 仅作点击画布:底图为示意(注记已声明),点位与标记均来自真实取数
   const canvas = h('div', {
     class: 'canvas',
-    html: mapSvg(real ? null : T.demoSel[T.demoSel.length - 1],
-                 { hidePoints: real, markers, note }),
+    html: mapSvg(null, { hidePoints: true, markers, note }),
   });
-  if (real) {
-    canvas.style.cursor = 'crosshair';
-    canvas.setAttribute('role', 'button');
-    canvas.setAttribute('aria-label', '点击小地图任意位置取该像元时序;Shift+点击叠加对比');
-    canvas.addEventListener('click', (e) => {
-      const svg = canvas.querySelector('svg');
-      const r = svg ? svg.getBoundingClientRect() : null;
-      if (!r || !r.width || !r.height) return;
-      const u = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-      const v = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
-      pickReal(u, v, e.shiftKey, host);
-    });
-  } else {
-    canvas.querySelectorAll('.pt').forEach((g) => {
-      if (T.demoSel.includes(g.dataset.id)) g.setAttribute('data-on', '1');
-      const pick = (e) => { pickDemo(g.dataset.id, e.shiftKey); render(host); };
-      g.addEventListener('click', pick);
-      g.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(e); }
-      });
-    });
-  }
+  canvas.style.cursor = 'crosshair';
+  canvas.setAttribute('role', 'button');
+  canvas.setAttribute('aria-label', '点击小地图任意位置取该像元时序;Shift+点击叠加对比');
+  canvas.addEventListener('click', (e) => {
+    const svg = canvas.querySelector('svg');
+    const r = svg ? svg.getBoundingClientRect() : null;
+    if (!r || !r.width || !r.height) return;
+    const u = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    const v = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+    pickReal(u, v, e.shiftKey, host);
+  });
 
   const clearBtn = h('button', {
     class: 'pin', type: 'button', 'aria-label': '清除已选点位',
-    onclick: () => { T.curves = []; T.demoSel = [POINTS[0].id]; render(host); },
+    onclick: () => { T.curves = []; render(host); },
   }, '清除');
-  // 演示态可手动重探:运行产出真实 h5 后无需刷新页面即可切到真实模式
-  const reprobeBtn = (T.probed && !T.real) ? h('button', {
-    class: 'pin', type: 'button', 'aria-label': '重新探测真实时序产物',
-    onclick: () => {
-      T.probed = false; T.probing = null;
-      render(host);
-      probe().then(() => { if (host.isConnected) render(host); });
-    },
-  }, '重新探测') : null;
   const hint = h('span', {
     class: 'mono',
     style: { fontSize: '10px', color: 'var(--text-3)', alignSelf: 'center' },
@@ -336,27 +352,10 @@ function mapCard(host) {
 
   return h('div', { class: 'mapcard' },
     h('div', { class: 'bar' }, icon('target'),
-      real ? '形变时序 · 点击地图取像元' : '形变速率 · LOS (mm/yr)',
-      h('span', { class: 'mono' },
-        real ? (T.grid.source || '') : 'vel_ridgecrest_2019.png')),
+      '形变时序 · 点击地图取像元',
+      h('span', { class: 'mono' }, T.grid.source || '')),
     canvas,
-    h('div', { class: 'pins' },
-      ...(real ? [] : POINTS.map((p) => h('button', {
-        class: 'pin', type: 'button', 'aria-pressed': String(T.demoSel.includes(p.id)),
-        onclick: (e) => { pickDemo(p.id, e.shiftKey); render(host); },
-      }, p.name))),
-      clearBtn, reprobeBtn, hint));
-}
-
-function tsCard(host) {
-  if (!T.probed) {
-    return h('div', { class: 'tscard', dataset: { mode: 'loading' } },
-      h('div', { class: 'hd' }, '点位时序',
-        h('span', { class: 'mono' }, 'GET /api/timeseries-point')),
-      // states 接入:请求中分支 → 段落骨架(探测真实时序产物期间)
-      ES.renderSkeleton(null, { kind: 'text', rows: 3, label: '正在探测真实时序产物' }));
-  }
-  return T.real ? realCard(host) : demoCard();
+    h('div', { class: 'pins' }, clearBtn, hint));
 }
 
 /* ---- 真实模式:折线 + 数据点 + 拟合虚线 + 速率标注 ---- */
@@ -415,33 +414,3 @@ function realCard() {
     h('p', { class: 'blurb', style: { whiteSpace: 'pre-line' } }, meta));
 }
 
-/* ---- 演示回落:figures.js 演示曲线(POINTS/DATES),标注原因 ---- */
-function demoCard() {
-  const sel = T.demoSel
-    .map((id) => POINTS.find((p) => p.id === id))
-    .filter(Boolean);
-  const series = sel.map((p, i) => ({
-    name: p.name, ts: p.ts,
-    color: p.ref ? '#0c1e3a' : COLORS[i % COLORS.length],
-    dashed: !!p.ref,
-  }));
-  const svg = timeSeriesSvg({
-    title: '', unit: 'mm', w: 340, h: 190, dates: DATES, series,
-  });
-  const stats = sel.map((p) => h('span', null, `${p.name} `,
-    h('b', { style: { color: p.rate < 0 ? 'var(--bad)' : 'var(--accent)' } },
-      `${p.rate > 0 ? '+' : ''}${p.rate} mm`),
-    p.std !== null ? ` ±${p.std}` : ''));
-
-  return h('div', { class: 'tscard', dataset: { mode: 'demo' } },
-    h('div', { class: 'hd' },
-      `${sel.length > 1 ? `${sel.length} 点对比` : sel[0] ? sel[0].name : ''} · 点位时序`,
-      h('span', { class: 'mono' }, '演示曲线')),
-    h('div', { class: 'note is-stale', role: 'status' }, icon('warn'),
-      h('span', null, T.reason || '模拟运行无真实时序,展示演示曲线。')),
-    h('div', { html: svg }),
-    h('div', { class: 'stats' }, ...stats),
-    h('p', { class: 'blurb' },
-      '演示数据(figures.js 手绘)。真实运行产出 mintpy/timeseries*.h5 后,' +
-      '此处自动切换为点图取真实时序。'));
-}

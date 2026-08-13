@@ -1,22 +1,27 @@
 /* ============================================================
-   演示回落模式的无浏览器自查脚本（node prototype/demo-mode.check.mjs）
-   —— 三波大改(gallery/envlive/fileslive/auditlive/reportlive/tspoint/
-   pipelinerail/queue/notify/a11y + dock/app/stream 大改)之后,验证
-   「file:// 打开或后端不可达时回落 mock 演示模式」承诺仍然成立:
+   数据不可用语义的无浏览器自查脚本(node prototype/demo-mode.check.mjs)
+   —— 「核心层演示脚手架删除」(state.js 不再内置会话/步骤种子)与
+   「面板演示回落清除」(dock 各面板不可达/无数据渲染诚实错误态/空态)
+   两波之后的合并语义;聊天层 mock 演示模式(backend.mock.js)保留仍验证:
 
+   0. 启动空态:SESSIONS/STEP_DEFS/S.steps 启动全空,演示种子已删除
+      (界面数据只来自 /api/sessions、/api/registry、/api/state);
    A. file:// 短路:backend.sse 与各 *live 模块不发任何 API 请求,直接
       resolve null / 走 mock;
    B. 后端不可达(fetch 全部拒绝):每个取数入口 resolve null 而非抛错,
-      失败不占缓存位(可立即重试);
-   C. useMock 切换链路:http 下 runTurn 首次失败 → note 警示 + 无缝转
-      mock 事件流;此后同实例的只读查询不再发请求;
-   D. 演示 UI 兜底:gallery 演示图件网格 + 标注、tspoint 演示曲线卡 +
-      回落原因横幅、demoBanner/skeleton 组件、queue 排队语义;
-   E. mock 种子完整性:STEP_DEFS 11 步 / SESSIONS / fileTree / THRESHOLDS /
-      figures(IMAGES/POINTS/DATES) / envdata(TRACE/TERM_LOGS/ENGINES…)
-      仍在且形状满足 dock 演示视图的消费;
-   F. 源码级对齐:mock 事件类型 ⊆ app.js consume 分支;各 dock 演示
-      回落带「演示数据」标注;各取数模块保留 file:// 判据。
+      失败不占缓存位(可立即重试);后端可达但会话无 run:fileslive/
+      auditlive/reportlive resolve { noRun: true }(空态语义,非错误);
+   C. useMock 切换链路(聊天层,保留):http 下 runTurn 首次失败 →
+      note 警示 + 无缝转 mock 事件流;此后同实例的只读查询不再发请求;
+   D. 诚实状态 UI:gallery 错误态(带重试)/空态(带运行引导),
+      tspoint 错误态/空态,面板绝不渲染演示图件网格与演示曲线;
+      demoBanner 仅剩 env 面板一个消费方,fileslive/auditlive 不再导出;
+   E. 注册表水合与镜像种子:setRegistry(真实 /api/registry 快照)→
+      STEP_DEFS 11 步;setSessions 映射服务端行;seedSteps 模拟
+      服务端计划;fileTree 从注册表 outputs 派生;envdata.js 的
+      TERM_LOGS/TRACE/cmdSh 演示常量已删除;
+   F. 源码级对齐:mock 事件类型 ⊆ app.js consume 分支;dock.js 不再
+      含 files/audit/report/term/trace 的演示回落;file:// 判据保留。
 
    只依赖 node 内建能力,零 npm 依赖(与 fail-demo.check.mjs 同模式)。
    ============================================================ */
@@ -146,17 +151,42 @@ globalThis.matchMedia = () => ({ matches: true });
 const realSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (fn, ms, ...a) => realSetTimeout(fn, Math.min(ms || 0, 10), ...a);
 
-/* ---------------- 网络桩:fetch 全部拒绝 + 计数 ---------------- */
+/* ---------------- 网络桩:fetch 计数 + 三种模式 ----------------
+   reject  —— 后端不可达(全部拒绝);
+   forbid  —— file:// 阶段不允许被调(违例记录);
+   norun   —— 后端可达但会话没有任何 run(空 workspace 语义,按路由
+              返回真实后端同款响应:artifacts/figures/state 200 空结构,
+              provenance/methods 404,timeseries-point 404+结构化 detail)。 */
 let fetchCalls = [];                      // 每次尝试的 url
-let fetchMode = 'reject';                 // reject | forbid(file:// 阶段不允许被调)
+let fetchMode = 'reject';                 // reject | forbid | norun
+let forbidViolations = [];
+
+const respond = (status, body, text = '') => Promise.resolve({
+  ok: status >= 200 && status < 300,
+  status,
+  headers: { get: () => null },
+  json: async () => body,
+  text: async () => text,
+});
+
 globalThis.fetch = (url) => {
-  fetchCalls.push(String(url));
+  const u = String(url);
+  fetchCalls.push(u);
   if (fetchMode === 'forbid') {
-    forbidViolations.push(String(url));
+    forbidViolations.push(u);
+  }
+  if (fetchMode === 'norun') {
+    if (u.includes('/api/artifacts')) return respond(200, { run: null, steps: [] });
+    if (u.includes('/api/figures')) return respond(200, { run: null, figures: [] });
+    if (u.includes('/api/state')) return respond(200, { run: null, steps: [] });
+    if (u.includes('/api/trace')) return respond(200, []);
+    if (u.includes('/api/timeseries-point')) {
+      return respond(404, { detail: { error: 'no_timeseries' } });
+    }
+    return respond(404, { detail: 'no run' });   // provenance / methods.md / env …
   }
   return Promise.reject(new TypeError('Failed to fetch'));
 };
-let forbidViolations = [];
 
 /* location 桩:先 file: 再翻 http:(各 *live 模块调用期判据) */
 globalThis.location = { protocol: 'file:', search: '' };
@@ -180,8 +210,8 @@ async function collect(iter) {
    ============================================================ */
 const API_FILE = await import('./js/backend.sse.js');            // useMock=true 实例
 const St = await import('./js/state.js');
-const { S, STEP_DEFS, SESSIONS, THRESHOLDS, LADDER, fileTree, workSummary,
-        evidenceCeiling } = St;
+const { S, STEP_DEFS, SESSIONS, THRESHOLDS, LADDER, workSummary,
+        evidenceCeiling, fileTree } = St;
 const Envlive = await import('./js/envlive.js');
 const Fileslive = await import('./js/fileslive.js');
 const Auditlive = await import('./js/auditlive.js');
@@ -193,8 +223,21 @@ const Queue = await import('./js/queue.js');
 const Figures = await import('./js/figures.js');
 const Envdata = await import('./js/envdata.js');
 const Mock = await import('./js/backend.mock.js');
+const { REGISTRY, seedSteps } = await import('../tests/js/_registry.mjs');
 
-St.initSteps(5);   // 演示种子:前 5 步 done,6–11 pending
+/* ---------------- 启动空态:演示种子已彻底删除 ---------------- */
+console.log('== 0. 启动空态(演示种子已删除) ==');
+check('01 启动时 SESSIONS 为空(不再内置 Ridgecrest/玉树/雅鲁藏布江演示会话)',
+  SESSIONS.length === 0);
+check('02 启动时 STEP_DEFS 为空(步骤目录只来自 /api/registry)',
+  STEP_DEFS.length === 0);
+check('03 启动时步骤镜像为空 + 无会话 id(计划只来自 /api/state)',
+  S.steps.size === 0 && S.sessionId === null);
+
+// 后续 mock 链路用真实注册表快照水合 + 模拟服务端计划(前 5 步 done)
+St.setRegistry(REGISTRY);
+seedSteps(St, 5);
+S.sessionId = 'ridgecrest-2019';   // mock 剧情引用的会话 id(仅测试进程内)
 
 /* ============================================================
    A. file:// 短路 —— 不发任何 API 请求
@@ -242,11 +285,28 @@ check('B3 envlive:失败不占缓存位,可立即重试',
   && fetchCalls.filter((u) => u.includes('/api/env')).length > envTries);
 
 Fileslive.invalidate();
-check('B4 fileslive:拒绝 → null', (await Fileslive.fetchFilesLive()) === null);
+check('B4 fileslive:拒绝 → null(错误态语义)', (await Fileslive.fetchFilesLive()) === null);
 Auditlive.invalidate();
-check('B5 auditlive:拒绝 → null', (await Auditlive.fetchAuditLive()) === null);
+check('B5 auditlive:拒绝 → null(错误态语义)', (await Auditlive.fetchAuditLive()) === null);
 Reportlive.invalidate();
-check('B6 reportlive:拒绝 → null', (await Reportlive.fetchReportLive()) === null);
+check('B6 reportlive:拒绝 → null(错误态语义)', (await Reportlive.fetchReportLive()) === null);
+
+// 后端可达但会话没有 run(空 workspace):三个取数模块 resolve { noRun: true }
+// —— 与 null(不可达)区分,调用方据此渲染空态(带运行引导)而非错误态
+fetchMode = 'norun';
+Fileslive.invalidate();
+check('B7 fileslive:可达但无 run(artifacts run=null)→ { noRun: true }',
+  (await Fileslive.fetchFilesLive())?.noRun === true);
+Auditlive.invalidate();
+check('B8 auditlive:可达但无 run(provenance 404)→ { noRun: true }',
+  (await Auditlive.fetchAuditLive())?.noRun === true);
+Reportlive.invalidate();
+check('B9 reportlive:可达但无 run(methods.md 404)→ { noRun: true }',
+  (await Reportlive.fetchReportLive())?.noRun === true);
+fetchMode = 'reject';
+Fileslive.invalidate();
+Auditlive.invalidate();
+Reportlive.invalidate();
 
 // notify 运维视图轮询:不可达 → 回调 null(UI 退回本地状态归组)
 const adminSeen = [];
@@ -255,10 +315,16 @@ const stopPoll = Notify.startAdminPoll((m) => adminSeen.push(m), {
 });
 await sleep(30);
 stopPoll();
-check('B7 notify.startAdminPoll:不可达 → onRuns(null)', adminSeen.length >= 1 && adminSeen[0] === null);
-check('B8 notify.groupSessions(adminMap=null) 按本地 tone 归组',
+check('B10 notify.startAdminPoll:不可达 → onRuns(null)', adminSeen.length >= 1 && adminSeen[0] === null);
+// 会话镜像按服务端 /api/sessions 行播种(tone 统一 idle;真实状态由运维视图/实时态覆盖)
+St.setSessions([
+  { session_id: 'ridgecrest-2019', name: 'Ridgecrest 同震形变', mode: 'expert', created_at: 1755000000 },
+  { session_id: 's-b', name: '会话乙', mode: 'guide', created_at: 1755000100 },
+]);
+check('B11 notify.groupSessions(adminMap=null):服务端播种的会话统一按 idle 归组',
   JSON.stringify(Notify.groupSessions(SESSIONS, {}, null).map((g) => g.key))
-  === JSON.stringify(['active', 'idle']));
+  === JSON.stringify(['idle'])
+  && Notify.groupSessions(SESSIONS, {}, null)[0].items.length === 2);
 
 /* ============================================================
    C. useMock 切换链路(http 实例):失败 → note 警示 + mock 接管
@@ -306,44 +372,70 @@ check('C9 §7.4 演示条目(reattach/intervention/gate_stop)仍可产出',
   ['reattach', 'intervention', 'gate_stop'].every((t) => demoEvs.some((e) => e.t === t)));
 
 /* ============================================================
-   D. 演示 UI 兜底:gallery / tspoint / demoBanner / queue
+   D. 诚实状态 UI:gallery / tspoint 的错误态与空态(无演示回落)
    ============================================================ */
-console.log('\n== D. 演示 UI 兜底组件 ==');
+console.log('\n== D. 诚实状态 UI(错误态/空态,无演示回落) ==');
 
-// D1–D3 gallery:后端不可达 → 演示图件网格 + 「演示图件」标注 + 原因说明
+// D1–D3 gallery:后端不可达 → 错误态带重试,绝不渲染演示图件网格
 const galBox = Gallery.galleryView();
 DOC.body.appendChild(galBox);
 await sleep(30);
-check('D1 gallery:回落为演示图件网格(4 张 IMAGES 卡片)',
-  galBox.querySelectorAll('.glx-card').length === Figures.IMAGES.length);
-check('D2 gallery:每张缩略图带「演示图件」角标',
-  galBox.querySelectorAll('.glx-demo').length === Figures.IMAGES.length);
-check('D3 gallery:说明文案指明「后端不可达 + 演示图件」',
-  /后端不可达/.test(galBox.textContent) && /演示图件/.test(galBox.textContent));
+check('D1 gallery:后端不可达 → 错误态(.es-error)且带「重试」按钮',
+  galBox.querySelectorAll('.es-error').length === 1
+  && galBox.querySelectorAll('.es-retry').length === 1);
+check('D2 gallery:不再渲染任何图件卡片与「演示图件」角标',
+  galBox.querySelectorAll('.glx-card').length === 0
+  && galBox.querySelectorAll('.glx-demo').length === 0);
+check('D3 gallery:错误文案指明「后端不可达或响应异常」,不含「演示」',
+  /后端不可达或响应异常/.test(galBox.textContent) && !/演示/.test(galBox.textContent));
 
-// D4–D7 tspoint:探测失败 → 演示曲线卡 + 回落原因横幅 + 演示点位按钮
+// D4–D5 tspoint:探测失败(不可达)→ 错误态卡带重试,无演示曲线
 const tsHost = new Element('div');
 DOC.body.appendChild(tsHost);
 Tspoint.mountSpatial(tsHost);
 await sleep(30);
-const tsCard = tsHost.querySelector('.tscard');
-check('D4 tspoint:回落演示曲线卡(data-mode=demo)', tsCard?.dataset.mode === 'demo');
-check('D5 tspoint:横幅注明回落原因「后端不可达 —— 展示演示曲线」',
-  /后端不可达 —— 展示演示曲线/.test(tsCard?.textContent || ''));
-check('D6 tspoint:标题标注「演示曲线」且底注声明数据来源 figures.js',
-  /演示曲线/.test(tsCard?.textContent || '') && /figures\.js 手绘/.test(tsCard?.textContent || ''));
-check('D7 tspoint:演示点位按钮(3 个 POINTS)+「重新探测」入口保留',
-  tsHost.querySelectorAll('.pins .pin').length >= Figures.POINTS.length + 2
-  && /重新探测/.test(tsHost.textContent));
+const tsCardErr = tsHost.querySelector('.tscard');
+check('D4 tspoint:不可达 → 错误态卡(data-mode=error,.es-error 带重试)',
+  tsCardErr?.dataset.mode === 'error'
+  && tsCardErr.querySelectorAll('.es-error').length === 1
+  && tsCardErr.querySelectorAll('.es-retry').length === 1);
+check('D5 tspoint:不再渲染演示曲线与演示点位',
+  !/演示曲线/.test(tsHost.textContent) && !/figures\.js 手绘/.test(tsHost.textContent)
+  && tsHost.querySelectorAll('.mapcard').length === 0);
 
-// D8–D10 demoBanner / skeleton:三个面板共用同一款「演示数据」横幅
+// D6 tspoint:可达但无真实时序(404 no_timeseries)→ 空态卡 + 运行引导 + 重新探测
+fetchMode = 'norun';
+S.sessionId = 'demo-check-norun';          // 换会话键触发 tspoint 状态重置
+const tsHost2 = new Element('div');
+DOC.body.appendChild(tsHost2);
+Tspoint.mountSpatial(tsHost2);
+await sleep(30);
+const tsCardEmpty = tsHost2.querySelector('.tscard');
+check('D6 tspoint:可达无数据 → 空态卡(data-mode=empty)+ 运行引导 + 「重新探测」',
+  tsCardEmpty?.dataset.mode === 'empty'
+  && tsCardEmpty.querySelectorAll('.es-empty').length === 1
+  && /运行流水线/.test(tsCardEmpty.textContent)
+  && /重新探测/.test(tsCardEmpty.textContent));
+
+// D7 gallery:可达但无产物(figures 空列表)→ 空态卡 + 运行引导
+const galBox2 = Gallery.galleryView();
+DOC.body.appendChild(galBox2);
+await sleep(30);
+check('D7 gallery:可达无产物 → 空态卡(.es-empty)+「运行流水线以生成图件」引导',
+  galBox2.querySelectorAll('.es-empty').length === 1
+  && /还没有产物图件/.test(galBox2.textContent)
+  && /运行流水线以生成图件/.test(galBox2.textContent));
+fetchMode = 'reject';
+S.sessionId = SESSIONS[0]?.id || 'ridgecrest-2019';
+
+// D8–D9 demoBanner 收敛 / skeleton:横幅只剩 env 面板一个消费方
 const banner = Envlive.demoBanner('测试文案', { onRetry: () => {} });
-check('D8 demoBanner:role=status + 「演示数据(后端未连接)」加粗标注 + 重试按钮',
+check('D8 demoBanner 仍供 env 面板使用:role=status + 加粗标注 + 重试按钮',
   banner.getAttribute('role') === 'status'
   && /演示数据（后端未连接）/.test(banner.textContent)
   && banner.querySelectorAll('button').length === 1);
-check('D9 demoBanner 三面板同源(files/audit 复用 envlive 同一函数)',
-  Fileslive.demoBanner === Envlive.demoBanner && Auditlive.demoBanner === Envlive.demoBanner);
+check('D9 fileslive/auditlive 不再导出 demoBanner(演示回落已清除)',
+  !('demoBanner' in Fileslive) && !('demoBanner' in Auditlive));
 check('D10 skeleton 骨架屏可用(aria-busy,env/files/audit 三款)',
   Envlive.skeleton().getAttribute('aria-busy') === 'true'
   && Fileslive.skeleton().getAttribute('aria-busy') === 'true'
@@ -365,22 +457,23 @@ await sleep(30);
 check('D12 queue:恢复后 flush FIFO 发出并清空', sent[0] === '排队消息一' && Queue.count() === 0);
 
 /* ============================================================
-   E. mock 种子完整性(state / figures / envdata)
+   E. 种子与渲染器边界(state / figures / envdata)
    ============================================================ */
-console.log('\n== E. mock 种子完整性 ==');
-check('E1 STEP_DEFS = 11 步且 id 连续,每步含 methods/params/outputs',
+console.log('\n== E. 注册表水合与镜像种子(演示种子已删除) ==');
+check('E1 setRegistry(注册表快照)→ STEP_DEFS = 11 步且 id 连续,每步含 methods/params/outputs',
   STEP_DEFS.length === 11
   && STEP_DEFS.every((d, i) => d.id === i + 1 && d.methods.length > 0 && d.params && Array.isArray(d.outputs)));
-check('E2 演示会话 SESSIONS ≥3 且含 ridgecrest 主会话',
-  SESSIONS.length >= 3 && SESSIONS.some((s) => s.id === 'ridgecrest-2019' && s.tone && s.sub));
-check('E3 initSteps(5) 后 workSummary:待跑恰为第 6–11 步',
+check('E2 setSessions 映射 /api/sessions 行:session_id→id,name/sub 齐备,不再有内置演示会话',
+  SESSIONS.length === 2 && SESSIONS.every((s) => s.id && s.name && s.sub && s.tone === 'idle')
+  && SESSIONS.some((s) => s.id === 'ridgecrest-2019'));
+check('E3 seedSteps(服务端计划,前 5 步 done)后 workSummary:待跑恰为第 6–11 步',
   JSON.stringify(workSummary().all) === JSON.stringify([6, 7, 8, 9, 10, 11]));
 
 const tree = fileTree();
-check('E4 fileTree 演示产物树非空且每项含 path/kind/step/hash',
+check('E4 fileTree 从注册表 outputs 派生:非空且每项含 path/kind/step/hash',
   tree.length >= 10 && tree.every((f) => f.path && f.kind && f.step && 'hash' in f));
-check('E5 fileTree 覆盖 dock 演示预览的三个文本文件(FILE_TEXT 键对齐)',
-  ['params/unwrap.yaml', 'provenance.json', 'products/report/methods_draft.md']
+check('E5 fileTree 覆盖注册表声明的配置/质检产物(unwrap.yaml + qa.json)',
+  ['params/unwrap.yaml', 'products/report/qa.json']
     .every((p) => tree.some((f) => f.path === p)));
 check('E6 THRESHOLDS 5 项(3 项 PENDING)→ evidenceCeiling 封顶 audited(2)',
   THRESHOLDS.length === 5
@@ -388,49 +481,47 @@ check('E6 THRESHOLDS 5 项(3 项 PENDING)→ evidenceCeiling 封顶 audited(2)',
   && evidenceCeiling().level === 2);
 check('E7 LADDER 六级证据阶梯完整', LADDER.length === 6 && LADDER[5] === 'publishable');
 
-check('E8 figures:IMAGES 4 张(vel/ts/ifg/coh)供画廊演示回落',
+// figures.js 保留的边界:聊天演示流(stream.js resultCard/openLightbox)
+// 与 tspoint 真实渲染(timeSeriesSvg 画真实数据 / mapSvg 选点底图)仍消费;
+// dock 面板(gallery/files/audit/report/term/trace)已全部不再 import figures.js
+check('E8 figures:IMAGES 4 张(vel/ts/ifg/coh)供聊天演示流 openLightbox 消费',
   Figures.IMAGES.length === 4
   && JSON.stringify(Figures.IMAGES.map((i) => i.id)) === JSON.stringify(['vel', 'ts', 'ifg', 'coh'])
   && Figures.IMAGES.every((i) => i.name && i.title && i.step));
-check('E9 figures:POINTS 3 点 × DATES 7 历元,时序长度对齐',
-  Figures.POINTS.length === 3 && Figures.DATES.length === 7
-  && Figures.POINTS.every((p) => p.ts.length === Figures.DATES.length));
-check('E10 figures:figureSvg/mapSvg/timeSeriesSvg 产出可嵌入 SVG',
+check('E9 figures:figureSvg/mapSvg/timeSeriesSvg 渲染器产出可嵌入 SVG',
   /^<svg/.test(Figures.figureSvg('vel'))
-  && /^<svg/.test(Figures.mapSvg(null, { markers: [{ x: 10, y: 10, color: '#f00', label: 'P1' }], note: 'n' }))
-  && /^<svg/.test(Figures.timeSeriesSvg({ dates: Figures.DATES, series: [{ name: 'A', ts: Figures.POINTS[0].ts, color: '#f00' }] })));
+  && /^<svg/.test(Figures.mapSvg(null, { hidePoints: true, markers: [{ x: 10, y: 10, color: '#f00', label: 'P1' }], note: 'n' }))
+  && /^<svg/.test(Figures.timeSeriesSvg({ dates: ['06-10', '06-22'], series: [{ name: 'A', ts: [0, 1], color: '#f00' }] })));
 
-check('E11 envdata:TERM_LOGS 覆盖全部 11 步(终端面板演示日志)',
-  STEP_DEFS.every((d) => Array.isArray(Envdata.TERM_LOGS[d.id]) && Envdata.TERM_LOGS[d.id].length > 3));
-check('E12 envdata:TRACE ≥10 条且形状满足轨迹卡(confidence/wall_time/action.tool)',
-  Envdata.TRACE.length >= 10
-  && Envdata.TRACE.every((e) => typeof e.confidence === 'number'
-       && typeof e.wall_time === 'number' && e.action?.tool && e.phase && e.thought));
-check('E13 envdata:TRACE 含「失败并恢复」样本(error → recovery.successful)',
-  Envdata.TRACE.some((e) => e.error?.occurred)
-  && Envdata.TRACE.some((e) => e.recovery?.attempted && e.recovery?.successful));
-check('E14 envdata:ENGINES/DISKS/WSL/WORKSPACE/ENV_NOTE 环境演示数据齐备',
+check('E10 envdata:TERM_LOGS/TRACE/cmdSh 演示常量已删除(终端/轨迹无假数据可用)',
+  !('TERM_LOGS' in Envdata) && !('TRACE' in Envdata) && !('cmdSh' in Envdata));
+check('E11 envdata:ENGINES/DISKS/WSL/WORKSPACE/ENV_NOTE 环境演示数据齐备(env 面板范围外保留)',
   Envdata.ENGINES.length >= 4 && Envdata.DISKS.length >= 1
   && !!Envdata.WSL.text && !!Envdata.WORKSPACE.hint && /静态示意/.test(Envdata.ENV_NOTE));
-check('E15 envdata:cmdSh 等价裸命令含 job.rc 落盘与步骤工作目录',
-  /job\.rc/.test(Envdata.cmdSh(6, 'snaphu.py --x')) && /06_unwrap/.test(Envdata.cmdSh(6, 'snaphu.py --x')));
 
 /* ============================================================
-   F. 源码级回落对齐(dock.js 各 view 的演示标注 + file:// 判据)
+   F. 源码级对齐(dock.js 演示回落已清除 + file:// 判据保留)
    ============================================================ */
-console.log('\n== F. 源码级回落对齐 ==');
+console.log('\n== F. 源码级对齐 ==');
 const dockSrc = readFileSync(new URL('./js/dock.js', import.meta.url), 'utf-8');
-check('F1 dock.js:files/audit/env 三面板演示回落都挂 demoBanner',
-  /FILES\.demoBanner\(/.test(dockSrc) && /AUD\.demoBanner\(/.test(dockSrc) && /LIVE\.demoBanner\(/.test(dockSrc));
-check('F2 dock.js:report 演示回落有「演示数据(未接入真实运行)」标注',
-  dockSrc.includes('演示数据（未接入真实运行）'));
-check('F3 dock.js:终端/轨迹演示回落有醒目标注',
-  dockSrc.includes('以下为离线示意日志') && dockSrc.includes('演示数据 · 后端未接入'));
+check('F1 dock.js:files/audit 面板不再挂 demoBanner;env 面板(范围外)保留',
+  !/FILES\.demoBanner\(/.test(dockSrc) && !/AUD\.demoBanner\(/.test(dockSrc)
+  && /LIVE\.demoBanner\(/.test(dockSrc));
+check('F2 dock.js:report 静态演示草稿已删(无「演示数据(未接入真实运行)」标注)',
+  !dockSrc.includes('演示数据（未接入真实运行）'));
+check('F3 dock.js:终端/轨迹演示视图已删(termDemoView/traceDemoView 与其标注不复存在)',
+  !dockSrc.includes('termDemoView') && !dockSrc.includes('traceDemoView')
+  && !dockSrc.includes('以下为离线示意日志') && !dockSrc.includes('演示数据 · 后端未接入'));
+check('F4 dock.js:五面板接入统一构造器(renderError ≥4 处 · renderEmpty ≥4 处)',
+  (dockSrc.match(/ES\.renderError\(/g) || []).length >= 4
+  && (dockSrc.match(/ES\.renderEmpty\(/g) || []).length >= 4);
+check('F5 dock.js:不再 import figures.js/fileTree(演示数据源断开)',
+  !dockSrc.includes("from './figures.js'") && !/[^\w]fileTree[^\w]/.test(dockSrc));
 const fileGuard = (p) => readFileSync(new URL(`./js/${p}`, import.meta.url), 'utf-8')
   .includes("location.protocol === 'file:'");
-check('F4 六个取数模块都保留 file:// 判据(envlive/fileslive/auditlive/reportlive/gallery/tspoint)',
+check('F6 六个取数模块都保留 file:// 判据(envlive/fileslive/auditlive/reportlive/gallery/tspoint)',
   ['envlive.js', 'fileslive.js', 'auditlive.js', 'reportlive.js', 'gallery.js', 'tspoint.js'].every(fileGuard));
-check('F5 notify/backend.sse 亦保留 file:// 判据',
+check('F7 notify/backend.sse 亦保留 file:// 判据',
   fileGuard('notify.js') && fileGuard('backend.sse.js'));
 
 /* ---------------- 收尾 ---------------- */

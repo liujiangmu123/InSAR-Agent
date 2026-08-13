@@ -2,7 +2,7 @@
 name: stripmap_coseismic
 description: ALOS 条带(stripmap)同震干涉场景:2010 El Mayor–Cucapah(Baja)Mw 7.2 地震 ALOS raw 条带对,ISCE2 stripmapApp 全链 WSL 实测通过(docs/VALIDATION-isce2-wsl.md)。3-6 步(配准/干涉/滤波/解缠)覆写为 isce2_stripmap_* 方法,单干涉对、无云端已完成步骤;数据已装配在 WSL 工作区 /home/insar/work/baja,路径参数随包固化。适配「ALOS/条带/stripmap/L波段」类请求。
 metadata:
-  version: 1.1.0
+  version: 1.2.0
   priority: 5
   label: 条带同震干涉
   match: 'ALOS|条带|stripmap|L波段'
@@ -81,6 +81,9 @@ run 脚本 `cd isce2` 后执行 stripmapApp,产物在 `isce2/interferogram/` 下
 
 ## 模型设定与质量门侧重
 
+- 多视比倒置(2026-08-13 C3 修正):第 4 步覆写 range_looks=2 × azimuth_looks=4
+  —— ALOS 条带像元几何与 S1 IW 相反(方位 ~3.2 m < 地面距离 ~7-8 m,az>rg≈2:1),
+  registry 默认 10×2 是 S1 比例;覆写是规划层声明,分段 XML 维持实测形态不渲染 looks。
 - 单干涉对仅两个获取日期,7-9 步是形式化通道:时序上无法区分阶跃与线性,
   model 取 `linear`(唯一可辨识参数化);同震信号的核心产物是第 6 步解缠形变场。
 - 第 11 步覆写 `coherence_mask`:单对无 PS/SBAS 双链,交叉验证(crossval_ps_sbas)

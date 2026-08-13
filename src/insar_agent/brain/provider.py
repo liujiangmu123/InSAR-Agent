@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from typing import Callable
 
 
 class BrainUnavailable(RuntimeError):
@@ -33,6 +35,41 @@ class LLMRoute:
     base_url: str
     api_key: str
     model: str
+
+
+# ---------------- 用量计量(回调注入,provider 保持纯传输层) ----------------
+
+#: 模块级用量回调:app 启动时经 set_usage_sink 注入(brain/usage.UsageLedger.record)。
+#: 默认 None = 不计量、零开销;本模块绝不 import 存储层,依赖方向只进不出。
+_usage_sink: Callable[[dict], None] | None = None
+
+
+def set_usage_sink(fn: Callable[[dict], None] | None) -> None:
+    """注册用量回调。record 形如 {model, kind, prompt_tokens, completion_tokens,
+    latency_ms};token 计数拿不到时为 None(绝不编数),会话上下文由账本侧补。"""
+    global _usage_sink
+    _usage_sink = fn
+
+
+def _tokens_or_none(value) -> int | None:
+    """usage 字段值 → 非负整数才可信,其余(缺失/负数/字符串/bool)记 None。"""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _report_usage(model: str, kind: str, usage, latency_ms: int) -> None:
+    """上报一次调用的用量。计量是旁路:回调抛错一律吞掉,绝不拖垮主链路。"""
+    if _usage_sink is None:
+        return
+    u = usage if isinstance(usage, dict) else {}
+    try:
+        _usage_sink({"model": model, "kind": kind,
+                     "prompt_tokens": _tokens_or_none(u.get("prompt_tokens")),
+                     "completion_tokens": _tokens_or_none(u.get("completion_tokens")),
+                     "latency_ms": latency_ms})
+    except Exception:  # noqa: BLE001 —— 记账失败不能影响 LLM 调用本身
+        pass
 
 
 def routes_from_env() -> list[LLMRoute]:
@@ -86,8 +123,13 @@ class LLMProvider:
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json",
                      "Authorization": f"Bearer {route.api_key}"})
+        t0 = time.monotonic()
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
+        # 拿到响应体即记账:token 已在中转站计费,截断/解析失败同样要入账
+        _report_usage(route.model, "chat",
+                      body.get("usage") if isinstance(body, dict) else None,
+                      int((time.monotonic() - t0) * 1000))
         choice = (body.get("choices") or [{}])[0]
         if choice.get("finish_reason") == "length":
             raise BrainTruncated("输出被 token 上限截断,整体拒绝")
@@ -136,6 +178,10 @@ def describe_image_stream(route: LLMRoute, *, prompt: str, image_data_url: str,
     payload = {
         "model": route.model,
         "stream": True,
+        # 流式用量(OpenAI 兼容):尾帧(choices 为空)带 usage。2026-08-13
+        # tokenrhythm 实测:认该字段,内容帧 usage 为 null,[DONE] 前一帧带完整
+        # usage;不认的中转站会忽略之,彼时尾帧无 usage → 计量记 null。
+        "stream_options": {"include_usage": True},
         "max_tokens": max_tokens,
         "messages": [{
             "role": "user",
@@ -152,23 +198,36 @@ def describe_image_stream(route: LLMRoute, *, prompt: str, image_data_url: str,
                  "Authorization": f"Bearer {route.api_key}"})
     parts: list[str] = []
     finish: str | None = None
+    usage: dict | None = None
+    t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            for raw_line in resp:
-                line = raw_line.decode("utf-8", "replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    choice = (json.loads(data).get("choices") or [{}])[0]
-                except json.JSONDecodeError:
-                    continue  # 心跳/坏帧跳过,以 [DONE] 或断流为终止
-                delta = choice.get("delta") or {}
-                if delta.get("content"):
-                    parts.append(delta["content"])
-                finish = choice.get("finish_reason") or finish
+            try:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue  # 心跳/坏帧跳过,以 [DONE] 或断流为终止
+                    if not isinstance(obj, dict):
+                        continue
+                    if isinstance(obj.get("usage"), dict):
+                        usage = obj["usage"]  # 内容帧多为 null,取最后一次非空
+                    choice = (obj.get("choices") or [{}])[0]
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        parts.append(delta["content"])
+                    finish = choice.get("finish_reason") or finish
+            finally:
+                # 流一旦建立即记账(断流前的 token 也已计费);HTTP 层被拒
+                # (urlopen 抛错)不进此块 —— 那种调用没有计费事实
+                _report_usage(route.model, "vision", usage,
+                              int((time.monotonic() - t0) * 1000))
     except urllib.error.HTTPError as exc:
         raise BrainUnavailable(f"识图请求被拒(HTTP {exc.code}):"
                                f"检查模型是否支持图片输入") from exc

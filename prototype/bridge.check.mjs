@@ -171,6 +171,10 @@ globalThis.EventSource = FakeES;
 
 /* ---------------- 导入被测模块（node 无 window：不会自初始化） ---------------- */
 const B = await import('./js/bridge.js');
+// 步骤目录不再内置演示数据:回执文案的真实步骤名(def_)需注册表快照水合
+const St = await import('./js/state.js');
+const { REGISTRY } = await import('../tests/js/_registry.mjs');
+St.setRegistry(REGISTRY);
 
 /* ============================================================
    A. 回执文案生成

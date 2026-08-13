@@ -151,6 +151,10 @@ function check(name, cond) {
 
 /* ---------------- 复现 fail-demo 场景 ---------------- */
 const Stream = await import('./js/stream.js');
+// 步骤目录不再内置演示数据:gate 卡标题的步骤名(def_)需注册表快照水合
+const St = await import('./js/state.js');
+const { REGISTRY } = await import('../tests/js/_registry.mjs');
+St.setRegistry(REGISTRY);
 
 const host = new Element('div');
 host.setAttribute('id', 'stream');

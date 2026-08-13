@@ -189,8 +189,10 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
             content = _WSL_IMPORT_PY.format(source=source)
         else:
             content = _IMPORT_PY.format(source=source)
+    # wrapper_python:冻结态 sys.executable 是后端 exe 本身(GAP-1),源码运行等价
+    from insar_agent.runtime.jobs import wrapper_python
     return CommandPlan(
-        argv=[sys.executable, "-X", "utf8", script_rel],
+        argv=[wrapper_python(), "-X", "utf8", script_rel],
         cwd=str(workspace),
         env={"PYTHONIOENCODING": "utf-8",
              **({"INSAR_HYP3_SOURCE": os.environ["INSAR_HYP3_SOURCE"]}

@@ -110,8 +110,11 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
     files = {script_rel: _script(cap, method, params, sleep)}
     # 参数快照(config 的一部分,进 config_hash;真实引擎在此渲染 topsApp.xml/*.cfg)
     files[f"params/s{cap.id:02d}.json"] = _params_snapshot(method, params)
+    # wrapper_python:冻结态 sys.executable 是后端 exe 本身,直接用会误派生
+    # 第二个后端(DESKTOP-PARITY GAP-1);源码运行两者等价
+    from insar_agent.runtime.jobs import wrapper_python
     return CommandPlan(
-        argv=[sys.executable, "-X", "utf8", script_rel],
+        argv=[wrapper_python(), "-X", "utf8", script_rel],
         cwd=str(workspace),
         env={"PYTHONIOENCODING": "utf-8"},
         files=files,

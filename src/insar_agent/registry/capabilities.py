@@ -33,7 +33,12 @@ PIPELINE: tuple[Capability, ...] = (
         ),
         default_method="local_import",
         params={
-            "scenes": Param(7, kind="science", type="int", min=2, max=200, hint="景数 2-200"),
+            # hint 按场景分层(C5):同震单对 2 景即可;SBAS ≥15-20 景起步(Crosetto 2016
+            # 综述,C 波段;Berardino 2002 经典案例 44 景);PS ≥20-25 景,短于此相位
+            # 稳定性估计不可靠
+            "scenes": Param(7, kind="science", type="int", min=2, max=200,
+                            hint="景数 2-200:同震单对=2;SBAS ≥15-20;PS ≥20-25"
+                                 "(Crosetto 2016;Berardino 2002)"),
             "platform": Param("sentinel-1", kind="science", type="str"),
             "dates": Param("2019-06-10..2019-08-15", kind="science", type="str"),
             "source": Param("", kind="science", type="str",
@@ -49,7 +54,11 @@ PIPELINE: tuple[Capability, ...] = (
         ),
         run_ok=(RunOkCheck("exit_code", equals=0), RunOkCheck("artifact_exists", id="slc")),
         timeouts=Timeouts(idle=1800, total=6 * 3600),
-        disk=DiskEstimate("scenes * 2.4"),
+        # ≈8 GB/景(C4):双极化 IW SLC 解压后 ≈7-8 GB(SentiWiki:25 s 切片单极化
+        # ~3.1 GB×2;Sci Data 2022 "typical unzipped IW SLC ≈7 GB"),旧值 2.4 低估 2-3×。
+        # 下载+解压峰值另计:zip(~4-4.5 GB/景)与解压产物并存 ≈12.5 GB/景,
+        # 由 peak_multiplier 1.6(8×1.6=12.8)覆盖
+        disk=DiskEstimate("scenes * 8", peak_multiplier=1.6),
         io="heavy",
         replay="safe",  # 数据发现/校验幂等;真实下载有断点续传,重跑安全
     ),
@@ -151,8 +160,15 @@ PIPELINE: tuple[Capability, ...] = (
         ),
         default_method="isce2_ifg_multilook",
         params={
-            "range_looks": Param(10, kind="science", type="int", min=1, max=40, hint="距离向多视 1-40"),
-            "azimuth_looks": Param(2, kind="science", type="int", min=1, max=40, hint="方位向多视 1-40"),
+            # 默认 10×2 是 S1 IW(tops)比例(C3):像元 2.3×14.1 m(SentiWiki),
+            # rg:az≈5:1 才得近方形地面像元;stripmap(ALOS)像元几何倒置(FBS 方位
+            # ~3.2 m < 地面距离 ~7-8 m,JAXA 规格),比例须 az>rg 约 2:1 ——
+            # 由 stripmap_coseismic 场景包覆写 2×4(只影响新计划,不动 S1 默认)
+            "range_looks": Param(10, kind="science", type="int", min=1, max=40,
+                                 hint="距离向多视 1-40;默认按 S1 IW rg:az≈5:1,"
+                                      "stripmap(ALOS)比例须倒置(C3)"),
+            "azimuth_looks": Param(2, kind="science", type="int", min=1, max=40,
+                                   hint="方位向多视 1-40;stripmap(ALOS)az>rg 约 2:1(C3)"),
             "pairs": Param(11, kind="science", type="int", min=1, max=5000),
             "threads": Param(8, kind="resource", type="int", min=1, max=32),
         },
@@ -278,10 +294,22 @@ PIPELINE: tuple[Capability, ...] = (
         ),
         default_method="mintpy_sbas",
         params={
+            # star/sequential 护栏(C7):star=单参考星形(PS 式拓扑),SBAS 下退化为
+            # 无冗余无闭合环;sequential 纯短基线网络有 fading 系统偏差
+            # (Ansari 2021:seq-5 达 -6.5 mm/yr,混入长基线对后收敛到 -0.24)
             "network": Param("small_baseline", kind="science", type="str",
-                             enum=("small_baseline", "star", "sequential")),
+                             enum=("small_baseline", "star", "sequential"),
+                             hint="star=单参考仅 PS/试验(SBAS 下无冗余无闭合);"
+                                  "sequential 有 fading 偏差,须混长基线对(Ansari 2021)"),
             "max_temporal_baseline": Param(120, kind="science", type="int", min=6, max=730,
                                            hint="时间基线 6-730 天"),
+            # 垂直基线阈值(C6):默认 0=不限,对齐 MintPy 上游 perpBaseMax=auto(no)
+            # (S1 轨道管 <200 m 天然非约束);stripmap/L 波段场景才需覆写。
+            # engines/mintpy.py 渲染 mintpy.network.perpBaseMax(0 → no)
+            "max_perp_baseline": Param(0, kind="science", type="int", min=0, max=10000,
+                                       hint="垂直基线阈值(米)0-10000;0=不限(MintPy 上游 "
+                                            "auto=no);场景参考:ERS 级 130 m(Berardino 2002)"
+                                            "、L 波段 ALOS ≤1800 m(Yunjun 2019 §5.1)"),
             "parallel_workers": Param(4, kind="resource", type="int", min=1, max=16),
         },
         artifacts=(
@@ -396,7 +424,12 @@ PIPELINE: tuple[Capability, ...] = (
         default_method="figure_journal",
         params={
             "dpi": Param(600, kind="presentation", type="int", min=72, max=1200, hint="出图 DPI 72-1200"),
-            "cmap": Param("roma", kind="presentation", type="str"),
+            # 分色带建议(C8,Crameri 2020 三分类):循环量配非循环色带会在 ±π 处
+            # 产生假边界;默认 roma 视作「未显式指定」,由 engines/figures.py 按
+            # 产物类型(h5 FILE_TYPE)路由默认色带,显式指定其他值时直通
+            "cmap": Param("roma", kind="presentation", type="str",
+                          hint="默认按产物类型路由:速度=vik/roma(diverging)、相干=batlow"
+                               "(sequential)、缠绕相位=romaO(cyclic);显式指定时直通"),
             "format": Param("png+pdf", kind="presentation", type="str"),
         },
         artifacts=(

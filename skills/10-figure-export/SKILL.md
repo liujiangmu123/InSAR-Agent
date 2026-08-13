@@ -42,14 +42,18 @@ mintpy 依赖带入):直接读 `mintpy/velocity.h5`(或根目录 `velocity.h5`),
   600 为默认即投稿档;预览/报告用 150 足够;1200 只对纯线稿有意义。脚本另按
   固定像素宽出 `_browse`(2048 px)与 `_thumb`(320 px)两档,同一 Figure 只改
   dpi 连续 savefig,版式字号与原图严格一致 —— 不要为缩略图单独改版式。
-- **`cmap`**(默认 `"roma"`):引擎侧映射 `{"roma": "vik"}`(engines/figures.py
-  build:速率图推荐色标升级为 vik —— 发散、感知均匀、CVD 安全),其余值直通
-  cmcrameri 名字空间;**缺 cmcrameri 包时退 `RdBu_r` 并记录在案**(sidecar 的
+- **`cmap`**(默认 `"roma"`):默认值视作「未显式指定」哨兵,引擎按产物类型
+  (h5 `FILE_TYPE`)路由默认色带 —— 速度=vik(diverging)、相干=batlow
+  (sequential)、缠绕相位=romaO(cyclic)(2026-08-13 C8 修正,Crameri 2020
+  三分类;velocity 主图仍落 vik,旧语义不变);显式指定其他值直通 cmcrameri
+  名字空间;**缺 cmcrameri 包时退 `RdBu_r` 并记录在案**(sidecar 的
   `cmap` 字段写实际所用名,provenance 小字同步)。选型规范:
   - LOS 速率(零点有物理意义的发散数据)→ `vik`(社区习惯:红=远离卫星/沉降,
     蓝=朝向卫星/抬升);
   - 发散色标 vmin/vmax 必须关于 0 对称 —— 脚本按 |velocity| 的 98 分位对称限幅,
     全零场兜底 ±1.0 mm/yr;
+  - 相干性(0–1 顺序量)→ `batlow`;缠绕相位(循环量)→ `romaO` —— 循环量配
+    非循环色带会在 ±π 处产生假边界(2026-08-13 C8 修正);
   - 一律禁用 jet/hsv/rainbow(Crameri et al. 2020 的定量依据:亮度非单调制造
     假边界,红绿色弱不可读)。
 - **`format`**(默认 `"png+pdf"`):PNG 供预览/报告/影像面板;PDF 是矢量原稿

@@ -377,6 +377,41 @@ def test_file_db_pragmas(tmp_path):
         db.close()
 
 
+def test_legacy_column_migration_on_reopen(tmp_path):
+    """早期库缺列(record_version/deliver_as)重开自动 ALTER 补齐:
+    2026-08-13 真实 workspace 实测 —— converse 首日聊天触发 load_steps 读
+    r["record_version"] IndexError 炸穿回合(老库从未走过该读取路径)。"""
+    path = tmp_path / "legacy.db"
+    db = Database(path)
+    with db.tx() as cur:  # 手工做旧:删掉三根后来加的列(SQLite ≥3.35 支持)
+        cur.execute("ALTER TABLE steps DROP COLUMN record_version")
+        cur.execute("ALTER TABLE artifacts DROP COLUMN record_version")
+        # idx_actions_due 引用 deliver_as,先删索引才能删列(重开时 schema
+        # 幂等重放会把索引补回来,连同本清单的列迁移一起收敛)
+        cur.execute("DROP INDEX IF EXISTS idx_actions_due")
+        cur.execute("ALTER TABLE pending_actions DROP COLUMN deliver_as")
+    db.close()
+
+    db = Database(path)
+    try:
+        step_cols = {r["name"] for r in db.query("PRAGMA table_info(steps)")}
+        art_cols = {r["name"] for r in db.query("PRAGMA table_info(artifacts)")}
+        act_cols = {r["name"] for r in db.query("PRAGMA table_info(pending_actions)")}
+        assert "record_version" in step_cols
+        assert "record_version" in art_cols
+        assert "deliver_as" in act_cols
+        # 读路径真实可用(而不只是列存在):load_steps 不再 IndexError
+        store = Store(db)
+        store.create_session("legacy", "legacy")
+        store.create_run("r-legacy", "legacy", workspace="ws")
+        store.upsert_step("r-legacy", 1, capability="c", name="n", method="m",
+                          params={}, hashes={"task_hash": "t", "args_hash": "a",
+                                             "local_hash": "l", "eval_hash": "e"})
+        assert store.load_steps("r-legacy")[0].record_version == 1
+    finally:
+        db.close()
+
+
 def test_index_migration_on_reopen(tmp_path):
     """旧库重开自动收敛到目标索引集:缺的补(schema.sql 幂等重放),
     冗余的删(_STATEMENT_MIGRATIONS:idx_steps_run 与主键 autoindex 重复)。"""

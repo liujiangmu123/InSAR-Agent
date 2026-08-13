@@ -18,6 +18,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod opendata;
 mod shortcuts;
 mod sidecar;
 mod singleton;
@@ -356,6 +357,7 @@ fn boot(handle: AppHandle, desired_port: u16) {
     let port = match resolve_port(desired_port) {
         Ok(PortPlan::Reuse(p)) => {
             println!("[desktop] 端口 {p} 已有健康后端,直接连接(不 spawn sidecar)");
+            opendata::set_backend_port(p); // 「打开数据文件夹」注册通路从此可用
             open_main_window(&handle, p);
             return;
         }
@@ -396,6 +398,7 @@ fn boot(handle: AppHandle, desired_port: u16) {
     match wait_health(port, Duration::from_secs(HEALTH_TIMEOUT_SECS)) {
         Ok(()) => {
             println!("[desktop] /api/health = 200,打开主窗口");
+            opendata::set_backend_port(port); // 「打开数据文件夹」注册通路从此可用
             open_main_window(&handle, port);
             std::thread::spawn(move || supervise(handle, backend, backend_desc, port, workdir));
         }
@@ -614,6 +617,9 @@ fn main() {
             let handle = app.handle().clone();
             tray::setup_tray(app.handle())?; // 托盘:关闭到托盘钩子经 window_created 自动挂上
             window_state::attach_when_ready(app.handle()); // 窗口几何持久化(主窗异步创建)
+            if let Err(e) = opendata::install(app.handle()) {
+                eprintln!("[desktop] 拖拽注册数据目录钩子安装失败(不影响主流程):{e}");
+            }
             if let Err(e) = shortcuts::setup_shortcuts(app.handle()) {
                 eprintln!("[desktop] 全局快捷键注册失败(不影响主流程):{e}");
             }

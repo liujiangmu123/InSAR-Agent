@@ -2,8 +2,66 @@
  *
  * 安全纪律:密钥只上行(POST /api/llm/config),永不回显全文——输入框留空
  * 表示沿用服务端已存密钥(占位符展示掩码);模型列表/测试都由服务端持钥出网。
- * 自初始化 + 幂等:顶栏注入「模型」齿轮按钮,不改 app.js。
+ * 自初始化 + 幂等:顶栏注入「模型」齿轮按钮、composer 提示行注入常驻模型
+ * 指示 chip,均不改 app.js / index.html。
+ * 回显纪律:打开面板即拉 GET /api/llm/config,已存模型立刻渲染进下拉
+ * (不必先点「获取模型列表」);保存成功后广播 CustomEvent('llm:config-changed'),
+ * chip 监听事件即时刷新。dlg.dataset 只是会话内缓存,每次打开都以服务端为准。
  */
+
+// ---------- 纯函数(模块顶层导出,供 prototype/llmsettings.check.mjs 直测) ----------
+
+function priceLabel(m) {
+  if (m.price_in == null) return "";
+  const cur = m.currency === "CNY" ? "¥" : (m.currency ? m.currency + " " : "");
+  return ` · ${cur}${m.price_in}/${m.price_out} 每百万`;
+}
+
+/* 下拉渲染:空选项 + 模型清单(识图下拉只留 vision 模型),current 保持选中;
+ * current 不在清单里时尾部补一项「xxx(已保存)」。打开面板的「即回显」复用
+ * 同一条路径:传空清单即得到「(未选择)+ 已存模型(已保存)」;之后真正获取
+ * 到完整清单再调一次,选中态无缝并入(已存模型在清单里就不再带标注)。 */
+export function fillSelect(sel, models, current, visionOnly) {
+  const list = visionOnly ? models.filter((m) => m.vision) : models;
+  sel.innerHTML = "";
+  const blank = document.createElement("option");
+  blank.value = ""; blank.textContent = visionOnly ? "(不启用识图)" : "(未选择)";
+  sel.appendChild(blank);
+  for (const m of list) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = `${m.id}${m.vision ? " · 识图" : ""}${priceLabel(m)}`;
+    if (m.id === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  if (current && ![...sel.options].some((o) => o.value === current)) {
+    const opt = document.createElement("option");
+    opt.value = current; opt.textContent = `${current}(已保存)`;
+    opt.selected = true; sel.appendChild(opt);
+  }
+}
+
+/* 常驻模型指示 chip 的三态文案:双模型 / 仅对话 / 未配置。
+ * 返回 { text, aria, tone }:text 是可见文案,aria 是完整无障碍名,
+ * tone="warn" 时 chip 走醒目告警配色(未配置对话模型即视为未配置)。 */
+export function chipView(cfg) {
+  const chat = (cfg && cfg.chat_model) || "";
+  const vision = (cfg && cfg.vision_model) || "";
+  if (!chat) {
+    return { text: "⚙ 未配置模型", aria: "模型设置:尚未配置模型", tone: "warn" };
+  }
+  if (!vision) {
+    return {
+      text: `⚙ ${chat}`,
+      aria: `模型设置:当前对话模型 ${chat},未启用识图`, tone: "",
+    };
+  }
+  return {
+    text: `⚙ ${chat} · 识图 ${vision}`,
+    aria: `模型设置:当前对话模型 ${chat},识图模型 ${vision}`, tone: "",
+  };
+}
+
 (() => {
   "use strict";
   if (window.__llmSettingsInstalled) return;
@@ -45,32 +103,6 @@
   }
 
   // ---------- 视图 ----------
-
-  function priceLabel(m) {
-    if (m.price_in == null) return "";
-    const cur = m.currency === "CNY" ? "¥" : (m.currency ? m.currency + " " : "");
-    return ` · ${cur}${m.price_in}/${m.price_out} 每百万`;
-  }
-
-  function fillSelect(sel, models, current, visionOnly) {
-    const list = visionOnly ? models.filter((m) => m.vision) : models;
-    sel.innerHTML = "";
-    const blank = document.createElement("option");
-    blank.value = ""; blank.textContent = visionOnly ? "(不启用识图)" : "(未选择)";
-    sel.appendChild(blank);
-    for (const m of list) {
-      const opt = document.createElement("option");
-      opt.value = m.id;
-      opt.textContent = `${m.id}${m.vision ? " · 识图" : ""}${priceLabel(m)}`;
-      if (m.id === current) opt.selected = true;
-      sel.appendChild(opt);
-    }
-    if (current && ![...sel.options].some((o) => o.value === current)) {
-      const opt = document.createElement("option");
-      opt.value = current; opt.textContent = `${current}(当前已存)`;
-      opt.selected = true; sel.appendChild(opt);
-    }
-  }
 
   function note(el, text, tone) {
     el.textContent = text;
@@ -143,7 +175,8 @@
       if (e.key === "Escape") { e.stopPropagation(); close(); }
     });
 
-    // 当前配置回填(密钥只有掩码 → 放占位符)
+    // 当前配置回填(密钥只有掩码 → 放占位符)。已存模型打开即回显:
+    // 下拉立刻启用并渲染「(未选择)+ 已存模型(已保存)」,不必先获取列表。
     try {
       const cfg = await fetchConfig();
       f("base_url").value = cfg.base_url || "";
@@ -153,6 +186,11 @@
       dlg.dataset.chatModel = cfg.chat_model || "";
       dlg.dataset.visionModel = cfg.vision_model || "";
       if (cfg.chat_model || cfg.vision_model) {
+        fillSelect(f("chat_model"), [], dlg.dataset.chatModel, false);
+        fillSelect(f("vision_model"), [], dlg.dataset.visionModel, true);
+        f("chat_model").disabled = f("vision_model").disabled = false;
+        note(f("fetchNote"),
+          "已加载保存的配置;点『获取模型列表』可查看全部可选模型与价格", "dim");
         note(f("saveNote"), cfg.configured ? "当前配置可用" : "配置不完整", "dim");
       }
     } catch { note(f("saveNote"), "读取配置失败(后端未启动?)", "bad"); }
@@ -167,8 +205,14 @@
         });
         if (!out.ok) { note(f("fetchNote"), out.error || "获取失败", "bad"); return; }
         const models = out.models || [];
-        fillSelect(f("chat_model"), models, dlg.dataset.chatModel, false);
-        fillSelect(f("vision_model"), models, dlg.dataset.visionModel, true);
+        // 无缝并入:回显阶段(或用户改选后)的当前选中值原样保持;
+        // 下拉还没启用过(无已存配置)才回退到 dataset 缓存。
+        const curChat = f("chat_model").disabled
+          ? (dlg.dataset.chatModel || "") : f("chat_model").value;
+        const curVision = f("vision_model").disabled
+          ? (dlg.dataset.visionModel || "") : f("vision_model").value;
+        fillSelect(f("chat_model"), models, curChat, false);
+        fillSelect(f("vision_model"), models, curVision, true);
         f("chat_model").disabled = f("vision_model").disabled = false;
         const nv = models.filter((m) => m.vision).length;
         note(f("fetchNote"), `${models.length} 个模型(${nv} 个支持识图)`, "ok");
@@ -191,6 +235,8 @@
       if (view.api_key_masked) {
         f("api_key").placeholder = `${view.api_key_masked}(留空 = 沿用)`;
       }
+      // 广播最新配置视图(不含密钥全文),常驻 chip 监听后即时刷新
+      document.dispatchEvent(new CustomEvent("llm:config-changed", { detail: view }));
       return view;
     };
 
@@ -223,9 +269,35 @@
     f("base_url").focus();
   }
 
+  // ---------- 常驻模型指示 chip(composer 提示行左端) ----------
+
+  function renderChip(chip, cfg) {
+    const v = chipView(cfg);
+    chip.textContent = v.text;             // 模型名来自服务端,textContent 天然防注入
+    chip.setAttribute("aria-label", v.aria);
+    chip.title = v.aria;
+    if (v.tone) chip.dataset.tone = v.tone;
+    else delete chip.dataset.tone;
+  }
+
+  function installChip() {
+    const anchor = $(".composer .cmeta");
+    if (!anchor || document.getElementById("llmModelChip")) return;
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.id = "llmModelChip";
+    chip.className = "llm-chip";
+    renderChip(chip, null);                // 先按「未配置」占位,读到配置再刷新
+    chip.addEventListener("click", openDialog);
+    document.addEventListener("llm:config-changed", (e) => renderChip(chip, e.detail));
+    anchor.prepend(chip);
+    // 初始状态取服务端;后端不可达时维持「未配置」占位,不打断页面
+    fetchConfig().then((cfg) => renderChip(chip, cfg)).catch(() => {});
+  }
+
   // ---------- 顶栏入口 ----------
 
-  function install() {
+  function installGear() {
     const anchor = document.getElementById("status");
     if (!anchor || document.getElementById("btnLlmSettings")) return;
     const btn = document.createElement("button");
@@ -249,6 +321,11 @@
       + '<span class="lbl">模型</span>';
     btn.addEventListener("click", openDialog);
     anchor.parentNode.insertBefore(btn, anchor);
+  }
+
+  function install() {
+    installGear();
+    installChip();
   }
 
   if (document.readyState === "loading") {

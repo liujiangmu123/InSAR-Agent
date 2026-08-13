@@ -116,6 +116,10 @@ export async function addRoot(path) {
 
 // 模块级 UI 状态:tab 切换会整体重建 DOM,展示态(上次清单/输入行开合)须存活
 const ui = { data: null, adding: false, msg: '' };
+// 桌面壳注册数据根后广播 datasets:refresh(desktopdata.js / desktop/src/opendata.rs)→ 重拉清单
+let refreshNow = null; // 当前区块的 refresh 句柄(区块随 tab 切换整体重建,句柄随之更替)
+if (typeof window !== 'undefined') window.addEventListener('datasets:refresh',
+  () => refreshNow && refreshNow({ reload: true }));
 
 function badgeEl(kind) {
   const b = badgeOf(kind);
@@ -189,6 +193,7 @@ function section(pane) {
     if (reload) ui.data = await fetchDatasets({ rescan });
     render();
   };
+  refreshNow = refresh; // datasets:refresh 事件的当前刷新出口(见模块顶部监听)
 
   const render = () => {
     const n = ui.data && ui.data.datasets ? ui.data.datasets.length : 0;
