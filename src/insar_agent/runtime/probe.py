@@ -104,6 +104,36 @@ def _windows_mem_gb() -> float | None:
         return None
 
 
+#: 隐式引擎环境的扫描根(优先级序):本机 README 验证过的安装位在前
+_KNOWN_ENV_ROOTS = (
+    Path(r"E:\miniforge3\envs"),
+    Path.home() / "miniforge3" / "envs",
+    Path.home() / "mambaforge" / "envs",
+    Path(r"C:\miniforge3\envs"),
+)
+
+
+def _implicit_engine_prefix() -> str | None:
+    """INSAR_ENGINE_PREFIX 未配置时,在已知 conda 根里找含 mintpy 的环境。
+
+    判据与显式 prefix 的检查一致(site-packages/mintpy 目录),名为 insar 的
+    环境优先;找不到返回 None(行为与旧版完全一致)。"""
+    site_rel = ("Lib/site-packages/mintpy" if sys.platform == "win32"
+                else "lib/python3.11/site-packages/mintpy")
+    for root in _KNOWN_ENV_ROOTS:
+        try:
+            if not root.is_dir():
+                continue
+            envs = sorted(root.iterdir(),
+                          key=lambda e: (e.name != "insar", e.name))
+            for env in envs:
+                if (env / site_rel).is_dir():
+                    return str(env)
+        except OSError:
+            continue
+    return None
+
+
 def probe_environment(workspace: Path | str = ".", *, with_versions: bool = False,
                       check_wsl: bool = True) -> ProbeResult:
     result = ProbeResult()
@@ -122,8 +152,11 @@ def probe_environment(workspace: Path | str = ".", *, with_versions: bool = Fals
     for engine, module in _ENGINE_MODULES.items():
         result.engines[engine] = "present" if importlib.util.find_spec(module) else None
 
-    # conda 引擎环境(INSAR_ENGINE_PREFIX):Windows 原生 MintPy 路线(无 WSL 快速验证)
-    prefix = os.environ.get("INSAR_ENGINE_PREFIX")
+    # conda 引擎环境(INSAR_ENGINE_PREFIX):Windows 原生 MintPy 路线(无 WSL 快速验证)。
+    # 未配置时按已知安装位隐式回退(2026-08-13 用户实测:从无 conda PATH 的 shell
+    # 启动服务,gdal 探测不到 → 必需项失败 → 向导误报"未通过";引擎明明装在
+    # E:\miniforge3\envs\insar,探测不该依赖启动 shell 的 PATH)
+    prefix = os.environ.get("INSAR_ENGINE_PREFIX") or _implicit_engine_prefix()
     if prefix:
         p = Path(prefix)
         scripts = p / ("Scripts" if sys.platform == "win32" else "bin")
