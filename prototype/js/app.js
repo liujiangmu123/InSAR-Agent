@@ -83,6 +83,7 @@ function boot() {
   });
 
   renderSessions();
+  window.__slashRun = (ids) => run(ids);   // slash 接线:/run 命令借用既有执行链路(js/slash.js)
   Notify.init({ onAdminRuns: (runs) => { adminRuns = runs; renderSessions(); } });   // 通知接线：标题角标复原 + 30s 运维视图轮询
   renderHero();
   wireChrome();
@@ -187,6 +188,7 @@ function wireChrome() {
   el.stop.addEventListener('click', abort);
 
   el.input.addEventListener('keydown', (e) => {
+    if (window.__slash?.beforeKey(e)) return;   // slash 接线:命令面板拦截按键(js/slash.js)
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
   });
   el.input.addEventListener('input', () => {
@@ -1028,6 +1030,7 @@ function renderAttachments() {
 async function submit() {
   let text = el.input.value.trim();
   if (!text) return;
+  if (window.__slash?.beforeSubmit(text)) return;   // slash 接线:斜杠命令不进对话流(js/slash.js)
   if (S.busy) { Queue.enqueue(text); return; }   // 排队而非丢弃：chip 可撤销，回合结束自动发出
   if (attachments.length) {
     text += `\n〔附件 · 演示未上传〕${attachments.map((a) => a.name).join('、')}`;
