@@ -19,6 +19,7 @@
 import { h, icon } from './dom.js';
 import { S } from './state.js';
 import { demoBanner, fetchEnvLive, thresholdSourceLabel } from './envlive.js';
+import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
 
 export { demoBanner };   // 演示回落横幅:与 env 面板同款样式,由 auditView 复用
 
@@ -26,12 +27,13 @@ export { demoBanner };   // 演示回落横幅:与 env 面板同款样式,由 au
 const TTL_MS = 30_000;
 
 /* 证据链随 run 推进而变且按会话隔离,缓存必须绑定 session:
-   切换会话后旧缓存立即失效,不把 A 会话的证据级渲染进 B 会话。 */
-let cache = { at: 0, session: null, promise: null };
+   切换会话后旧缓存立即失效,不把 A 会话的证据级渲染进 B 会话。
+   run 历史切换器接线后同理绑定 runId:切 run 立即失效,不串证据链。 */
+let cache = { at: 0, session: null, runId: null, promise: null };
 
 /** 手动刷新入口:清缓存,下一次 fetchAuditLive() 必然重新拉取。 */
 export function invalidate() {
-  cache = { at: 0, session: null, promise: null };
+  cache = { at: 0, session: null, runId: null, promise: null };
 }
 
 async function getJson(url) {
@@ -42,26 +44,33 @@ async function getJson(url) {
 
 /** 拉取证据链实况(带 30s TTL 缓存;force=true 跳过缓存)。
     /api/provenance 是主数据源,404(无 run)/不可达 → 整体返回 null;
-    /api/env 是辅数据源(阈值台账),失败只回落 provenance 内嵌的同款契约。 */
-export function fetchAuditLive({ force = false } = {}) {
+    /api/env 是辅数据源(阈值台账),失败只回落 provenance 内嵌的同款契约。
+    runId 可选(run 历史切换器接线,runswitch.js):缺省取 activeRunId(),
+    非空 → /api/provenance 带 run_id 查看历史 run 的证据链;
+    null(最新)行为与接线前完全一致。阈值台账取自 /api/env,是会话级
+    环境实测,不随 run 切换。 */
+export function fetchAuditLive({ force = false, runId = activeRunId() } = {}) {
   if (location.protocol === 'file:') return Promise.resolve(null);  // 与 envlive 同判据
   if (!force && cache.promise && cache.session === S.sessionId
+      && cache.runId === (runId || null)
       && Date.now() - cache.at < TTL_MS) return cache.promise;
 
   const session = S.sessionId;
   const promise = (async () => {
     try {
+      const qs = new URLSearchParams({ session });
+      if (runId) qs.set('run_id', runId);
       const [prov, env] = await Promise.all([
-        getJson(`/api/provenance?session=${encodeURIComponent(session)}`),
+        getJson(`/api/provenance?${qs}`),
         fetchEnvLive().catch(() => null),   // fetchEnvLive 自身不抛错,兜底一层
       ]);
       return normalize(prov, env);
     } catch {
-      cache = { at: 0, session: null, promise: null };  // 失败不占缓存位:下次立即重试
+      cache = { at: 0, session: null, runId: null, promise: null };  // 失败不占缓存位:下次立即重试
       return null;
     }
   })();
-  cache = { at: Date.now(), session, promise };
+  cache = { at: Date.now(), session, runId: runId || null, promise };
   return promise;
 }
 

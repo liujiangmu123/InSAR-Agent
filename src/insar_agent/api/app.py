@@ -333,6 +333,35 @@ def create_app(home: Path | None = None) -> FastAPI:
                            for k, t in contract.items()],
         }
 
+    @app.get("/api/runs")
+    def runs(session: str):
+        """该会话的 run 清单(前端 run 历史切换器的数据源,轻量窄集)。
+
+        - 归属口径同 resolve_run:只列属于该会话的 run,不泄露其他会话的
+          run 是否存在;会话不存在或还没有 run → 空清单(与 /api/state
+          「无 run 不 404」一致,前端以此隐藏切换器)。
+        - 排序:created_at 倒序(store.list_runs 的 SQL 排序,最新在前)。
+        - 每条附 parent_run_id(fork 谱系)与步骤终态统计
+          (total|done|skipped|failed),不含 intent/tool_versions 等大字段。
+        - 纯读端点:不走 driver_of,不为未知会话创建目录/会话行。
+        """
+        items = []
+        for run in store.list_runs(session):
+            steps = store.load_steps(run["run_id"])
+            counts = {"done": 0, "skipped": 0, "failed": 0}
+            for s in steps:
+                if s.state in counts:
+                    counts[s.state] += 1
+            items.append({
+                "run_id": run["run_id"],
+                "parent_run_id": run["parent_run_id"],
+                "created_at": run["created_at"],
+                "status": run["status"],
+                "scenario": run["scenario"],
+                "steps": {"total": len(steps), **counts},
+            })
+        return {"session": session, "runs": items}
+
     @app.get("/api/state")
     def state(session: str, run_id: str | None = None):
         run = resolve_run(session, run_id, required=False)

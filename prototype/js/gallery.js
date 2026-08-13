@@ -17,6 +17,7 @@
 import { h } from './dom.js';
 import { S } from './state.js';
 import { figureNode, IMAGES } from './figures.js';
+import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
 
 /* ---------------- 数据源 ---------------- */
 
@@ -25,7 +26,10 @@ import { figureNode, IMAGES } from './figures.js';
 const cache = { key: '', at: 0, promise: null };
 
 function fetchFigures() {
-  const key = S.sessionId;
+  // run 历史切换器接线(runswitch.js):runId 非空 → /api/figures 带 run_id
+  // 查看历史 run 的图件;缓存键携带 run id,切 run 立即失效不串数据。
+  const runId = activeRunId();
+  const key = `${S.sessionId}:${runId || ''}`;
   if (cache.promise && cache.key === key && Date.now() - cache.at < 3000) {
     return cache.promise;
   }
@@ -34,7 +38,8 @@ function fetchFigures() {
   cache.promise = (async () => {
     if (location.protocol === 'file:') return null;   // 静态打开必无后端
     try {
-      const qs = new URLSearchParams({ session: key });
+      const qs = new URLSearchParams({ session: S.sessionId });
+      if (runId) qs.set('run_id', runId);   // 缺省(最新)不带参数,行为不变
       const resp = await fetch(`/api/figures?${qs}`);
       if (!resp.ok) return null;
       return await resp.json();

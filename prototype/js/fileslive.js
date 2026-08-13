@@ -17,6 +17,7 @@
    ============================================================ */
 import { h, icon } from './dom.js';
 import { S } from './state.js';
+import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
 
 // 演示回落横幅与 envlive 共用同一款（文案由调用方给），避免两套样式漂移
 export { demoBanner } from './envlive.js';
@@ -24,33 +25,39 @@ export { demoBanner } from './envlive.js';
 /** 缓存 TTL：产物清单读 DB + 逐文件 stat，秒级；30s 内复用，手动刷新走 invalidate()。 */
 const TTL_MS = 30_000;
 
-let cache = { at: 0, promise: null };
+let cache = { at: 0, runId: null, promise: null };
 
 /** 手动刷新入口：清缓存，下一次 fetchFilesLive() 必然重新拉取。 */
 export function invalidate() {
-  cache = { at: 0, promise: null };
+  cache = { at: 0, runId: null, promise: null };
 }
 
 /** 拉取真实产物清单（带 30s TTL 缓存；force=true 跳过缓存）。
     返回 null = 无真实数据可展示（后端不可达 / file:// / 会话还没有 run），
-    调用方以此回落演示；run 存在但产物为空是真实状态，照常返回渲染。 */
-export function fetchFilesLive({ force = false } = {}) {
+    调用方以此回落演示；run 存在但产物为空是真实状态，照常返回渲染。
+    runId 可选（run 历史切换器接线，runswitch.js）：缺省取 activeRunId()，
+    非空 → /api/artifacts 带 run_id 查看历史 run；缓存按 run 区分，
+    null（最新）行为与接线前完全一致。 */
+export function fetchFilesLive({ force = false, runId = activeRunId() } = {}) {
   if (location.protocol === 'file:') return Promise.resolve(null);  // 与 backend.sse.js 同判据
-  if (!force && cache.promise && Date.now() - cache.at < TTL_MS) return cache.promise;
+  if (!force && cache.promise && cache.runId === (runId || null)
+      && Date.now() - cache.at < TTL_MS) return cache.promise;
 
   const promise = (async () => {
     try {
-      const resp = await fetch(`/api/artifacts?session=${encodeURIComponent(S.sessionId)}`);
+      const qs = new URLSearchParams({ session: S.sessionId });
+      if (runId) qs.set('run_id', runId);
+      const resp = await fetch(`/api/artifacts?${qs}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       if (!data.run) return null;               // 会话无 run：回落演示数据
       return normalize(data);
     } catch {
-      cache = { at: 0, promise: null };         // 失败不占缓存位：下次渲染立即重试
+      cache = { at: 0, runId: null, promise: null };  // 失败不占缓存位：下次渲染立即重试
       return null;
     }
   })();
-  cache = { at: Date.now(), promise };
+  cache = { at: Date.now(), runId: runId || null, promise };
   return promise;
 }
 

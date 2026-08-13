@@ -180,9 +180,12 @@ export async function fetchImpact(stepId, { method, params } = {}) {
   return getJson('/api/impact', q);
 }
 
-/** 服务端状态镜像:{ run, steps:[{id,method,state,stale,...}] } 或 null。 */
-export function fetchState() {
-  return getJson('/api/state', {});
+/** 服务端状态镜像:{ run, steps:[{id,method,state,stale,...}] } 或 null。
+    runId 可选(run 历史切换器接线,runswitch.js):dock 流水线视图显式传入
+    以查看历史 run;app.js 的本地镜像同步不传 —— 永远跟随最新 run,
+    不受历史切换影响(镜像驱动执行 UI,跟错 run 会引发 contract_broken)。 */
+export function fetchState({ runId } = {}) {
+  return getJson('/api/state', runId ? { run_id: runId } : {});
 }
 
 /** 历史对话:[{role:'user'|'agent', content, created_at, ...}] 或 null。 */
