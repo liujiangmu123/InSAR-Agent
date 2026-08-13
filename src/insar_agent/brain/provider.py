@@ -101,3 +101,82 @@ class LLMProvider:
             # data.get(...) 上 AttributeError 炸穿降级路径 —— 契约是 dict,这里拒绝
             raise BrainUnavailable(f"响应 JSON 顶层不是对象:{content[:200]}")
         return parsed
+
+
+def list_models(base_url: str, api_key: str, timeout: float = 30.0) -> list[dict]:
+    """GET {base}/models,返回 data 数组原样(调用方裁剪字段)。
+
+    OpenAI 兼容中转站普遍在模型对象上带能力元数据(supports_vision 等,
+    tokenrhythm 实测有);解析失败/形状不对 → BrainUnavailable。
+    """
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/models",
+        headers={"Authorization": f"Bearer {api_key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise BrainUnavailable(f"模型列表请求被拒(HTTP {exc.code}):检查地址与密钥") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise BrainUnavailable(f"模型列表获取失败:{exc}") from exc
+    data = body.get("data")
+    if not isinstance(data, list):
+        raise BrainUnavailable("模型列表响应缺 data 数组(非 OpenAI 兼容形态)")
+    return [m for m in data if isinstance(m, dict) and m.get("id")]
+
+
+def describe_image_stream(route: LLMRoute, *, prompt: str, image_data_url: str,
+                          max_tokens: int = 512, timeout: float = 120.0) -> str:
+    """识图调用:OpenAI 兼容 image_url 形态,**强制流式**(接入方约束:
+    识图模型必须 stream=true;2026-08-13 tokenrhythm kimi-k2.5/2.6 实测通过)。
+
+    聚合 SSE 增量(choices[0].delta.content)返回全文;HTTP 错误/断流/零内容
+    → BrainUnavailable,由调用方走降级路径。
+    """
+    payload = {
+        "model": route.model,
+        "stream": True,
+        "max_tokens": max_tokens,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_data_url}},
+            ],
+        }],
+    }
+    req = urllib.request.Request(
+        route.base_url + "/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {route.api_key}"})
+    parts: list[str] = []
+    finish: str | None = None
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    choice = (json.loads(data).get("choices") or [{}])[0]
+                except json.JSONDecodeError:
+                    continue  # 心跳/坏帧跳过,以 [DONE] 或断流为终止
+                delta = choice.get("delta") or {}
+                if delta.get("content"):
+                    parts.append(delta["content"])
+                finish = choice.get("finish_reason") or finish
+    except urllib.error.HTTPError as exc:
+        raise BrainUnavailable(f"识图请求被拒(HTTP {exc.code}):"
+                               f"检查模型是否支持图片输入") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise BrainUnavailable(f"识图流中断:{exc}") from exc
+    if finish == "length":
+        raise BrainTruncated("识图输出被 token 上限截断,整体拒绝")
+    text = "".join(parts).strip()
+    if not text:
+        raise BrainUnavailable("识图响应为空(模型无内容输出)")
+    return text

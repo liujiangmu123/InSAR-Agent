@@ -364,6 +364,7 @@ def create_app(home: Path | None = None) -> FastAPI:
         return JSONResponse(status_code=422, content=safe)
 
     app.include_router(create_setup_router(home))  # 环境向导(/api/setup/*,settings.json 与 DB 同目录)
+    from insar_agent.api.llm_router import create_llm_router; app.include_router(create_llm_router(home))  # LLM 密钥/模型配置
     app.include_router(version_router)             # 版本信息与更新检查(/api/version*)
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
     app.include_router(create_artifacts_router(store))  # 产物清单(/api/artifacts,文件面板数据源)
@@ -374,8 +375,12 @@ def create_app(home: Path | None = None) -> FastAPI:
         with drivers_lock:
             if session_id not in drivers:
                 ws = home / "sessions" / session_id
+                # LLM 路由:workspace/llm.json(界面可配)优先,环境变量兜底;
+                # 都未配置 = brain 禁用,系统退化为手动流水线(§3.5 铁律)
+                from insar_agent.brain.llm_config import routes_from_config
                 drivers[session_id] = Driver(
-                    store, workspace=ws, brain=Brain(LLMProvider()),
+                    store, workspace=ws,
+                    brain=Brain(LLMProvider(routes_from_config(home))),
                     allow_simulated=os.environ.get("INSAR_ALLOW_SIMULATED", "1") == "1")
                 store.create_session(session_id, session_id)
             return drivers[session_id]
