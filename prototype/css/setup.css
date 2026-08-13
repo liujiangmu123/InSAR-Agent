@@ -132,6 +132,18 @@
   border: 1px dashed var(--border-strong); border-radius: var(--r);
 }
 
+/* 引擎来源徽标（检测清单引擎行：PATH / conda 环境名 / WSL） */
+.setup-check .msg .setup-src {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  border: 1px solid var(--border-strong); border-radius: var(--r-pill);
+  background: var(--bg-sub); color: var(--text-2);
+  padding: 1px 7px; margin-left: 7px;
+  vertical-align: 1px; white-space: nowrap;
+}
+.setup-check .msg .setup-src.is-conda { color: var(--ok-text); border-color: var(--ok-border); background: var(--ok-weak); }
+.setup-check .msg .setup-src.is-wsl { color: var(--accent-text); border-color: var(--accent-border); background: var(--accent-weak); }
+/* .is-path 保持默认灰:PATH 命中依赖启动 shell,中性呈现 */
+
 /* ---------- 环境概览 ---------- */
 .setup-facts-wrap { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
 .setup-facts-lb {
@@ -188,6 +200,20 @@
 .setup-hint-ln { font-size: var(--fs-sm); color: var(--text-2); margin: 2px 0 0; }
 
 /* ---------- 第 3 步：路径配置 ---------- */
+/* 自动发现的引擎环境（未固化）：提示 + 一键保存为显式配置 */
+.setup-discovered {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: var(--fs-sm); color: var(--text-2);
+  border: 1px solid var(--accent-border); border-radius: var(--r);
+  background: var(--accent-weak); padding: 8px 12px; margin: 0 0 12px;
+}
+.setup-discovered > svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 3px; color: var(--accent-text); }
+.setup-discovered .bd { flex: 1; min-width: 0; }
+.setup-discovered .ln { color: var(--accent-text); font-weight: 600; }
+.setup-discovered .pth { font-family: var(--mono); font-size: 11.5px; word-break: break-all; color: var(--text); font-weight: 400; }
+.setup-discovered .hint { font-size: var(--fs-xs); color: var(--text-3); margin-top: 2px; }
+.setup-discovered .setup-btn { flex-shrink: 0; }
+
 .setup-field { display: block; margin-bottom: 12px; }
 .setup-field .lb { display: block; font-size: var(--fs-sm); font-weight: 600; margin-bottom: 4px; }
 .setup-field input {
@@ -276,4 +302,8 @@
   /* 底部操作行允许换行,按钮不被挤出卡片 */
   .setup-ft { flex-wrap: wrap; padding: 10px 16px; }
   .setup-acts { flex-wrap: wrap; }
+
+  /* 自动发现提示框:窄屏下按钮折行,长路径不把按钮挤出卡片 */
+  .setup-discovered { flex-wrap: wrap; }
+  .setup-discovered .setup-btn { margin-left: 22px; }
 }

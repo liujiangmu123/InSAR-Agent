@@ -2,6 +2,9 @@
 
 三个端点(挂载方式见 docs/INTEGRATION-setup.md,本模块不改 app.py):
   - GET  /api/setup/status      一次性返回首启所需的全部检测 + 中文修复建议;
+                                ?force=1 穿透 WSL 引擎探测缓存(「重新检测」用);
+                                engine 段带 discovered_prefix/prefix_source,
+                                向导据此把隐式发现的引擎环境一键固化为显式配置;
   - POST /api/setup/engine-env  只生成「创建 conda 引擎环境」的命令清单给前端展示/复制,
                                 绝不在后端执行任何安装(重型计算管控);
   - POST /api/setup/save        engine_prefix / hyp3_source 写入 INSAR_HOME/settings.json
@@ -23,7 +26,10 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from insar_agent.runtime.probe import probe_environment
+# _implicit_engine_prefix:与 probe_environment 同一套隐式发现例程(显式 env 缺席时
+# 扫描已知 conda 安装位)。向导要回答"探测实际用的是哪个 prefix、从哪来的",
+# 必须复用同一函数而不是抄一份判据 —— 否则两边漂移,报告的就不是探测真用的。
+from insar_agent.runtime.probe import _implicit_engine_prefix, probe_environment
 
 # settings.json 键 → 进程环境变量
 _ENV_OF = {
@@ -134,7 +140,7 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
         return _resolve_home(home)
 
     @router.get("/status")
-    def status() -> dict:
+    def status(force: bool = False) -> dict:
         home_dir = _home()
         settings = load_settings(home_dir)
 
@@ -149,8 +155,10 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
             from insar_agent.runtime.wsl_probe import (merge_wsl_probe,
                                                        probe_wsl_engines_cached)
 
-            # 实测探测约 20s:带 TTL 缓存,首次付全价,之后秒回(与 /api/env 共享)
-            wsl_result = probe_wsl_engines_cached(timeout=30.0)
+            # 实测探测约 20s:带 TTL 缓存,首次付全价,之后秒回(与 /api/env 共享)。
+            # force=1(向导「重新检测」)穿透缓存强制重探:用户刚在 WSL 里装完引擎,
+            # 5 分钟 TTL 内的旧缓存会让复检结果纹丝不动,看起来像"装了没用"
+            wsl_result = probe_wsl_engines_cached(timeout=30.0, force=force)
             if wsl_result.get("ok"):
                 merge_wsl_probe(probe, wsl_result)
         except Exception:
@@ -158,6 +166,16 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
 
         prefix = os.environ.get("INSAR_ENGINE_PREFIX") or None
         prefix_exists = bool(prefix) and Path(prefix).is_dir()
+        # 引擎发现透明化:探测实际使用的 prefix 及其来源。probe_environment 的取值
+        # 逻辑是「显式 env 优先,缺席时隐式扫描已知安装位」,这里按同一顺序复现:
+        #   explicit  显式配置(INSAR_ENGINE_PREFIX / settings.json,坏路径也如实报)
+        #   implicit  隐式发现(未固化 —— 向导第 3 步可一键保存为显式配置)
+        #   None      两头都没有
+        if prefix:
+            discovered_prefix, prefix_source = prefix, "explicit"
+        else:
+            discovered_prefix = _implicit_engine_prefix()
+            prefix_source = "implicit" if discovered_prefix else None
 
         def _engine(name: str) -> str | None:
             # merge_wsl_probe 把 WSL 引擎写成带 " (wsl)" 后缀的独立键,不覆盖裸键;
@@ -186,6 +204,12 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
                 f"INSAR_ENGINE_PREFIX 指向的目录不存在:{prefix}",
                 "确认 conda 引擎环境路径(如 E:\\miniforge3\\envs\\insar)后重新保存;"
                 "或按 POST /api/setup/engine-env 返回的命令先创建环境")
+        elif prefix_source == "implicit":
+            # 隐式命中:引擎能用但配置未落盘 —— 换终端/重启后全靠再次扫描碰运气,
+            # 建议在向导第 3 步一键固化为显式 engine_prefix
+            prefix_check = _check(
+                "engine_prefix", True,
+                f"自动发现引擎环境:{discovered_prefix}(未固化,建议保存)")
         elif engines_ok:
             prefix_check = _check(
                 "engine_prefix", True,
@@ -254,7 +278,10 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
             "ready": ready,
             "agent": {"python": py_ver, "venv": in_venv, "executable": sys.executable},
             "engine": {"prefix": prefix, "prefix_configured": bool(prefix),
-                       "prefix_exists": prefix_exists, "engines": engines},
+                       "prefix_exists": prefix_exists,
+                       "discovered_prefix": discovered_prefix,
+                       "prefix_source": prefix_source,
+                       "engines": engines},
             "data": {"source": source, "configured": bool(source),
                      "exists": source_exists, "pair_count": pair_count},
             "disk": {"free_gb": round(probe.disk_free_gb, 1),
