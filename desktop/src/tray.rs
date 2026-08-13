@@ -1,7 +1,8 @@
 // 系统托盘模块(tauri "tray-icon" feature)。
 //
 // 职责:
-//   1. 托盘图标 + 菜单:显示主窗口 / 隐藏 / 打开数据目录 / 导出诊断包 / 退出;
+//   1. 托盘图标 + 菜单:显示主窗口 / 隐藏 / 打开数据文件夹…(注册数据根,
+//      流程在 opendata.rs)/ 打开数据目录 / 导出诊断包 / 退出;
 //   2. 左键单击托盘图标 → 显示并聚焦主窗口;
 //   3. 「关闭窗口 → 最小化到托盘而非退出」(可配置,默认开启,仅对 label
 //      为 "main" 的主窗口生效;诊断窗口 "diagnostics" 关闭仍走正常退出)。
@@ -34,6 +35,9 @@ pub const CLOSE_TO_TRAY_ENV: &str = "INSAR_DESKTOP_CLOSE_TO_TRAY";
 
 const MENU_SHOW: &str = "tray-show";
 const MENU_HIDE: &str = "tray-hide";
+/// 「打开数据文件夹…」:原生对话框选目录 → 注册为数据扫描根(opendata.rs);
+/// 与 MENU_OPEN_DATA(在资源管理器里打开 INSAR_HOME)是两件事,注意区分。
+const MENU_OPEN_DATA_FOLDER: &str = "tray-open-data-folder";
 const MENU_OPEN_DATA: &str = "tray-open-data";
 const MENU_EXPORT_DIAG: &str = "tray-export-diag";
 const MENU_QUIT: &str = "tray-quit";
@@ -61,13 +65,20 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let show = MenuItem::with_id(app, MENU_SHOW, "显示主窗口", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, MENU_HIDE, "隐藏", true, None::<&str>)?;
+    let open_folder = MenuItem::with_id(
+        app,
+        MENU_OPEN_DATA_FOLDER,
+        "打开数据文件夹…",
+        true,
+        None::<&str>,
+    )?;
     let open_data = MenuItem::with_id(app, MENU_OPEN_DATA, "打开数据目录", true, None::<&str>)?;
     let export_diag = MenuItem::with_id(app, MENU_EXPORT_DIAG, "导出诊断包", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "退出", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&show, &hide, &open_data, &export_diag, &separator, &quit],
+        &[&show, &hide, &open_folder, &open_data, &export_diag, &separator, &quit],
     )?;
 
     let tooltip = app
@@ -108,6 +119,7 @@ fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match event.id().as_ref() {
         MENU_SHOW => show_main_window(app),
         MENU_HIDE => hide_main_window(app),
+        MENU_OPEN_DATA_FOLDER => crate::opendata::open_data_folder_flow(app),
         MENU_OPEN_DATA => open_data_dir(app),
         MENU_EXPORT_DIAG => export_diagnostics(app),
         MENU_QUIT => app.exit(0), // 触发 RunEvent::Exit → main.rs 里统一 kill sidecar
