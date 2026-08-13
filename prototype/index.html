@@ -27,6 +27,7 @@
 <link rel="stylesheet" href="css/datasets.css">
 <link rel="stylesheet" href="css/notify.css">
 <link rel="stylesheet" href="css/presets.css">
+<link rel="stylesheet" href="css/captions.css">
 <script type="module">
   // 桌面/首启增强:环境向导(后端就绪则静默)+ 窗口标题状态同步;均安全降级
   import('./js/setup.js').then((m) => m.maybeShowSetupWizard()).catch(() => {});
@@ -200,5 +201,6 @@
 <script type="module" src="js/notify.js"></script>
 <script type="module" src="js/presets.js"></script>
 <script type="module" src="js/reportdraft.js"></script><!-- 报告 tab 底部:方法章节草稿生成(自初始化,可安全降级) -->
+<script type="module" src="js/captions.js"></script><!-- 影像面板底部:论文图注生成(自初始化,可安全降级) -->
 </body>
 </html>
