@@ -53,6 +53,12 @@ _STATEMENT_MIGRATIONS: tuple[str, ...] = (
     " id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, session_id TEXT NOT NULL,"
     " step_ids_json TEXT, enqueued_at REAL NOT NULL, started_at REAL,"
     " state TEXT NOT NULL DEFAULT 'pending')",  # state: pending|running|done|cancelled
+    # 跨会话记忆(brain/memory.py):kind=preference|fact|outcome,source=user|auto;
+    # session_id NULL=全局记忆;archived 非 NULL=软删时刻(同 sessions.archived 语义)
+    "CREATE TABLE IF NOT EXISTS memories ("
+    " id INTEGER PRIMARY KEY, ts REAL NOT NULL, kind TEXT NOT NULL,"
+    " content TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'user',"
+    " session_id TEXT, weight REAL NOT NULL DEFAULT 1.0, archived REAL)",
 )
 
 
