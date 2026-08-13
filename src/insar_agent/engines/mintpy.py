@@ -51,6 +51,7 @@ mintpy.subset.lalo          = {subset_lalo}
 mintpy.reference.lalo       = {reference_lalo}
 ##---------network / inversion:
 mintpy.network.tempBaseMax  = {temp_base_max}
+mintpy.network.perpBaseMax  = {perp_base_max}
 mintpy.networkInversion.weightFunc  = no
 ##---------corrections:
 mintpy.troposphericDelay.method     = {tropo_method}
@@ -111,6 +112,9 @@ def render_cfg(run: dict, *, this_step: int, this_method: str, this_params: dict
              "tropo_height_corr": "height_correlation"}.get(m8, "pyaps")
     periods = p9.get("periods", []) if m9 == "poly_periodic" else []
     step_date = str(p9.get("step_date", "") or "") if m9 == "step" else ""
+    # 垂直基线阈值(C6):0/未设 → 渲染 no(对齐 MintPy 上游 perpBaseMax=auto(no);
+    # 旧 run 的 chain 无此参数,同样落 no,cfg 语义不变)
+    perp = int(p7.get("max_perp_baseline", 0) or 0)
 
     # 数据面(HyP3 路线):相对 mintpy/ 工作目录
     return _CFG_TEMPLATE.format(
@@ -124,6 +128,7 @@ def render_cfg(run: dict, *, this_step: int, this_method: str, this_params: dict
         subset_lalo=os.environ.get("INSAR_SUBSET_LALO", "391e4:400e4,39e4:51e4"),
         reference_lalo=os.environ.get("INSAR_REFERENCE_LALO", "391.5e4,45e4"),
         temp_base_max=p7.get("max_temporal_baseline", 120),
+        perp_base_max=(str(perp) if perp else "no"),
         tropo_method=tropo,
         ramp=p8.get("ramp", "no"),  # 兜底与注册表默认一致(C1:上游 deramp=no)
         dem_error="yes" if p8.get("dem_error", True) else "no",

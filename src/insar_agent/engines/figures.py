@@ -115,7 +115,13 @@ if finite.size == 0:
     print("ERROR: velocity 全 NaN(0 个有效像元),拒绝出图", flush=True)
     sys.exit(2)
 lim = float(np.percentile(np.abs(finite), 98)) or 1.0  # 对称限幅零点居中;全零场兜底 1.0
-cmap, cmap_name = pub_cmap(__CMAP__)
+# 默认色带按产物类型路由(C8,Crameri 2020 三分类:循环量配非循环色带会在 ±π 处
+# 产生假边界):速度=vik(diverging)、相干=batlow(sequential)、缠绕相位=romaO(cyclic);
+# 显式指定 cmap 时(AUTO=False)直通用户值不路由。产物类型从 meta(h5 FILE_TYPE)判断
+_CMAP_ROUTE = {"velocity": "vik", "coherence": "batlow", "temporalCoherence": "batlow",
+               "wrapPhase": "romaO"}
+_pick = _CMAP_ROUTE.get(atr.get("FILE_TYPE", "velocity"), "vik") if __AUTO_CMAP__ else __CMAP__
+cmap, cmap_name = pub_cmap(_pick)
 
 fig, ax = plt.subplots(figsize=(140 * MM, 105 * MM))  # 1.5 栏物理尺寸
 
@@ -217,15 +223,18 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
           workspace: Path) -> CommandPlan:
     script_rel = ".report/make_figures.py"
     cmap = str(params.get("cmap", "roma"))
-    # 旧默认 roma 升级为速率图推荐色标 vik(发散、CVD 安全,RESEARCH-pub-figures §二);
-    # 其余值直通 pub_cmap(cmcrameri 名字空间),缺包时脚本内退 RdBu_r 并记录在案
-    cmap = {"roma": "vik"}.get(cmap, cmap)
+    # 注册表默认 roma 视作「未显式指定」哨兵(C8):脚本内按产物类型路由默认色带,
+    # velocity 主图仍落 vik(发散、CVD 安全,RESEARCH-pub-figures §二,旧语义不变);
+    # 显式指定其他值直通 pub_cmap(cmcrameri 名字空间),缺包时脚本内退 RdBu_r 并记录在案
+    cmap_auto = cmap == "roma"
+    cmap = "vik" if cmap_auto else cmap
     dpi = int(params.get("dpi", 600))
     # sidecar 的 params 摘要:只放本步骤声明过的展示参数(repr 注入为 Python 字面量)
     params_summary = {"dpi": dpi, "cmap": cmap,
                       "format": str(params.get("format", "png+pdf"))}
     content = (_FIGURE_PY
                .replace("__DPI__", str(dpi))
+               .replace("__AUTO_CMAP__", repr(cmap_auto))
                .replace("__CMAP__", repr(cmap))
                .replace("__PARAMS__", repr(params_summary)))
     return CommandPlan(

@@ -36,15 +36,19 @@ invert_network 六个 MintPy 内部步骤 —— 参考点选择与解缠误差�
 
 ## 参数启发式
 
-本步骤在 registry(capabilities.py id=7)声明的参数只有三个,不要引用不存在的参数:
+本步骤在 registry(capabilities.py id=7)声明的参数只有四个(2026-08-13 C6 修正
+新增 `max_perp_baseline`),不要引用不存在的参数:
 
 - **`network`**(science,默认 `"small_baseline"`,枚举 `small_baseline | star |
   sequential`):`small_baseline` 时空基线双阈值剪枝(默认);`sequential` 序贯
   连接 —— Yunjun et al. (2019) §6.3 的基准案例用序贯 5 连接,冗余越高闭合修正
   能力越强(序贯 3/5/10 连接可完全修正的错误干涉图占比上限 5/20/35%);`star`
   单主影像星形网络,仅在高相干区可用(PS 式拓扑,失去闭合环检查能力)。
-  注意:当前 cfg 模板(engines/mintpy.py `_CFG_TEMPLATE`)只渲染
-  `mintpy.network.tempBaseMax`,网络拓扑在 HyP3 路线已由云端产品对固化。
+  护栏(2026-08-13 C7 修正,registry hint 已标注):star=单参考仅 PS/试验,
+  SBAS 下退化为无冗余无闭合;sequential 纯短基线有 fading 系统偏差,须混长基线
+  对(Ansari et al. 2021:seq-5 偏差达 −6.5 mm/yr,混入长基线对后收敛 −0.24)。
+  注意:当前 cfg 模板(engines/mintpy.py `_CFG_TEMPLATE`)渲染
+  `mintpy.network.tempBaseMax` 与 `perpBaseMax`,网络拓扑在 HyP3 路线已由云端产品对固化。
 - **`max_temporal_baseline`**(science,默认 `120` 天,范围 6–730,渲染为
   `mintpy.network.tempBaseMax`):台账锚点(contract.yaml,source=literature,
   status=OK)。取值参照系:
@@ -56,12 +60,13 @@ invert_network 六个 MintPy 内部步骤 —— 参考点选择与解缠误差�
     下降,优先序贯短时基线对并保证冗余;
   - L 波段(ALOS)可放宽到千天量级(Yunjun et al. 2019 §5.1 案例 < 1800 天),
     代价是大垂直基线放大 DEM 误差(需第 8 步 `dem_error` 校正兜底)。
-- **空间(垂直)基线**:本步骤**未声明**该参数 —— Sentinel-1 轨道管直径
-  100–200 m(RMS),12 天对 bperp 通常 < 165 m,天然小基线,不构成选对约束
-  (ESA 技术说明 ESA-EOPG-EOPGMQ-TN-2024-12;Manunta et al. 2019:S1 bperp
-  标准差 50 m)。经典参照:ERS 时代 SBAS 取 bperp < 130 m(Berardino et al.
-  2002 §V)。若换 L 波段/老平台确需垂直基线剪枝,走 MintPy 模板键
-  `mintpy.network.perpBaseMax`(当前 cfg 模板未渲染,须改模板而非造参数)。
+- **`max_perp_baseline`**(science,默认 `0`=不限,渲染为
+  `mintpy.network.perpBaseMax`,0/未设 → `no`;2026-08-13 C6 修正新增):
+  默认对齐 MintPy 上游 `perpBaseMax = auto (no)` —— S1 轨道管 100–200 m(RMS),
+  12 天对 bperp 通常 < 165 m,天然小基线不构成选对约束(ESA 技术说明
+  ESA-EOPG-EOPGMQ-TN-2024-12;Manunta et al. 2019:S1 bperp 标准差 50 m)。
+  场景参考:ERS 级 130 m(Berardino et al. 2002 §V);L 波段 ALOS ≤1800 m
+  (Yunjun et al. 2019 §5.1)—— stripmap/L 波段等老平台/长波长场景才需覆写。
 - **`parallel_workers`**(resource,默认 `4`,范围 1–16,不进指纹):渲染为
   `mintpy.compute.numWorker`(`cluster = local`);子进程线程数被 engines/mintpy.py
   钳制(`OMP_NUM_THREADS`/`MKL_NUM_THREADS` ≤ 8,本机重型计算管控)。内存预算
