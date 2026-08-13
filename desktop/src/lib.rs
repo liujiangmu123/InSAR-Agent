@@ -2,5 +2,6 @@
 // main.rs 集成时直接 `mod xxx;` 包含同一份源文件即可,与本 lib 目标互不干扰。
 
 pub mod commands;
+pub mod opendata;
 pub mod singleton;
 pub mod tray;
