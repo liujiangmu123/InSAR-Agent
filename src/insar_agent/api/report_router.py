@@ -2,6 +2,9 @@
 
 POST /api/report/draft {session, run_id?} →
   {run_id, draft, llm_polish, facts_used, saved}
+POST/GET /api/report/caption(body/query:session, figure, run_id?)→ 双语图注的
+  生成/读取(report/captions.py);图件定位与 sidecar 读取按 /api/figures 同口径,
+  生成结果落盘图件旁 <name>.caption.json。
 
 纪律:
   - 会话归属校验与 api/app.py 的 resolve_run 同口径,在本路由内自行实现
@@ -25,12 +28,14 @@ from typing import Callable
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from insar_agent.api.app import read_sidecar_meta
 from insar_agent.audit.contract import load_contract
 from insar_agent.brain.llm_config import routes_from_config
 from insar_agent.brain.provider import LLMProvider
 from insar_agent.core.fsio import atomic_write_text
 from insar_agent.core.ledger import export_provenance
 from insar_agent.core.store import Store
+from insar_agent.report import captions
 from insar_agent.report.draft import build_facts, draft_methods
 from insar_agent.report.results import RESULTS_FILENAME, build_result_facts, draft_results
 
@@ -40,6 +45,12 @@ DRAFT_FILENAME = "report_draft.md"
 
 class DraftBody(BaseModel):
     session: str
+    run_id: str | None = None
+
+
+class CaptionBody(BaseModel):
+    session: str
+    figure: str
     run_id: str | None = None
 
 
@@ -117,5 +128,35 @@ def create_report_router(store: Store, home: Path, *,
             "facts_used": result["facts_used"],
             "saved": saved,
         }
+
+    # ---- 图注(append 块:双语骨架 + 三重校验润色;/api/report/caption) ----
+    def _figure_of(session: str, run_id: str | None, figure: str):
+        # run 归属校验 + 图件定位(/api/figures 同口径);找不到统一 404,不泄露磁盘路径
+        run = _resolve_run(store, session, run_id)
+        found = captions.locate_figure(run, store.artifacts_of(run["run_id"]), figure)
+        if found is None:
+            raise HTTPException(404, f"figure {figure} 不存在或不属于该 run")
+        return run, found[0], found[1]
+
+    @router.post("/api/report/caption")
+    def report_caption(body: CaptionBody):
+        run, target, art = _figure_of(body.session, body.run_id, body.figure)
+        ws = run["workspace"]
+        doc = export_provenance(store, run["run_id"], contract=contract,
+                                workspace=Path(ws) if ws else None)
+        facts = captions.build_caption_facts(read_sidecar_meta(target), doc,
+                                             step=art["step_id"])
+        payload = {"run_id": run["run_id"], "figure": target.name,
+                   **captions.generate_caption(factory(), facts)}
+        return {**payload, "saved": captions.save_caption(target, payload)}
+
+    @router.get("/api/report/caption")
+    def report_caption_saved(session: str, figure: str, run_id: str | None = None):
+        run, target, _ = _figure_of(session, run_id, figure)
+        data = captions.load_caption(target)
+        if data is None:
+            raise HTTPException(404, "尚未生成图注")
+        return {"run_id": run["run_id"], "figure": target.name, "zh": data["zh"],
+                "en": data["en"], "llm_polish": bool(data.get("llm_polish"))}
 
     return router

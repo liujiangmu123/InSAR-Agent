@@ -28,10 +28,14 @@
 <link rel="stylesheet" href="css/datasets.css">
 <link rel="stylesheet" href="css/notify.css">
 <link rel="stylesheet" href="css/presets.css">
+<<<<<<< HEAD
 <link rel="stylesheet" href="css/advisor.css">
 <link rel="stylesheet" href="css/memorypanel.css">
 <link rel="stylesheet" href="css/installguide.css">
 <link rel="stylesheet" href="css/credpanel.css">
+=======
+<link rel="stylesheet" href="css/captions.css">
+>>>>>>> 1775691
 <script type="module">
   // 桌面/首启增强:环境向导(后端就绪则静默)+ 窗口标题状态同步;均安全降级
   import('./js/setup.js').then((m) => m.maybeShowSetupWizard()).catch(() => {});
@@ -207,6 +211,7 @@
 <script type="module" src="js/presets.js"></script>
 <script type="module" src="js/reportdraft.js"></script><!-- 报告 tab 底部:方法章节草稿生成(自初始化,可安全降级) -->
 <script type="module" src="js/resultsdraft.js"></script><!-- 报告 tab 底部:结果章节草稿生成(方法草稿之后,自初始化) -->
+<script type="module" src="js/captions.js"></script><!-- 影像面板:逐图论文图注生成(自初始化,可安全降级) -->
 <!-- 顶栏 LLM 用量芯片:实装 #budget(今日成本/调用次数,点击看 7 天明细;自初始化,可安全降级) -->
 <script type="module" src="js/usagechip.js"></script>
 <script type="module" src="js/visionqa.js"></script><!-- AI 识图质检:影像卡徽章+结果面板(事件委托注入,可安全降级) -->
