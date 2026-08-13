@@ -4,7 +4,7 @@
 
 | 文件 | 内容 |
 |---|---|
-| `src/tray.rs` | 系统托盘:图标、菜单(显示主窗口 / 隐藏 / 打开数据目录 / 退出)、左键单击显示主窗口、「关闭窗口 → 最小化到托盘」(可配置) |
+| `src/tray.rs` | 系统托盘:图标、菜单(显示主窗口 / 隐藏 / 打开数据目录 / 导出诊断包 / 退出)、左键单击显示主窗口、「关闭窗口 → 最小化到托盘」(可配置) |
 | `src/singleton.rs` | 单实例锁(tauri-plugin-single-instance):第二实例启动时前置已有窗口 |
 | `src/lib.rs` | 仅为让上述模块在未接线时也参与 `cargo build` 编译检查;接线后可留可删 |
 | `Cargo.toml` | 依赖增量(见下),`Cargo.lock` 已随之更新 |
@@ -14,7 +14,12 @@
 ```toml
 tauri = { version = "2", features = ["tray-icon"] }   # 原 features = []
 tauri-plugin-single-instance = "2"                     # 新增
+tauri-plugin-opener = "2"                              # 托盘「打开数据目录」(2026-08-13 增)
 ```
+
+opener 插件须在 main.rs 注册:`.plugin(tauri_plugin_opener::init())`
+(已接线;托盘从 Rust 侧直调 `app.opener().open_path(...)`,不经 webview,
+capability 无需为它加任何权限)。
 
 ## main.rs 最小集成 diff(共 5 行)
 
@@ -60,8 +65,13 @@ tauri-plugin-single-instance = "2"                     # 新增
 - **托盘菜单**:
   - 显示主窗口:show + unminimize + focus("main" 不在时退化为任意已有窗口);
   - 隐藏:隐藏窗口(托盘图标常驻,可随时唤回);
-  - 打开数据目录:dev 构建 = 仓库根(与 main.rs `repo_root()` 同语义,
-    runs/、workspace/ 所在地);打包分发后回退到应用数据目录;
+  - 打开数据目录:经 opener 插件打开后端 INSAR_HOME 的实际路径(insar.db /
+    settings.json 所在地):env `INSAR_HOME` > dev `{仓库根}\workspace` >
+    冻结 `%LOCALAPPDATA%\insar-agent-data\workspace`(对齐 api/app.py 与
+    backend-bundle/entry.py,见 ALIGNMENT-2026-08-13.md §4);
+  - 导出诊断包:显示主窗口并跳到 Web UI「环境」面板(eval 复刻 cmdk.js
+    gotoPane('env'):dock 收起先点 #railDock,再点 #tab-env);打包逻辑在
+    后端,壳侧只做入口跳转;主窗口未创建(后端启动中)时仅记日志;
   - 退出:结束应用(连带 kill sidecar)。
 - **托盘图标**:优先取窗口默认图标;`icons/` 下占位图未生成时用代码内联的
   同款图案(深蓝底 + 对角条纹)兜底,托盘永远可见。

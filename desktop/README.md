@@ -46,6 +46,17 @@ cargo test           # 单元测试:状态行/端口解析、手写 HTTP 客户�
 | `INSAR_PYTHON` | 显式指定 Python 解释器(优先级最高) |
 | `INSAR_DESKTOP_SMOKE=1`(或 `--smoke` 参数) | 无 GUI 自检:spawn sidecar → 等健康检查 → kill → 退出码 0/1,无人值守验证用 |
 
+## 与后端安全头的对齐结论(2026-08-13)
+
+- 主窗口以 `WebviewUrl::External` 顶层导航加载后端,壳内零 iframe:后端新加的
+  `X-Frame-Options: DENY` 与 CSP `frame-ancestors 'none'` 对壳无影响。
+- 后端按页 CSP 未列 connect-src(回落 `default-src 'self'`),会拦下 Tauri fetch 型
+  IPC(`http://ipc.localhost`)的首次尝试;tauri 2.11.5 内建自动回退到 postMessage
+  通道(不受 CSP 管),JS 桥功能不受影响,仅 DevTools 留一条告警。壳侧无需修复。
+- sidecar 就绪探测 `/api/health` 与后端路由一致;托盘新增「导出诊断包」(跳 Web UI
+  「环境」面板),「打开数据目录」经 opener 插件打开后端 INSAR_HOME(workspace)。
+- 逐条证据与行号引用见 `ALIGNMENT-2026-08-13.md`。
+
 ## crates.io 镜像(可选)
 
 直连 crates.io 拉取慢时,创建 `desktop/.cargo/config.toml`:

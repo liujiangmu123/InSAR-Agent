@@ -25,6 +25,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 全局快捷键(Ctrl+Shift+I 显示/隐藏主窗)
 tauri-plugin-global-shortcut = "2"
+# 托盘「打开数据目录」:opener 插件按系统关联打开数据目录(src/tray.rs)
+tauri-plugin-opener = "2"
 
 # 自动更新(方案见 updater/UPDATER.md):endpoint 只从环境变量
 # INSAR_UPDATE_ENDPOINT 读取,未配置则插件不挂载、不做任何更新检查
