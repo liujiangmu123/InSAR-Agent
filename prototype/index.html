@@ -27,6 +27,7 @@
 <link rel="stylesheet" href="css/datasets.css">
 <link rel="stylesheet" href="css/notify.css">
 <link rel="stylesheet" href="css/presets.css">
+<link rel="stylesheet" href="css/installguide.css">
 <script type="module">
   // 桌面/首启增强:环境向导(后端就绪则静默)+ 窗口标题状态同步;均安全降级
   import('./js/setup.js').then((m) => m.maybeShowSetupWizard()).catch(() => {});
@@ -193,6 +194,7 @@
 <script type="module" src="js/responsive.js"></script>
 <!-- 诊断包导出:环境面板「导出诊断包」按钮(自初始化,可安全降级) -->
 <script type="module" src="js/diagexport.js"></script>
+<script type="module" src="js/installguide.js"></script><!-- 安装助手:缺失引擎「如何安装」抽屉(自初始化,可安全降级) -->
 <!-- 数据集区(文件面板顶部,自初始化;数据源 /api/datasets) -->
 <script type="module" src="js/datasets.js"></script>
 <!-- 桌面壳「打开本地数据」桥:Tauri 环境注入「浏览…」按钮,Web 环境零影响 -->
