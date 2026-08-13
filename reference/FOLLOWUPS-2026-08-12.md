@@ -2,6 +2,9 @@
 
 ## 24 代理波次(2026-08-13 晚)接力项
 
+- 【手册核对发现】①顶栏 DEMO 徽章硬编码常驻(index.html),后端接入后应动态
+  移除——归演示清除代理(复活中);②运行队列 POST /api/queue 无界面入口,
+  只有聊天排队提示,应补「排队执行」按钮(下波候选)。
 - 【实测缺口】converse 的环境摘要(_env_summary_text/_converse_state)用
   check_wsl=False 的本机探测,把 WSL 里实际可用的 isce2/snaphu 报成缺失——
   应改用 setup 同款 merge_wsl_probe 缓存合并口径(2026-08-13 浏览器实测)。
