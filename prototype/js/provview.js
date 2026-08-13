@@ -19,8 +19,10 @@
      replaceChildren 清掉本区块,观察器随即重挂(展开态等 UI 状态存
      模块级变量,重挂不丢失)。非工作区页面(无 #dockBody)零打扰。
 
-   失败语义:后端不可达 / file:// / 无 run(404) → 渲染内置演示文档
-   并顶部醒目标注「演示数据」,与各 live 模块同一哲学;绝不抛错。
+   失败语义(无演示回落,states 统一构造器):
+   - 后端不可达 / file:// / 响应异常 → renderError(带重试);
+   - 后端可达但会话没有 run(404)→ renderEmpty(带运行引导);
+   绝不渲染内置演示账本,绝不抛错。
 
    大文档性能:步骤详情惰性构建(首次展开才建 DOM);JSON 字段 >2KB
    截断显示,点击再展开全文。
@@ -28,6 +30,7 @@
 import { h, icon, toast } from './dom.js';
 import { S } from './state.js';
 import { fetchRuns, activeRunId, runStamp } from './runswitch.js';
+import * as ES from './emptystate.js';   // states 接入:空态/错误态统一构造器
 
 /* ============================================================
    纯函数与常量(node 校验脚本直测,不碰 DOM)
@@ -195,108 +198,6 @@ export function diffRuns(docA, docB) {
 }
 
 /* ============================================================
-   内置演示文档(file:// / 后端不可达时的回落;也是校验脚本的固定样本)
-   与 ledger.export_provenance 字段一一同名 —— 模拟 run 的真实形状。
-   ============================================================ */
-
-const DEMO_STEP_NAMES = ['数据获取', '辅助数据', '配准', '干涉', '滤波', '解缠',
-  '时序反演', '误差校正', '形变模型', '出图导出', '质检'];
-const DEMO_METHODS = ['local_import', 'dem_copernicus', 'isce2_tops_geom_esd',
-  'isce2_ifg', 'goldstein', 'snaphu_mcf', 'mintpy_sbas', 'era5_pyaps',
-  'velocity_fit', 'figure_journal', 'crossval_ps_sbas'];
-
-function demoSteps() {
-  const out = {};
-  DEMO_STEP_NAMES.forEach((name, i) => {
-    const sid = i + 1;
-    out[String(sid)] = {
-      name, capability: name, method: DEMO_METHODS[i],
-      params: sid === 5 ? { alpha: 0.6, window: 32 }
-        : sid === 6 ? { min_coherence: 0.3, threads: 8 }
-        : { threads: 8 },
-      task_hash: `t${sid}a1b2c3d4e5f6a7b8`, args_hash: `a${sid}b2c3d4e5f6a7b8c9`,
-      local_hash: `l${sid}c3d4e5f6a7b8c9d0`, eval_hash: `e${sid}d4e5f6a7b8c9d0e1`,
-      upstream: sid > 1 ? [String(sid - 1)] : [],
-      stage: 'VERIFIED', state: sid === 2 ? 'skipped' : 'done',
-      stale: false, stale_reason: null, failure_class: null,
-      run_ok: 1, exit_code: 0,
-      qa: [{ check: 'exit_code', ok: true, severity: 'pass', detail: 'exit_code=0,期望 0' },
-           { check: 'artifact_exists', ok: true, severity: 'pass', detail: `artifact demo_${sid}` }],
-      commands: sid === 2 ? [] : [{
-        argv: ['python', `step_${sid}.py`, '--method', DEMO_METHODS[i], '--threads', '8'],
-        exit_code: 0, duration: 4.2, attempt: 1, cmd_path: `steps/${sid}/cmd.sh`,
-      }],
-    };
-  });
-  return out;
-}
-
-/** 演示账本:模拟 run(simulated),证据级按后端规则封顶 runnable。 */
-export const DEMO_DOC = {
-  schema_version: '1.0',
-  run_id: '20260813T090000-demo0001',
-  session_id: 'ridgecrest-2019',
-  parent_run_id: null,
-  generated_at_utc: '2026-08-13T09:12:00Z',
-  simulated: true,
-  environment: { python: '3.11.9', platform: 'linux', tools: { isce2: '2.6.3', mintpy: '1.5.1', snaphu: '2.0.7' } },
-  repo: { git_head: '9cbd3ea', git_dirty: 0 },
-  agent: { agent_hash: 'f00dcafe12345678' },
-  intent: { goal: 'Ridgecrest 2019 同震形变(演示)' },
-  scenario: 'coseismic_interferogram',
-  steps: demoSteps(),
-  artifacts: {}, metrics: {},
-  thresholds: { corr_threshold: { value: 0.9, source: 'literature', ref: 'contract.yaml', status: 'PENDING' } },
-  qa: { status: 'pass' },
-  evidence: {
-    level: 'runnable', level_index: 0,
-    ladder: ['runnable', 'checked', 'audited', 'calibrated', 'validated', 'publishable'],
-    reasons: ['封顶 runnable:模拟执行(引擎缺失),演示结果不构成证据'],
-    ceiling: 'runnable', ceiling_reason: '模拟执行(引擎缺失),演示结果不构成证据',
-    step_sources: Object.fromEntries(DEMO_STEP_NAMES.map((_, i) => {
-      const sid = String(i + 1);
-      if (sid === '2') return [sid, { origin: 'cloud', source: 'cloud(manifest sha256:ab12cd34ef56)', manifest_sha256: 'ab12cd34ef56a7b8' }];
-      if (sid === '3') return [sid, { origin: 'inherited', source: 'inherited(parent=20260812T080000-p0)', parent_run_id: '20260812T080000-p0' }];
-      if (sid === '4') return [sid, { origin: 'missing', source: 'missing', detail: '沿祖先链未找到复用步骤的产物记录' }];
-      return [sid, { origin: 'local', source: 'local' }];
-    })),
-    parent_validations: [],
-  },
-  evidence_level: 'runnable',
-  warnings: [],
-  interventions: [
-    { action: 'SET_PARAMS', target: '6', payload: { params: { min_coherence: 0.3 } },
-      deliver_as: 'steer', consumed_at: 1786957320 },
-    { action: 'PAUSE', target: null, payload: {}, deliver_as: 'steer', consumed_at: 1786957440 },
-  ],
-};
-
-/** 演示对比样本:同链 fork(第 6 步换方法、第 5 步改参、末步失败),
-    对比视图与 diff 校验共用 —— 差异是刻意设计的。 */
-export const DEMO_DOC_B = (() => {
-  const b = JSON.parse(JSON.stringify(DEMO_DOC));
-  b.run_id = '20260813T100000-demo0002';
-  b.parent_run_id = DEMO_DOC.run_id;
-  b.generated_at_utc = '2026-08-13T10:30:00Z';
-  b.steps['6'].method = 'snaphu_smooth';
-  b.steps['5'].params.alpha = 0.8;
-  b.steps['11'].state = 'failed';
-  b.steps['11'].run_ok = 0;
-  b.evidence.step_sources['4'] = { origin: 'local', source: 'local' };
-  b.evidence_level = 'runnable';
-  b.qa = { status: 'fail' };
-  b.interventions = [];
-  return b;
-})();
-
-/** 演示模式的参数默认参照(与 DEMO_DOC 刻意错开:第 6 步 min_coherence
-    默认 0.4,账本里 0.3 → 非默认高亮有真实素材)。 */
-const DEMO_DEFAULTS = {
-  5: { alpha: 0.6, window: 32 },
-  6: { min_coherence: 0.4, threads: 8 },
-};
-
-/* ============================================================
    数据层:/api/provenance 原始文档 + /api/registry 参数默认值
    ============================================================ */
 
@@ -315,9 +216,10 @@ async function getJson(url) {
   return resp.json();
 }
 
-/** 原始 provenance 文档(30s TTL;失败/file:// → null,绝不抛错)。
-    auditlive 拉同一端点但只留归一化结果,本模块要原文(导出/引用块/
-    对比都需要完整字段),各自缓存互不打扰。 */
+/** 原始 provenance 文档(30s TTL)。
+    404(会话无 run)→ { noRun: true }(空态);失败/file:// → null
+    (错误态),绝不抛错。auditlive 拉同一端点但只留归一化结果,本模块
+    要原文(导出/引用块/对比都需要完整字段),各自缓存互不打扰。 */
 export function fetchProvDoc({ runId = null, force = false } = {}) {
   if (typeof location !== 'undefined' && location.protocol === 'file:') {
     return Promise.resolve(null);
@@ -329,7 +231,10 @@ export function fetchProvDoc({ runId = null, force = false } = {}) {
     try {
       const qs = new URLSearchParams({ session: S.sessionId });
       if (runId) qs.set('run_id', runId);
-      return await getJson(`/api/provenance?${qs}`);
+      const resp = await fetch(`/api/provenance?${qs}`);
+      if (resp.status === 404) return { noRun: true };   // 会话无 run:空态(非错误)
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
     } catch {
       docCache.delete(key);   // 失败不占缓存位:下次立即重试
       return null;
@@ -373,7 +278,7 @@ export function fetchDefaults() {
 /** UI 状态存模块级:dock 重渲染审计面板会清掉本区块,重挂后不丢展开态。 */
 const ui = {
   open: new Set(),        // 已展开的步骤 id
-  compareRunId: null,     // 对比目标 run(null = 未开启;'demo-b' = 演示样本)
+  compareRunId: null,     // 对比目标 run(null = 未开启)
   session: null,          // 状态所属会话:切会话自动复位
 };
 
@@ -657,8 +562,8 @@ function compareView(diff) {
 }
 
 /** 主渲染(纯函数:数据进节点出;fetch 由 render() 外壳负责)。
-    runs 为同会话 run 清单(null → 演示对比样本);compareDoc 非空 → 追加对比区。 */
-export function renderDoc(doc, { defaults = null, runs = null, compareDoc = null, demo = false, onRefresh = null, onCompare = null } = {}) {
+    runs 为同会话 run 清单;compareDoc 非空 → 追加对比区。 */
+export function renderDoc(doc, { defaults = null, runs = null, compareDoc = null, onRefresh = null, onCompare = null } = {}) {
   const steps = sortedSteps(doc);
   const sources = ((doc.evidence || {}).step_sources) || {};
 
@@ -669,12 +574,9 @@ export function renderDoc(doc, { defaults = null, runs = null, compareDoc = null
     onchange: (e) => onCompare && onCompare(e.target.value || null),
   },
     h('option', { value: '', selected: !ui.compareRunId || undefined }, '不对比'),
-    ...(demo
-      ? [h('option', { value: 'demo-b', selected: ui.compareRunId === 'demo-b' || undefined },
-          `演示样本 · ${runStamp(DEMO_DOC_B.run_id)}(fork 改参)`)]
-      : others.map((r) => h('option', {
-          value: r.run_id, selected: ui.compareRunId === r.run_id || undefined,
-        }, `${runStamp(r.run_id)}(${r.status || '?'})`))));
+    ...others.map((r) => h('option', {
+      value: r.run_id, selected: ui.compareRunId === r.run_id || undefined,
+    }, `${runStamp(r.run_id)}(${r.status || '?'})`)));
 
   const acts = h('div', { class: 'prov-acts' },
     h('button', {
@@ -699,10 +601,6 @@ export function renderDoc(doc, { defaults = null, runs = null, compareDoc = null
 
   const out = [
     h('h3', { class: 'sect' }, '完整账本 · Provenance 浏览'),
-    demo ? h('div', { class: 'note is-stale', role: 'status', style: { marginBottom: '8px' } },
-      icon('warn'),
-      h('span', null, h('b', null, '演示数据'),
-        ':后端不可达或本会话无 run,以下为内置演示账本,非真实运行记录。')) : null,
     headCard(doc),
     acts,
     h('h3', { class: 'sect' }, '干预时间线'),
@@ -718,8 +616,7 @@ export function renderDoc(doc, { defaults = null, runs = null, compareDoc = null
       compareView(diffRuns(doc, compareDoc)));
   }
   out.push(h('p', { class: 'audit-sub' },
-    demo ? '演示账本 · 与 GET /api/provenance 字段同形'
-      : 'GET /api/provenance 原始账本 · 缓存 30 s,「刷新」强制重拉'));
+    'GET /api/provenance 原始账本 · 缓存 30 s,「刷新」强制重拉'));
   return out.filter(Boolean);
 }
 
@@ -743,23 +640,39 @@ async function render() {
   ]);
   if (seq !== renderSeq || !rootEl || !rootEl.isConnected) return;   // 已被更新的渲染取代
 
-  const demo = doc === null;
-  const shown = demo ? DEMO_DOC : doc;
-  // 对比选择跨模式失效:演示模式只认演示样本,真实模式只认真实 run id
-  if (demo && ui.compareRunId && ui.compareRunId !== 'demo-b') ui.compareRunId = null;
-  if (!demo && ui.compareRunId === 'demo-b') ui.compareRunId = null;
-  let compareDoc = null;
-  if (demo && ui.compareRunId === 'demo-b') {
-    compareDoc = DEMO_DOC_B;
-  } else if (!demo && ui.compareRunId) {
-    compareDoc = await fetchProvDoc({ runId: ui.compareRunId });
-    if (seq !== renderSeq) return;
-    if (!compareDoc) { ui.compareRunId = null; toast('对比 run 的账本读取失败'); }
+  // 后端不可达/响应异常 → 错误态带重试,绝不渲染演示账本
+  if (doc === null) {
+    rootEl.replaceChildren(
+      h('h3', { class: 'sect' }, '完整账本 · Provenance 浏览'),
+      ES.renderError(null, {
+        message: '完整账本读取失败——后端不可达或响应异常(GET /api/provenance)。',
+        retry: () => { invalidate(); render(); },
+      }));
+    return;
+  }
+  // 后端可达但会话还没有 run → 空态带运行引导
+  if (doc.noRun) {
+    rootEl.replaceChildren(
+      h('h3', { class: 'sect' }, '完整账本 · Provenance 浏览'),
+      ES.renderEmpty(null, {
+        icon: 'doc', title: '还没有账本记录',
+        hint: '运行一次流水线即可生成——run 头卡、干预时间线与逐步证据树在此可读、可导出。',
+        action: { label: '运行流水线', event: 'states:run-pipeline' },
+      }));
+    return;
   }
 
-  rootEl.replaceChildren(...renderDoc(shown, {
-    defaults: demo ? DEMO_DEFAULTS : defaults,   // 演示模式用内置默认参照,高亮有素材
-    runs, compareDoc, demo,
+  let compareDoc = null;
+  if (ui.compareRunId) {
+    const cmp = await fetchProvDoc({ runId: ui.compareRunId });
+    if (seq !== renderSeq) return;
+    // 对比目标读取失败/已无 run:复位选择(不把空态对象当账本渲染)
+    if (!cmp || cmp.noRun) { ui.compareRunId = null; toast('对比 run 的账本读取失败'); }
+    else compareDoc = cmp;
+  }
+
+  rootEl.replaceChildren(...renderDoc(doc, {
+    defaults, runs, compareDoc,
     onRefresh: () => { invalidate(); render(); },
     onCompare: (rid) => { ui.compareRunId = rid || null; render(); },
   }));

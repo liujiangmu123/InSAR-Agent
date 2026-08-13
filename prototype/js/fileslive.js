@@ -12,16 +12,17 @@
    - 导出 highlightStep(stepId) 给 dock.selectStepFile 联动：切到 files
      面板后滚动到该步骤产物组并高亮一闪（chip 联动分支只调用不实现）。
 
-   失败语义：后端不可达 / file:// 打开 / 会话无 run → resolve null，绝不
-   抛错；调用方（dock.js filesView）拿到 null 回落 fileTree() 演示数据。
+   失败语义（无演示回落）：
+   - 后端不可达 / file:// 打开 / 响应异常 → resolve null（调用方渲染
+     错误态带重试），绝不抛错;
+   - 后端可达但会话还没有 run → resolve { noRun: true }（调用方渲染
+     空态带运行引导）;
+   - run 存在但产物为空是真实状态，照常返回渲染（liveBody 里已有空态卡）。
    ============================================================ */
 import { h, icon } from './dom.js';
 import { S } from './state.js';
 import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
 import * as ES from './emptystate.js';          // states 接入:空态/骨架统一构造器
-
-// 演示回落横幅与 envlive 共用同一款（文案由调用方给），避免两套样式漂移
-export { demoBanner } from './envlive.js';
 
 /** 缓存 TTL：产物清单读 DB + 逐文件 stat，秒级；30s 内复用，手动刷新走 invalidate()。 */
 const TTL_MS = 30_000;
@@ -34,8 +35,8 @@ export function invalidate() {
 }
 
 /** 拉取真实产物清单（带 30s TTL 缓存；force=true 跳过缓存）。
-    返回 null = 无真实数据可展示（后端不可达 / file:// / 会话还没有 run），
-    调用方以此回落演示；run 存在但产物为空是真实状态，照常返回渲染。
+    返回 null = 后端不可达 / file:// / 响应异常（错误态）；
+    返回 { noRun: true } = 后端可达但会话还没有 run（空态）。
     runId 可选（run 历史切换器接线，runswitch.js）：缺省取 activeRunId()，
     非空 → /api/artifacts 带 run_id 查看历史 run；缓存按 run 区分，
     null（最新）行为与接线前完全一致。 */
@@ -51,7 +52,7 @@ export function fetchFilesLive({ force = false, runId = activeRunId() } = {}) {
       const resp = await fetch(`/api/artifacts?${qs}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      if (!data.run) return null;               // 会话无 run：回落演示数据
+      if (!data.run) return { noRun: true };    // 会话无 run：空态（非错误）
       return normalize(data);
     } catch {
       cache = { at: 0, runId: null, promise: null };  // 失败不占缓存位：下次渲染立即重试

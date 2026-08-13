@@ -1,12 +1,13 @@
 /* ============================================================
    provview 的无浏览器自查脚本(node prototype/provview.check.mjs)
    用最小 DOM stub 直接 import js/provview.js,断言:
-   ① 引用块文本生成(完整演示账本 / 缺字段边界 / 模拟 run 警示 / 无干预口径);
+   ① 引用块文本生成(完整账本夹具 / 缺字段边界 / 模拟 run 警示 / 无干预口径);
    ② run 对比 diff 逻辑(方法/参数/来源/状态四维差异 + 缺步 + 计数);
    ③ 来源徽章映射闭集(local|inherited|cloud|missing 四键四色,坏值回落);
    ④ 纯函数(JSON 截断 / 参数默认值差集 / UTC 时间 / argv 拼行 / 步序);
-   ⑤ DOM 渲染与挂载(演示回落 / 11 步树 / aria-expanded 惰性展开 /
-     非默认参数高亮 / 干预时间线与空态徽章 / 对比双列 / 幂等重挂)。
+   ⑤ DOM 渲染与挂载(11 步树 / aria-expanded 惰性展开 / 非默认参数高亮 /
+     干预时间线与空态徽章 / 对比双列 / 幂等重挂 / 后端不可达错误态 /
+     无 run 空态 —— 演示回落已清除,渲染夹具由本文件自带)。
    只依赖 node 内建能力,零 npm 依赖(check() 约定与其余 check.mjs 一致)。
    ============================================================ */
 
@@ -159,7 +160,97 @@ function check(name, cond) {
 
 /* ---------------- 被测模块 ---------------- */
 const PV = await import('./js/provview.js');
-const { DEMO_DOC, DEMO_DOC_B } = PV;
+
+/* ---------------- 渲染夹具(仅测试用) ----------------
+   与 ledger.export_provenance 字段一一同名(模拟 run 的真实形状)。
+   生产模块的演示回落已清除,夹具由本文件自带,不再从 provview.js 导入。 */
+const FIX_STEP_NAMES = ['数据获取', '辅助数据', '配准', '干涉', '滤波', '解缠',
+  '时序反演', '误差校正', '形变模型', '出图导出', '质检'];
+const FIX_METHODS = ['local_import', 'dem_copernicus', 'isce2_tops_geom_esd',
+  'isce2_ifg', 'goldstein', 'snaphu_mcf', 'mintpy_sbas', 'era5_pyaps',
+  'velocity_fit', 'figure_journal', 'crossval_ps_sbas'];
+
+function fixtureSteps() {
+  const out = {};
+  FIX_STEP_NAMES.forEach((name, i) => {
+    const sid = i + 1;
+    out[String(sid)] = {
+      name, capability: name, method: FIX_METHODS[i],
+      params: sid === 5 ? { alpha: 0.6, window: 32 }
+        : sid === 6 ? { min_coherence: 0.3, threads: 8 }
+        : { threads: 8 },
+      task_hash: `t${sid}a1b2c3d4e5f6a7b8`, args_hash: `a${sid}b2c3d4e5f6a7b8c9`,
+      local_hash: `l${sid}c3d4e5f6a7b8c9d0`, eval_hash: `e${sid}d4e5f6a7b8c9d0e1`,
+      upstream: sid > 1 ? [String(sid - 1)] : [],
+      stage: 'VERIFIED', state: sid === 2 ? 'skipped' : 'done',
+      stale: false, stale_reason: null, failure_class: null,
+      run_ok: 1, exit_code: 0,
+      qa: [{ check: 'exit_code', ok: true, severity: 'pass', detail: 'exit_code=0,期望 0' },
+           { check: 'artifact_exists', ok: true, severity: 'pass', detail: `artifact demo_${sid}` }],
+      commands: sid === 2 ? [] : [{
+        argv: ['python', `step_${sid}.py`, '--method', FIX_METHODS[i], '--threads', '8'],
+        exit_code: 0, duration: 4.2, attempt: 1, cmd_path: `steps/${sid}/cmd.sh`,
+      }],
+    };
+  });
+  return out;
+}
+
+const DEMO_DOC = {
+  schema_version: '1.0',
+  run_id: '20260813T090000-demo0001',
+  session_id: 'ridgecrest-2019',
+  parent_run_id: null,
+  generated_at_utc: '2026-08-13T09:12:00Z',
+  simulated: true,
+  environment: { python: '3.11.9', platform: 'linux', tools: { isce2: '2.6.3', mintpy: '1.5.1', snaphu: '2.0.7' } },
+  repo: { git_head: '9cbd3ea', git_dirty: 0 },
+  agent: { agent_hash: 'f00dcafe12345678' },
+  intent: { goal: 'Ridgecrest 2019 同震形变(演示)' },
+  scenario: 'coseismic_interferogram',
+  steps: fixtureSteps(),
+  artifacts: {}, metrics: {},
+  thresholds: { corr_threshold: { value: 0.9, source: 'literature', ref: 'contract.yaml', status: 'PENDING' } },
+  qa: { status: 'pass' },
+  evidence: {
+    level: 'runnable', level_index: 0,
+    ladder: ['runnable', 'checked', 'audited', 'calibrated', 'validated', 'publishable'],
+    reasons: ['封顶 runnable:模拟执行(引擎缺失),演示结果不构成证据'],
+    ceiling: 'runnable', ceiling_reason: '模拟执行(引擎缺失),演示结果不构成证据',
+    step_sources: Object.fromEntries(FIX_STEP_NAMES.map((_, i) => {
+      const sid = String(i + 1);
+      if (sid === '2') return [sid, { origin: 'cloud', source: 'cloud(manifest sha256:ab12cd34ef56)', manifest_sha256: 'ab12cd34ef56a7b8' }];
+      if (sid === '3') return [sid, { origin: 'inherited', source: 'inherited(parent=20260812T080000-p0)', parent_run_id: '20260812T080000-p0' }];
+      if (sid === '4') return [sid, { origin: 'missing', source: 'missing', detail: '沿祖先链未找到复用步骤的产物记录' }];
+      return [sid, { origin: 'local', source: 'local' }];
+    })),
+    parent_validations: [],
+  },
+  evidence_level: 'runnable',
+  warnings: [],
+  interventions: [
+    { action: 'SET_PARAMS', target: '6', payload: { params: { min_coherence: 0.3 } },
+      deliver_as: 'steer', consumed_at: 1786957320 },
+    { action: 'PAUSE', target: null, payload: {}, deliver_as: 'steer', consumed_at: 1786957440 },
+  ],
+};
+
+// 对比样本:同链 fork(第 6 步换方法、第 5 步改参、末步失败)—— 差异是刻意设计的
+const DEMO_DOC_B = (() => {
+  const b = JSON.parse(JSON.stringify(DEMO_DOC));
+  b.run_id = '20260813T100000-demo0002';
+  b.parent_run_id = DEMO_DOC.run_id;
+  b.generated_at_utc = '2026-08-13T10:30:00Z';
+  b.steps['6'].method = 'snaphu_smooth';
+  b.steps['5'].params.alpha = 0.8;
+  b.steps['11'].state = 'failed';
+  b.steps['11'].run_ok = 0;
+  b.evidence.step_sources['4'] = { origin: 'local', source: 'local' };
+  b.evidence_level = 'runnable';
+  b.qa = { status: 'fail' };
+  b.interventions = [];
+  return b;
+})();
 
 /* ---------------- ① 引用块文本生成 ---------------- */
 console.log('== ① 引用块(论文方法章节中文文本)==');
@@ -260,11 +351,11 @@ check('引用块短哈希助手', PV.shortHash('abcdef0123456789') === 'abcdef01
 /* ---------------- ⑤ DOM 渲染与挂载 ---------------- */
 console.log('\n== ⑤ DOM 渲染与挂载 ==');
 
-// renderDoc 纯渲染:演示文档 + 内置默认参照 + 对比样本
+// renderDoc 纯渲染:账本夹具 + 默认参照 + 对比样本
 const DEFAULTS = { 5: { alpha: 0.6, window: 32 }, 6: { min_coherence: 0.4, threads: 8 } };
 const host = new Element('div');
 host.replaceChildren(...PV.renderDoc(DEMO_DOC, {
-  defaults: DEFAULTS, runs: null, compareDoc: DEMO_DOC_B, demo: true,
+  defaults: DEFAULTS, runs: null, compareDoc: DEMO_DOC_B,
 }));
 DOC.body.appendChild(host);
 
@@ -277,7 +368,9 @@ check('头卡徽章:证据级 + QA + 模拟执行',
   host.querySelector('.prov-head-tags').textContent.includes('证据级 runnable')
   && host.querySelector('.prov-head-tags').textContent.includes('QA pass')
   && host.querySelector('.prov-head-tags').textContent.includes('模拟执行'));
-check('演示横幅在场', host.querySelectorAll('.note').some((n) => n.textContent.includes('演示数据')));
+check('演示横幅已清除(不再有「演示数据」标注),底注声明真实数据源',
+  !host.querySelectorAll('.note').some((n) => n.textContent.includes('演示数据'))
+  && host.textContent.includes('GET /api/provenance 原始账本'));
 check('操作行:复制引用块 / 导出 JSON / 对比下拉齐备',
   host.querySelector('.prov-acts').textContent.includes('复制引用块')
   && host.querySelector('.prov-acts').textContent.includes('导出 JSON')
@@ -325,7 +418,7 @@ check('干预时间线两条(SET_PARAMS 第 6 步 / PAUSE)',
   host.querySelectorAll('.prov-iv .ivrow').length === 2
   && host.querySelector('.prov-iv').textContent.includes('SET_PARAMS · 第 6 步'));
 const hostB = new Element('div');
-hostB.replaceChildren(...PV.renderDoc(DEMO_DOC_B, { demo: true }));
+hostB.replaceChildren(...PV.renderDoc(DEMO_DOC_B, {}));
 check('无干预 → 「无人工干预 · 全自动执行」徽章',
   !!hostB.querySelector('.prov-iv-empty')
   && hostB.querySelector('.prov-iv-empty').textContent.includes('无人工干预 · 全自动执行'));
@@ -335,7 +428,7 @@ const bigDoc = JSON.parse(JSON.stringify(DEMO_DOC));
 bigDoc.steps['1'].params = { blob: 'x'.repeat(3000) };
 bigDoc.interventions = [];
 const hostBig = new Element('div');
-hostBig.replaceChildren(...PV.renderDoc(bigDoc, { demo: true }));
+hostBig.replaceChildren(...PV.renderDoc(bigDoc, {}));
 DOC.body.appendChild(hostBig);
 hostBig.querySelectorAll('.prov-step-hd')[0].click();
 const bigPre = hostBig.querySelector('.prov-json');
@@ -361,17 +454,34 @@ pane.setAttribute('id', 'pane-audit');
 dockBody.appendChild(pane);
 DOC.body.appendChild(dockBody);
 PV.initProvView();
-await sleep(30);   // render() 的 fetch 全部落空 → 演示回落
+await sleep(30);   // render() 的 fetch 全部落空 → 错误态(演示回落已清除)
 const mounted = () => pane.querySelectorAll('.provview');
 check('自初始化:区块挂进审计 pane 尾部', mounted().length === 1);
-check('挂载后渲染演示账本(11 步树)',
-  pane.querySelectorAll('.prov-step').length === 11);
+check('后端不可达 → 错误态带重试,绝不渲染演示账本',
+  pane.querySelectorAll('.es-error').length === 1
+  && pane.querySelectorAll('.es-retry').length === 1
+  && pane.querySelectorAll('.prov-step').length === 0);
 PV.initProvView();
 check('重复初始化幂等:仍只有一个区块', mounted().length === 1);
 pane.replaceChildren();   // 模拟 dock.js 重渲染审计面板(区块被清)
 MO_INSTANCES.forEach((mo) => mo.cb());
 await sleep(30);
 check('dock 重渲染后观察器自动重挂', mounted().length === 1);
+
+// 可达但无 run(/api/provenance 404)→ 空态带运行引导:桩 fetch 后点「重试」
+globalThis.fetch = async () => ({
+  ok: false, status: 404,
+  headers: { get: () => null },
+  json: async () => ({ detail: 'no run' }),
+  text: async () => 'no run',
+});
+pane.querySelector('.es-retry')?.click();
+await sleep(30);
+check('可达但无 run → 空态卡 + 运行引导(绝不渲染演示账本)',
+  pane.querySelectorAll('.es-empty').length === 1
+  && pane.textContent.includes('还没有账本记录')
+  && pane.textContent.includes('运行流水线')
+  && pane.querySelectorAll('.prov-step').length === 0);
 
 console.log(failed ? `\n${count} 项断言,${failed} 项失败` : `\n全部 ${count} 项断言通过`);
 process.exit(failed ? 1 : 0);

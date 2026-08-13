@@ -12,17 +12,17 @@
    - renderLive() 产出实时渲染节点:级别词汇严格使用后端六级
      (evidence.ladder 原样透传),不再出现本地演示逻辑自算的级别。
 
-   失败语义:无 run(/api/provenance 404)/后端不可达/file:// 打开
-   → resolve null,绝不抛错;调用方拿到 null 回落本地演示渲染并在
-   顶部挂「演示数据」横幅(demoBanner 复用 envlive,两面板样式一致)。
+   失败语义(无演示回落):
+   - 后端不可达 / file:// 打开 / 响应异常 → resolve null(调用方渲染
+     错误态带重试),绝不抛错;
+   - 后端可达但会话还没有 run(/api/provenance 404)→ resolve
+     { noRun: true }(调用方渲染空态带运行引导)。
    ============================================================ */
 import { h, icon } from './dom.js';
 import { S } from './state.js';
-import { demoBanner, fetchEnvLive, thresholdSourceLabel } from './envlive.js';
+import { fetchEnvLive, thresholdSourceLabel } from './envlive.js';
 import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
 import * as ES from './emptystate.js';          // states 接入:骨架统一构造器
-
-export { demoBanner };   // 演示回落横幅:与 env 面板同款样式,由 auditView 复用
 
 /** 缓存 TTL:与 envlive 一致,30s 内复用同一结果;手动刷新走 invalidate()。 */
 const TTL_MS = 30_000;
@@ -37,14 +37,9 @@ export function invalidate() {
   cache = { at: 0, session: null, runId: null, promise: null };
 }
 
-async function getJson(url) {
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.json();
-}
-
 /** 拉取证据链实况(带 30s TTL 缓存;force=true 跳过缓存)。
-    /api/provenance 是主数据源,404(无 run)/不可达 → 整体返回 null;
+    /api/provenance 是主数据源:404(无 run)→ { noRun: true }(空态),
+    不可达/其他 HTTP 错误 → null(错误态);
     /api/env 是辅数据源(阈值台账),失败只回落 provenance 内嵌的同款契约。
     runId 可选(run 历史切换器接线,runswitch.js):缺省取 activeRunId(),
     非空 → /api/provenance 带 run_id 查看历史 run 的证据链;
@@ -61,11 +56,13 @@ export function fetchAuditLive({ force = false, runId = activeRunId() } = {}) {
     try {
       const qs = new URLSearchParams({ session });
       if (runId) qs.set('run_id', runId);
-      const [prov, env] = await Promise.all([
-        getJson(`/api/provenance?${qs}`),
+      const [provResp, env] = await Promise.all([
+        fetch(`/api/provenance?${qs}`),
         fetchEnvLive().catch(() => null),   // fetchEnvLive 自身不抛错,兜底一层
       ]);
-      return normalize(prov, env);
+      if (provResp.status === 404) return { noRun: true };   // 会话无 run:空态(非错误)
+      if (!provResp.ok) throw new Error(`HTTP ${provResp.status}`);
+      return normalize(await provResp.json(), env);
     } catch {
       cache = { at: 0, session: null, runId: null, promise: null };  // 失败不占缓存位:下次立即重试
       return null;
