@@ -37,10 +37,17 @@ from pathlib import Path
 
 import pytest
 
+from conftest import TIME_FACTOR
 from insar_agent.runtime.jobs import CommandPlan, JobState, LocalJobBackend
 from insar_agent.runtime.stream import CancelToken, follow_job
 
 WIN = sys.platform == "win32"
+
+# 全模块真实子进程 + 真实时钟判定(心跳/双超时/宽限):时序敏感,
+# 判定窗(hb_stale/idle/total/grace 与等待上限)统一乘 TIME_FACTOR(简写 TF);
+# 轮询间隔 poll、作业脚本内 sleep(自灭上限)与断言语义不变
+pytestmark = pytest.mark.timing
+TF = TIME_FACTOR
 
 if WIN:
     _K32 = ctypes.windll.kernel32
@@ -95,6 +102,7 @@ def _force_kill(pid: int, tree: bool = False) -> None:
 
 
 def _wait_until(cond, timeout: float = 30.0, interval: float = 0.05, msg: str = "条件未满足"):
+    timeout *= TF  # 等待上限随负载系数放宽;轮询节奏不变,空载不多等一秒
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if cond():
@@ -104,6 +112,7 @@ def _wait_until(cond, timeout: float = 30.0, interval: float = 0.05, msg: str = 
 
 
 async def _await_until(cond, timeout: float = 10.0, msg: str = "条件未满足"):
+    timeout *= TF
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if cond():
@@ -166,7 +175,7 @@ def test_orphan_wrapper_killed_externally(tmp_path):
     孤儿判定必须只看心跳停更,不被「日志仍在增长」迷惑;job.rc 永不落盘,
     与 finished 严格区分(§4.7:环境事件,非计算失败)。
     """
-    backend = LocalJobBackend(hb_stale=0.8)
+    backend = LocalJobBackend(hb_stale=0.8 * TF)
     job = tmp_path / "job"
     body = ("for i in range(200):\n"          # 自灭上限 20s,实际 ~2s 内被清理
             "    print(f'line {i}', flush=True)\n"
@@ -180,8 +189,10 @@ def test_orphan_wrapper_killed_externally(tmp_path):
         _wait_until(lambda: not _pid_alive(wrapper_pid), timeout=8.0, msg="wrapper 未死")
 
         lines: list[str] = []
-        out = run_async(follow_job(backend, job, idle_timeout=30, total_timeout=30,
-                                   on_line=lines.append, poll=0.1, startup_grace=5))
+        out = run_async(follow_job(backend, job, idle_timeout=30 * TF,
+                                   total_timeout=30 * TF,
+                                   on_line=lines.append, poll=0.1,
+                                   startup_grace=5 * TF))
         assert out.kind == "orphaned" and out.exit_code is None
         assert not (job / "job.rc").exists()  # rc 永不落盘:orphaned ≠ finished
         assert lines and lines[0] == "line 0"  # 判定期间孤儿子进程的输出仍被 drain
@@ -211,11 +222,11 @@ class _OneShotOrphanBackend:
 
 def test_single_orphan_strike_does_not_misjudge(tmp_path):
     """孤儿判定需连续两次命中:单次瞬时 orphaned 后恢复 → 仍按真实结局 finished。"""
-    backend = _OneShotOrphanBackend(LocalJobBackend(hb_stale=5.0))
+    backend = _OneShotOrphanBackend(LocalJobBackend(hb_stale=5.0 * TF))
     job = tmp_path / "job"
     _launch(backend, job, "print('ok', flush=True)\n")
-    out = run_async(follow_job(backend, job, idle_timeout=20, total_timeout=30,
-                               poll=0.1, startup_grace=30))
+    out = run_async(follow_job(backend, job, idle_timeout=20 * TF, total_timeout=30 * TF,
+                               poll=0.1, startup_grace=30 * TF))
     assert out.kind == "finished" and out.exit_code == 0
 
 
@@ -223,14 +234,14 @@ def test_single_orphan_strike_does_not_misjudge(tmp_path):
 
 def test_heartbeat_stall_marks_orphan(tmp_path):
     """wrapper 名存实亡(心跳文件停更,如休眠恢复/线程僵死)→ 连续命中判孤儿。"""
-    backend = LocalJobBackend(hb_stale=0.5)
+    backend = LocalJobBackend(hb_stale=0.5 * TF)
     job = tmp_path / "job"
     _fake_alive_job(job, log_text="partial output\n")  # hb 此后不再刷新 = 停更
     log_size = (job / "job.log").stat().st_size  # 文本模式落盘为 \r\n,按实际字节数对账
 
     lines: list[str] = []
-    out = run_async(follow_job(backend, job, idle_timeout=30, total_timeout=30,
-                               on_line=lines.append, poll=0.1, startup_grace=5))
+    out = run_async(follow_job(backend, job, idle_timeout=30 * TF, total_timeout=30 * TF,
+                               on_line=lines.append, poll=0.1, startup_grace=5 * TF))
     assert out.kind == "orphaned" and out.exit_code is None
     assert lines == ["partial output"]  # 判定前既有日志已 drain,offset 不回退
     assert out.offset == log_size
@@ -242,13 +253,13 @@ def test_idle_timeout_on_hung_child(tmp_path):
     断言:rc=143(wrapper 整组终止)、job.cancel 存在(走文件契约而非宿主强杀)、
     wrapper 与子进程都不残留。
     """
-    backend = LocalJobBackend(hb_stale=3.0)
+    backend = LocalJobBackend(hb_stale=3.0 * TF)
     job = tmp_path / "job"
     _launch(backend, job, "print('start', flush=True)\ntime.sleep(60)\n")
     _wait_wrapper_up(backend, job)
 
-    out = run_async(follow_job(backend, job, idle_timeout=1.0, total_timeout=60,
-                               poll=0.1, cancel_grace=10, startup_grace=30))
+    out = run_async(follow_job(backend, job, idle_timeout=1.0 * TF, total_timeout=60 * TF,
+                               poll=0.1, cancel_grace=10 * TF, startup_grace=30 * TF))
     assert out.kind == "idle_timeout" and out.exit_code == 143
     assert (job / "job.cancel").exists()
     assert (job / "job.rc").read_text().strip() == "143"
@@ -259,18 +270,23 @@ def test_idle_timeout_on_hung_child(tmp_path):
 
 def test_total_timeout_kills_active_child(tmp_path):
     """任务持续产出但超总时长 → total_timeout;有输出不能豁免总超时,进程整组清理。"""
-    backend = LocalJobBackend(hb_stale=3.0)
+    backend = LocalJobBackend(hb_stale=3.0 * TF)
     job = tmp_path / "job"
-    body = ("for i in range(300):\n"          # 自灭上限 30s,实际 ~1.5s 被总超时终止
+    body = ("for i in range(300):\n"          # 自灭上限 30s,实际 ~1.5s×TF 被总超时终止
             "    print(f'busy {i}', flush=True)\n"
             "    time.sleep(0.1)\n")
     _launch(backend, job, body)
     _wait_wrapper_up(backend, job)
+    # 先等到「确实在产出」再挂总超时钟:饱和负载下 python 子进程启动可超过
+    # total_timeout 本身,零输出即被总超时杀掉会让 lines 断言空翻车(压测实录);
+    # 语义不变 —— 总超时杀的仍是持续产出中的任务,已产出的行经 offset=0 全量 drain
+    _wait_until(lambda: (job / "job.log").exists() and (job / "job.log").stat().st_size > 0,
+                msg="作业无输出")
 
     lines: list[str] = []
-    out = run_async(follow_job(backend, job, idle_timeout=30, total_timeout=1.5,
-                               on_line=lines.append, poll=0.1, cancel_grace=10,
-                               startup_grace=30))
+    out = run_async(follow_job(backend, job, idle_timeout=30 * TF, total_timeout=1.5 * TF,
+                               on_line=lines.append, poll=0.1, cancel_grace=10 * TF,
+                               startup_grace=30 * TF))
     assert out.kind == "total_timeout" and out.exit_code == 143
     assert lines  # 终止前日志正常流出(证明是总超时而非 idle 判的)
     assert (job / "job.rc").read_text().strip() == "143"
@@ -285,7 +301,7 @@ def test_cancel_race_rc_lands_first(tmp_path):
     语义锁定:kind 如实呈现用户取消意图("cancelled"),exit_code 必须是
     真实 rc(0),不得伪造成 143/None;残留的 job.cancel 标记不毒化后续判活。
     """
-    backend = LocalJobBackend(hb_stale=3.0)
+    backend = LocalJobBackend(hb_stale=3.0 * TF)
     job = tmp_path / "job"
     _launch(backend, job, "print('quick done', flush=True)\n")
     _wait_until(lambda: (job / "job.rc").exists(), msg="作业未在时限内结束")
@@ -294,9 +310,9 @@ def test_cancel_race_rc_lands_first(tmp_path):
     token.cancel()
     token.cancel()  # 令牌幂等:重复取消无害
     lines: list[str] = []
-    out = run_async(follow_job(backend, job, idle_timeout=10, total_timeout=15,
+    out = run_async(follow_job(backend, job, idle_timeout=10 * TF, total_timeout=15 * TF,
                                token=token, on_line=lines.append, poll=0.05,
-                               cancel_grace=5, startup_grace=10))
+                               cancel_grace=5 * TF, startup_grace=10 * TF))
     assert out.kind == "cancelled"
     assert out.exit_code == 0             # 真实退出码,不被伪造
     assert any("quick done" in ln for ln in lines)  # 返回前日志 drain 到底
@@ -306,13 +322,14 @@ def test_cancel_race_rc_lands_first(tmp_path):
     st = backend.state(job)
     assert st.kind == "finished" and st.exit_code == 0
     # 残留 cancel 标记不影响 reattach 再跟随:仍按 finished 收口
-    out2 = run_async(follow_job(backend, job, idle_timeout=5, total_timeout=5, poll=0.05))
+    out2 = run_async(follow_job(backend, job, idle_timeout=5 * TF, total_timeout=5 * TF,
+                                poll=0.05))
     assert out2.kind == "finished" and out2.exit_code == 0
 
 
 def test_cancel_midrun_terminates_group(tmp_path):
     """基线取消路径:运行中取消 → rc=143,wrapper/子进程双双退出,重复取消无害。"""
-    backend = LocalJobBackend(hb_stale=3.0)
+    backend = LocalJobBackend(hb_stale=3.0 * TF)
     job = tmp_path / "job"
     body = ("for i in range(200):\n"          # 自灭上限 20s
             "    print(f'line {i}', flush=True)\n"
@@ -324,8 +341,9 @@ def test_cancel_midrun_terminates_group(tmp_path):
 
     async def scenario():
         task = asyncio.create_task(
-            follow_job(backend, job, idle_timeout=30, total_timeout=60, token=token,
-                       poll=0.1, cancel_grace=10, startup_grace=30))
+            follow_job(backend, job, idle_timeout=30 * TF, total_timeout=60 * TF,
+                       token=token, poll=0.1, cancel_grace=10 * TF,
+                       startup_grace=30 * TF))
         await _await_until(lambda: (job / "job.log").exists()
                            and (job / "job.log").stat().st_size > 0, msg="作业无输出")
         token.cancel()
@@ -345,13 +363,14 @@ def test_corrupt_rc_classified_finished(tmp_path, payload):
 
     -1 与合法退出码域(>=0)分离,上层可识别「结束了但退出码不可信」。
     """
-    backend = LocalJobBackend(hb_stale=5.0)
+    backend = LocalJobBackend(hb_stale=5.0 * TF)
     job = tmp_path / "job"
     _fake_alive_job(job, log_text="some output\n")
 
     async def scenario():
         task = asyncio.create_task(
-            follow_job(backend, job, idle_timeout=10, total_timeout=15, poll=0.05))
+            follow_job(backend, job, idle_timeout=10 * TF, total_timeout=15 * TF,
+                       poll=0.05))
         await asyncio.sleep(0.2)  # 先跟随一阵,再注入损坏的 rc
         (job / "job.rc").write_text(payload, encoding="utf-8")
         return await task
@@ -367,14 +386,14 @@ def test_log_deleted_then_recreated_smaller(tmp_path):
 
     旧 offset 超出新文件长度时安全失效(读不到东西,不重复、不错乱)。
     """
-    backend = LocalJobBackend(hb_stale=5.0)
+    backend = LocalJobBackend(hb_stale=5.0 * TF)
     job = tmp_path / "job"
     _fake_alive_job(job, log_text="line-1\nline-2\n")
 
     async def scenario():
         lines: list[str] = []
         task = asyncio.create_task(
-            follow_job(backend, job, idle_timeout=10, total_timeout=15,
+            follow_job(backend, job, idle_timeout=10 * TF, total_timeout=15 * TF,
                        on_line=lines.append, poll=0.05))
         await _await_until(lambda: len(lines) >= 2, msg="初始日志未读到")
         (job / "job.log").unlink()            # 外部删除(此时无进程持有句柄)
@@ -397,7 +416,7 @@ def test_log_exclusively_locked_mid_follow(tmp_path):
     (ERROR_SHARING_VIOLATION),直接杀死 follow 协程,offset 进度与
     取消能力一起丢失。修复后:该轮当作无新输出,解锁后续读不丢行。
     """
-    backend = LocalJobBackend(hb_stale=5.0)
+    backend = LocalJobBackend(hb_stale=5.0 * TF)
     job = tmp_path / "job"
     _fake_alive_job(job, log_text="line-1\n")
 
@@ -413,7 +432,7 @@ def test_log_exclusively_locked_mid_follow(tmp_path):
         nonlocal locked
         lines: list[str] = []
         task = asyncio.create_task(
-            follow_job(backend, job, idle_timeout=10, total_timeout=15,
+            follow_job(backend, job, idle_timeout=10 * TF, total_timeout=15 * TF,
                        on_line=lines.append, poll=0.05))
         await asyncio.sleep(0.4)              # 独占期间每轮读都失败,follow 必须活着
         assert not task.done(), "follow 在日志被独占期间崩溃退出"
@@ -455,11 +474,11 @@ def test_transient_state_error_does_not_kill_follow(tmp_path):
 
     修复前的真实 bug:backend.state 异常直接冒出 follow_job,协程崩溃。
     """
-    backend = _FlakyStateBackend(LocalJobBackend(hb_stale=5.0))
+    backend = _FlakyStateBackend(LocalJobBackend(hb_stale=5.0 * TF))
     job = tmp_path / "job"
     _launch(backend, job, "print('ok', flush=True)\n")
-    out = run_async(follow_job(backend, job, idle_timeout=20, total_timeout=30,
-                               poll=0.1, startup_grace=30))
+    out = run_async(follow_job(backend, job, idle_timeout=20 * TF, total_timeout=30 * TF,
+                               poll=0.1, startup_grace=30 * TF))
     assert out.kind == "finished" and out.exit_code == 0
 
 
@@ -467,7 +486,7 @@ def test_transient_state_error_does_not_kill_follow(tmp_path):
 
 def test_spawn_failure_missing_executable(tmp_path):
     """目标可执行文件不存在 → rc=127 快速失败,诊断行随日志流可读。"""
-    backend = LocalJobBackend(hb_stale=3.0)
+    backend = LocalJobBackend(hb_stale=3.0 * TF)
     job = tmp_path / "job"
     plan = CommandPlan(argv=[str(tmp_path / "no_such_tool.exe"), "--run"],
                        cwd=str(tmp_path), env={}, files={})
@@ -476,10 +495,10 @@ def test_spawn_failure_missing_executable(tmp_path):
 
     lines: list[str] = []
     t0 = time.monotonic()
-    out = run_async(follow_job(backend, job, idle_timeout=20, total_timeout=40,
-                               on_line=lines.append, poll=0.1, startup_grace=30))
+    out = run_async(follow_job(backend, job, idle_timeout=20 * TF, total_timeout=40 * TF,
+                               on_line=lines.append, poll=0.1, startup_grace=30 * TF))
     assert out.kind == "finished" and out.exit_code == 127
-    assert time.monotonic() - t0 < 15         # 快速失败,不等超时/孤儿宽限
+    assert time.monotonic() - t0 < 15 * TF    # 快速失败,不等超时/孤儿宽限
     assert any("[wrapper] spawn failed" in ln for ln in lines)  # 诊断可读
 
 
@@ -491,7 +510,7 @@ def test_bad_cmd_json_fails_fast(tmp_path, mode):
     follow 只能等 startup_grace 耗尽后误判 orphaned,诊断埋在 wrapper.err
     里不进日志流。
     """
-    backend = LocalJobBackend(hb_stale=3.0)
+    backend = LocalJobBackend(hb_stale=3.0 * TF)
     job = tmp_path / "job"
     plan = CommandPlan(argv=[sys.executable, "-c", "print('nope')"],
                        cwd=str(tmp_path), env={}, files={})
@@ -504,10 +523,10 @@ def test_bad_cmd_json_fails_fast(tmp_path, mode):
 
     lines: list[str] = []
     t0 = time.monotonic()
-    out = run_async(follow_job(backend, job, idle_timeout=20, total_timeout=40,
-                               on_line=lines.append, poll=0.1, startup_grace=30))
+    out = run_async(follow_job(backend, job, idle_timeout=20 * TF, total_timeout=40 * TF,
+                               on_line=lines.append, poll=0.1, startup_grace=30 * TF))
     assert out.kind == "finished" and out.exit_code == 127
-    assert time.monotonic() - t0 < 15         # 不吃满 startup_grace
+    assert time.monotonic() - t0 < 15 * TF    # 不吃满 startup_grace
     assert any("[wrapper] bad cmd.json" in ln for ln in lines)
 
 
@@ -567,7 +586,7 @@ def test_state_hb_vanishes_between_exists_and_stat(error):
 def test_state_survives_concurrent_file_flapping(tmp_path):
     """真线程竞态:后台线程高频创建/删除 job.hb 与 job.rc,state() 全程只返回
     契约内四态、绝不抛异常(命中窗口与否取决于时序,断言的是「绝不崩」)。"""
-    backend = LocalJobBackend(hb_stale=5.0)
+    backend = LocalJobBackend(hb_stale=5.0 * TF)
     job = tmp_path / "job"
     job.mkdir()
     (job / "job.pid").write_text("12345", encoding="utf-8")
@@ -616,14 +635,14 @@ def test_final_drain_flushes_unterminated_tail(tmp_path):
     修复前 read_new_lines 只提交完整行:不少引擎最后一行诊断不带换行
     (如 'Killed'、进度行),rc 落盘后这半行永久丢失。
     """
-    backend = LocalJobBackend(hb_stale=5.0)
+    backend = LocalJobBackend(hb_stale=5.0 * TF)
     job = tmp_path / "job"
     _fake_alive_job(job, log_text="line-1\n")
 
     async def scenario():
         lines: list[str] = []
         task = asyncio.create_task(
-            follow_job(backend, job, idle_timeout=10, total_timeout=15,
+            follow_job(backend, job, idle_timeout=10 * TF, total_timeout=15 * TF,
                        on_line=lines.append, poll=0.05))
         await _await_until(lambda: lines == ["line-1"], msg="首行未读到")
         with open(job / "job.log", "ab") as f:
@@ -639,7 +658,7 @@ def test_final_drain_flushes_unterminated_tail(tmp_path):
 
 def test_final_drain_flushes_tail_on_cancelled_finished(tmp_path):
     """取消与正常退出竞态(rc 先落盘)走 cancel_and_wait 收口:终读同样生效。"""
-    backend = LocalJobBackend(hb_stale=5.0)
+    backend = LocalJobBackend(hb_stale=5.0 * TF)
     job = tmp_path / "job"
     job.mkdir()
     (job / "job.pid").write_text("99999", encoding="utf-8")
@@ -650,7 +669,7 @@ def test_final_drain_flushes_tail_on_cancelled_finished(tmp_path):
     token.cancel()
 
     lines: list[str] = []
-    out = run_async(follow_job(backend, job, idle_timeout=5, total_timeout=10,
+    out = run_async(follow_job(backend, job, idle_timeout=5 * TF, total_timeout=10 * TF,
                                token=token, on_line=lines.append, poll=0.05))
     assert out.kind == "cancelled" and out.exit_code == 0
     assert lines == ["done-without-newline"]
@@ -736,8 +755,10 @@ def test_expensive_probe_throttled_after_dense_window(tmp_path):
     调用节奏不属于 state(),不受影响。"""
     expensive = _ScriptedBackend(outcome_after=999, expensive=True)
     cheap = _ScriptedBackend(outcome_after=999, expensive=False)
-    common = dict(idle_timeout=30, total_timeout=1.5, poll=0.05, cancel_grace=0.05,
-                  probe_dense_window=0.25, probe_idle_interval=10.0)
+    # 窗口整体乘 TF:密集窗口内至少两次探测 / 节流后显著更少的比值断言不变
+    common = dict(idle_timeout=30 * TF, total_timeout=1.5 * TF, poll=0.05,
+                  cancel_grace=0.05, probe_dense_window=0.25 * TF,
+                  probe_idle_interval=10.0 * TF)
     out_e = run_async(follow_job(expensive, tmp_path, **common))
     out_c = run_async(follow_job(cheap, tmp_path, **common))
     assert out_e.kind == "total_timeout" and out_c.kind == "total_timeout"
@@ -749,7 +770,8 @@ def test_expensive_probe_throttled_after_dense_window(tmp_path):
 def test_throttled_probe_still_detects_finished(tmp_path):
     """节流不改变结局:finished 仍被发现(延迟上限为 idle 探测间隔)。"""
     backend = _ScriptedBackend(outcome_after=0.3, outcome="finished")
-    out = run_async(follow_job(backend, tmp_path, idle_timeout=30, total_timeout=30,
+    out = run_async(follow_job(backend, tmp_path, idle_timeout=30 * TF,
+                               total_timeout=30 * TF,
                                poll=0.05, probe_dense_window=0.1,
                                probe_idle_interval=0.5))
     assert out.kind == "finished" and out.exit_code == 0
@@ -758,14 +780,15 @@ def test_throttled_probe_still_detects_finished(tmp_path):
 def test_orphan_confirmation_bypasses_throttle(tmp_path):
     """孤儿双击语义在节流下不放大:一击后的确认探测绕过节流间隔。
 
-    idle 间隔故意设 2s:若确认探测也被节流,末两次探测间隔必然 ≈2s;
-    绕过后应保持 ~0.3s(strike 后的短睡重试)。
+    idle 间隔故意设 2s×TF:若确认探测也被节流,末两次探测间隔必然 ≈2s×TF;
+    绕过后应保持 ~0.3s(strike 后的短睡重试)—— 判定阈取两者中线随 TF 同步放宽。
     """
     backend = _ScriptedBackend(outcome_after=0.2, outcome="orphaned")
-    out = run_async(follow_job(backend, tmp_path, idle_timeout=30, total_timeout=30,
+    out = run_async(follow_job(backend, tmp_path, idle_timeout=30 * TF,
+                               total_timeout=30 * TF,
                                poll=0.05, probe_dense_window=0.1,
-                               probe_idle_interval=2.0))
+                               probe_idle_interval=2.0 * TF))
     assert out.kind == "orphaned"
     assert len(backend.probe_times) >= 2
     confirm_gap = backend.probe_times[-1] - backend.probe_times[-2]
-    assert confirm_gap < 1.0  # 确认探测未被 2s 节流间隔拖慢
+    assert confirm_gap < 1.0 * TF  # 确认探测未被 2s×TF 节流间隔拖慢

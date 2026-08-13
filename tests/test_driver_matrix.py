@@ -32,6 +32,7 @@ from dataclasses import replace
 
 import pytest
 
+from conftest import TIME_FACTOR
 from insar_agent.brain.facade import Brain
 from insar_agent.core.db import Database
 from insar_agent.core.store import Store
@@ -41,6 +42,11 @@ from insar_agent.planner.plan import fork_run, make_plan
 from insar_agent.registry.capabilities import REGISTRY
 from insar_agent.registry.model import Param
 from insar_agent.runtime.probe import ProbeResult
+
+# 全模块经真实事件循环驱动 simulated 子进程(步中干预窗/租约/暂停续跑):
+# 时序敏感 —— 判定窗(startup_grace/等待上限/慢步窗口)乘 TIME_FACTOR,
+# 轮询 poll=0.03 与断言语义不变
+pytestmark = pytest.mark.timing
 
 # ---------------------------------------------------------------------------
 # 夹具:缩减注册表(前 6 步)+ 空探针 + simulated 全链
@@ -70,8 +76,8 @@ def empty_probe():
 
 def make_driver(store, workspace, **kw) -> Driver:
     defaults = dict(workspace=workspace, probe=empty_probe(), poll=0.03,
-                    startup_grace=15.0, allow_simulated=True, brain=Brain(None),
-                    registry=matrix_registry())
+                    startup_grace=15.0 * TIME_FACTOR, allow_simulated=True,
+                    brain=Brain(None), registry=matrix_registry())
     defaults.update(kw)
     return Driver(store, **defaults)
 
@@ -109,6 +115,7 @@ async def drive(agen, *, on_event=None, stop_when=None) -> list[dict]:
 
 
 async def await_until(cond, timeout: float = 20.0, msg: str = "条件未满足"):
+    timeout *= TIME_FACTOR  # 等待上限放宽;轮询节奏不变,空载不多等
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if cond():
@@ -125,8 +132,10 @@ def push_once(fired: dict, key: str, push) -> None:
 
 
 def slow_step(monkeypatch, sid: int, lines: int = 50) -> None:
-    """把第 sid 步的模拟日志拉长(lines × 0.02s ≈ 1s),给步中干预留出确定窗口。"""
-    monkeypatch.setitem(simulate._LOG_LINES, sid, [f"忙碌 {i}" for i in range(lines)])
+    """把第 sid 步的模拟日志拉长(lines × 0.02s ≈ 1s,负载系数下同步放大),
+    给步中干预留出确定窗口 —— 窗口过窄时高负载下泵来不及消费干预即步毕误判。"""
+    n = int(lines * TIME_FACTOR)
+    monkeypatch.setitem(simulate._LOG_LINES, sid, [f"忙碌 {i}" for i in range(n)])
 
 
 # ---------------------------------------------------------------------------

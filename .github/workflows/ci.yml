@@ -1,4 +1,5 @@
-# 主 CI 门禁:python(双平台全量 pytest)/ js(node --test + 前端质检)/ rust(桌面壳)。
+# 主 CI 门禁:python(双平台,非时序组)+ python-timing(时序敏感组,串行独占)
+# / js(node --test + 前端质检)/ rust(桌面壳)。两组并集 = 全量 pytest。
 # 【骨架声明】仓库当前纯本地(无远端),本文件做过 YAML 语法校验,且三个 job 的
 # 命令均在本机等价演练通过(pytest / test_js / check 脚本 / clippy / cargo test);
 # 首次推上 GitHub 后按真实日志微调(尤其 Windows 侧进程起停耗时)。
@@ -61,13 +62,59 @@ jobs:
       # - tests/test_wsl_backend.py 的真实 WSL 冒烟(需 win32 + wsl.exe,发行版不可达再跳)
       # - tests/test_wsl_probe.py 按宿主 bash / PowerShell 可用性运行时跳过
       # - tests/test_a11y_dom.py 需 node(GitHub 双平台 runner 均预装)
-      - name: 运行 pytest(Linux)
+      # 时序敏感用例(@pytest.mark.timing)不在本 job 跑:见 python-timing job
+      - name: 运行 pytest(Linux,非时序组)
         if: runner.os == 'Linux'
-        run: .venv/bin/python -m pytest tests -q --tb=short -p no:warnings
+        run: .venv/bin/python -m pytest tests -q --tb=short -p no:warnings -m "not timing"
 
-      - name: 运行 pytest(Windows)
+      - name: 运行 pytest(Windows,非时序组)
         if: runner.os == 'Windows'
-        run: .venv\Scripts\python.exe -m pytest tests -q --tb=short -p no:warnings
+        run: .venv\Scripts\python.exe -m pytest tests -q --tb=short -p no:warnings -m "not timing"
+
+  # 时序敏感组(@pytest.mark.timing):判定窗依赖真实时钟(心跳老化/双超时/宽限/
+  # 租约/流式收尾),与常规组同 runner 并行会互相拖慢而偶发失败 —— 单独 job 串行
+  # 独占 runner 跑(本仓不装 xdist/randomly,pytest 本身即串行;-p no:randomly 是
+  # 防未来引入插件的保险栓),叠加 INSAR_TEST_TIME_FACTOR 放宽判定窗,超时上限放宽。
+  # 本地并行开发同理:INSAR_TEST_TIME_FACTOR=3(见 README「快速开始」)。
+  python-timing:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, ubuntu-latest ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45   # 时序组上限放宽(常规 job 30):负载系数会拉长孤儿/超时判定
+    env:
+      INSAR_TEST_TIME_FACTOR: "2"   # 共享 runner 的调度抖动余量(判定窗×2,语义不变)
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 建立虚拟环境并安装依赖(Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e ".[dev,raster]" h5py pyyaml hypothesis
+
+      - name: 建立虚拟环境并安装依赖(Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -e ".[dev,raster]" h5py pyyaml hypothesis
+
+      - name: 运行 pytest(Linux,时序组串行)
+        if: runner.os == 'Linux'
+        run: .venv/bin/python -m pytest tests -q --tb=short -p no:warnings -p no:randomly -m timing
+
+      - name: 运行 pytest(Windows,时序组串行)
+        if: runner.os == 'Windows'
+        run: .venv\Scripts\python.exe -m pytest tests -q --tb=short -p no:warnings -p no:randomly -m timing
 
   js:
     runs-on: ubuntu-latest

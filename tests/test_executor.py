@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import TIME_FACTOR
 from insar_agent.audit.contract import load_contract
 from insar_agent.core.fingerprint import step_hashes
 from insar_agent.core.store import Store
@@ -31,6 +32,12 @@ from insar_agent.runtime.stream import CancelToken
 
 def run_async(coro):
     return asyncio.run(coro)
+
+
+# 全模块经 execute_step 驱动真实子进程(五阶段/心跳/双超时/取消):时序敏感,
+# 判定窗(hb_stale/grace/超时上限/等待圈数)乘 TIME_FACTOR(简写 TF)
+pytestmark = pytest.mark.timing
+TF = TIME_FACTOR
 
 
 # ---------------- 工具 ----------------
@@ -57,10 +64,10 @@ def make_step(store: Store, cap: Capability, run_id="r1", *, simulated=True,
 
 def make_ctx(store: Store, workspace: Path, registry: dict[int, Capability], *,
              builder=default_builder, **overrides) -> ExecContext:
-    defaults = dict(poll=0.05, startup_grace=15.0, cancel_grace=15.0)
+    defaults = dict(poll=0.05, startup_grace=15.0 * TF, cancel_grace=15.0 * TF)
     defaults.update(overrides)
     return ExecContext(
-        store=store, backend=LocalJobBackend(hb_stale=3.0), workspace=workspace,
+        store=store, backend=LocalJobBackend(hb_stale=3.0 * TF), workspace=workspace,
         registry=registry, builder=builder, contract=load_contract(), **defaults)
 
 
@@ -81,7 +88,7 @@ def custom_cap(step_id=6, **kw) -> Capability:
     base = dict(
         id=step_id, name="测试步", deps=(), methods=(Method("m1", "m1", "-"),),
         default_method="m1", artifacts=(), run_ok=(RunOkCheck("exit_code", equals=0),),
-        timeouts=Timeouts(idle=30, total=60))
+        timeouts=Timeouts(idle=30 * TF, total=60 * TF))
     base.update(kw)
     return Capability(**base)
 
@@ -157,8 +164,8 @@ def test_reattach_after_service_restart(store, workspace):
 
     async def scenario():
         task = asyncio.create_task(execute_step(ctx, "r1", cap.id))
-        # 等作业真正跑起来(有日志偏移)再"杀死服务"
-        for _ in range(200):
+        # 等作业真正跑起来(有日志偏移)再"杀死服务";等待上限 10s×TF
+        for _ in range(int(200 * TF)):
             await asyncio.sleep(0.05)
             step = store.load_step("r1", cap.id)
             if step.stage == "LAUNCHED" and step.log_offset > 0:
@@ -204,13 +211,13 @@ def test_claim_launched_job_before_advance(store, workspace):
     ctx.backend.launch(job_dir)
     # 轮询等 wrapper 真正起来(负载下 python 启动可达秒级,固定 sleep 会
     # 在「pid 已写、心跳未建」窗口误入 orphaned)—— 认领场景的前提本就是
-    # 「作业确实已在跑」
-    for _ in range(600):
+    # 「作业确实已在跑」;等待上限 30s×TF
+    for _ in range(int(600 * TF)):
         if ctx.backend.state(job_dir).kind in ("alive", "finished"):
             break
         time.sleep(0.05)
     else:
-        pytest.fail("wrapper 未在 30s 内启动")
+        pytest.fail(f"wrapper 未在 {30 * TF:g}s 内启动")
 
     result = run_async(execute_step(ctx, "r1", cap.id))
     assert result.outcome == "done"
@@ -237,7 +244,7 @@ def test_orphaned_wrapper(store, workspace):
     store.advance("r1", cap.id, "PREPARED", state="running", started_at=time.time())
     store.advance("r1", cap.id, "LAUNCHED", job_dir=str(job_dir), command_id=cid,
                   log_path=str(job_dir / "job.log"))
-    time.sleep(0.6)  # 心跳过期
+    time.sleep(0.6)  # 心跳过期(老化型等待:负载下只会更过期,方向安全,不乘 TF)
 
     result = run_async(execute_step(ctx, "r1", cap.id))
     assert result.outcome == "orphaned"
@@ -256,7 +263,7 @@ def test_cancel_preserves_partial_then_rerun(store, workspace):
 
     async def scenario():
         task = asyncio.create_task(execute_step(ctx, "r1", cap.id, token))
-        for _ in range(200):
+        for _ in range(int(200 * TF)):  # 等待上限 10s×TF
             await asyncio.sleep(0.05)
             if store.load_step("r1", cap.id).log_offset > 0:
                 break
@@ -280,9 +287,9 @@ def test_idle_timeout(store, workspace):
     cap = custom_cap(artifacts=(), run_ok=(RunOkCheck("exit_code", equals=0),))
     registry = {cap.id: cap}
     make_step(store, cap)
-    silent = "print('[job] start', flush=True)\ntime.sleep(30)\n"
+    silent = "print('[job] start', flush=True)\ntime.sleep(30)\n"  # 挂死上限 30s ≫ idle
     ctx = make_ctx(store, workspace, registry, builder=script_builder(silent),
-                   idle_timeout_override=1.0)
+                   idle_timeout_override=1.0 * TF)
 
     result = run_async(execute_step(ctx, "r1", cap.id))
     assert result.outcome == "failed" and result.detail == "idle_timeout"

@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from conftest import TIME_FACTOR
 from insar_agent.core.db import Database
 from insar_agent.core.store import STAGES, StageConflict, Store
 
@@ -37,6 +38,7 @@ def _mk_run(store: Store, run_id: str = "r1", steps: tuple[int, ...] = (6,)) -> 
 
 def _race(n: int, fn, timeout: float = 30.0):
     """n 线程 barrier 同起跑;返回 (results, errors),join 超时视为死锁。"""
+    timeout *= TIME_FACTOR  # 死锁判定上限随负载放宽;无死锁时不多等
     barrier = threading.Barrier(n)
     results: list = [None] * n
     errors: list = [None] * n
@@ -237,16 +239,18 @@ def test_consume_actions_batch_exactly_once(fstore):
 # ---------------- leases:到期争抢互斥 ----------------
 
 
+@pytest.mark.timing
 def test_lease_expiry_single_takeover(fstore):
     """租约:活租不可抢;心跳超时后 8 人争抢恰一人接管;续租/释放语义完整。"""
     assert fstore.acquire_lease("pool:cpu", "h0", ttl=0.2)
 
     # 活租约:无论多少人、多大耐心(stale_after 大)都抢不走
+    # (耐心阈值乘 TF:负载下 acquire→争抢之间的间隙不许老化越线)
     results, _ = _race(8, lambda i: fstore.acquire_lease("pool:cpu", f"c{i}",
-                                                         stale_after=30.0))
+                                                         stale_after=30.0 * TIME_FACTOR))
     assert results == [False] * 8
 
-    time.sleep(0.3)  # 心跳老化超过 stale_after 阈值
+    time.sleep(0.3)  # 心跳老化超过 stale_after 阈值(老化型等待,方向安全不乘)
     results, errors = _race(8, lambda i: fstore.acquire_lease("pool:cpu", f"c{i}",
                                                               stale_after=0.15))
     assert errors == [None] * 8
@@ -271,14 +275,18 @@ def test_lease_free_resource_single_winner(fstore):
     assert results.count(True) == 1
 
 
+@pytest.mark.timing
 def test_lease_reacquire_by_holder_renews(fstore):
-    """同 holder 重复 acquire 是续租(刷新心跳),不是失败也不是双持有。"""
-    assert fstore.acquire_lease("res:y", "h0", stale_after=0.2)
-    time.sleep(0.25)
+    """同 holder 重复 acquire 是续租(刷新心跳),不是失败也不是双持有。
+
+    判定窗:续租与 h1 来抢之间的间隙必须小于 stale_after —— 负载下两条语句
+    之间可能被调度拖开,阈值与老化等待同乘系数保持比例。"""
+    assert fstore.acquire_lease("res:y", "h0", stale_after=0.2 * TIME_FACTOR)
+    time.sleep(0.25 * TIME_FACTOR)
     # 心跳已老化,但持有者自己 re-acquire 走续租分支,不受 stale_after 影响
-    assert fstore.acquire_lease("res:y", "h0", stale_after=0.2)
+    assert fstore.acquire_lease("res:y", "h0", stale_after=0.2 * TIME_FACTOR)
     # 续租刷新了心跳 → 别人立刻来抢(以同样阈值)抢不走
-    assert fstore.acquire_lease("res:y", "h1", stale_after=0.2) is False
+    assert fstore.acquire_lease("res:y", "h1", stale_after=0.2 * TIME_FACTOR) is False
 
 
 # ---------------- fork 谱系 ----------------

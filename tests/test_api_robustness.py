@@ -18,6 +18,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import TIME_FACTOR
 from insar_agent.api.app import create_app
 from insar_agent.core.db import Database
 from insar_agent.core.store import StageConflict, Store
@@ -70,12 +71,12 @@ def live_server(home, monkeypatch):
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    deadline = time.time() + 20
+    deadline = time.time() + 20 * TIME_FACTOR  # 启动等待上限,负载系数放宽
     while not server.started:
         if not thread.is_alive():
             raise RuntimeError("uvicorn 线程提前退出")
         if time.time() > deadline:
-            raise RuntimeError("uvicorn 未在 20s 内启动")
+            raise RuntimeError(f"uvicorn 未在 {20 * TIME_FACTOR:g}s 内启动")
         time.sleep(0.05)
     port = server.servers[0].sockets[0].getsockname()[1]
     yield f"http://127.0.0.1:{port}"
@@ -430,6 +431,7 @@ def test_logs_endpoint_paths_come_from_db_only(client, home):
 
 # ---------------- 4. admin terminate 并发 CAS ----------------
 
+@pytest.mark.timing
 def test_admin_terminate_race_with_settle_no_double_terminal(client, home):
     """并发 terminate × N + 执行器结算:命令只结算一次,步骤单一终态,
     stage 高水位不回退,不出现 500。"""
@@ -474,7 +476,7 @@ def test_admin_terminate_race_with_settle_no_double_terminal(client, home):
         for t in threads:
             t.start()
         for t in threads:
-            t.join(timeout=30)
+            t.join(timeout=30 * TIME_FACTOR)
         assert not any(t.is_alive() for t in threads)
         assert not errors, errors
         assert all(r.status_code == 200 for r in responses), \
@@ -520,10 +522,11 @@ def test_ndjson_every_line_parses_and_content_type(client):
                 assert "t" in event
 
 
+@pytest.mark.timing
 def test_ndjson_disconnect_leaves_no_running_orphan(live_server):
     """客户端读了一行就真实断开 TCP:run 归服务端所有,应继续推进到终态,
     绝不留 status=running 且无人跟随的孤儿。"""
-    with httpx.Client(base_url=live_server, timeout=60) as http:
+    with httpx.Client(base_url=live_server, timeout=60 * TIME_FACTOR) as http:
         assert http.post("/api/sessions", json={"id": "demo"}).status_code == 200
         r = http.post("/api/turn", json={"session": "demo", "text": "Ridgecrest 地震同震"})
         assert r.status_code == 200
@@ -535,7 +538,8 @@ def test_ndjson_disconnect_leaves_no_running_orphan(live_server):
                     break  # 读到第一个事件就关闭连接(真实断连)
 
         # 断开后轮询:run 必须在合理时间内离开 running 态并到达终态
-        deadline = time.time() + 30
+        # (等待上限随负载系数放宽:高负载下服务端收尾整条 sim 链会显著变慢)
+        deadline = time.time() + 30 * TIME_FACTOR
         status = None
         while time.time() < deadline:
             state = http.get("/api/state", params={"session": "demo"}).json()
@@ -566,9 +570,10 @@ def test_stream_internal_error_becomes_event_not_hard_disconnect(client, home):
     assert client.get("/api/health").json()["ok"] is True
 
 
+@pytest.mark.timing
 def test_sse_events_format_and_delivery(live_server):
     """SSE:格式为 data: <json>\\n\\n;订阅后能收到回合事件(真实 socket)。"""
-    with httpx.Client(base_url=live_server, timeout=60) as http:
+    with httpx.Client(base_url=live_server, timeout=60 * TIME_FACTOR) as http:
         assert http.post("/api/sessions", json={"id": "demo"}).status_code == 200
         got: list[str] = []
         status_seen: list = []
@@ -578,7 +583,8 @@ def test_sse_events_format_and_delivery(live_server):
             try:
                 with httpx.stream("GET", live_server + "/api/events",
                                   params={"session": "demo"},
-                                  timeout=httpx.Timeout(10, read=30)) as resp:
+                                  timeout=httpx.Timeout(10 * TIME_FACTOR,
+                                                        read=30 * TIME_FACTOR)) as resp:
                     status_seen.append((resp.status_code,
                                         resp.headers.get("content-type", "")))
                     ready.set()
@@ -592,11 +598,13 @@ def test_sse_events_format_and_delivery(live_server):
 
         t = threading.Thread(target=listen, daemon=True)
         t.start()
-        assert ready.wait(15), "SSE 流应立即建立(响应头先行)"
-        time.sleep(0.3)  # 等订阅真正挂上总线
+        assert ready.wait(15 * TIME_FACTOR), "SSE 流应立即建立(响应头先行)"
+        # 等订阅真正挂上总线:响应头先行与 bus.subscribe 之间的窗口无法从外部
+        # 观测,只能给固定余量 —— 属判定窗,随负载系数放宽
+        time.sleep(0.3 * TIME_FACTOR)
         r = http.post("/api/turn", json={"session": "demo", "text": "Ridgecrest 地震同震"})
         assert r.status_code == 200
-        t.join(timeout=45)
+        t.join(timeout=45 * TIME_FACTOR)
         assert not t.is_alive(), "SSE 监听线程应在收到事件后退出"
         assert status_seen and status_seen[0][0] == 200
         assert status_seen[0][1].startswith("text/event-stream")

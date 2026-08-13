@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+from conftest import TIME_FACTOR
 from insar_agent.brain.facade import Brain
 from insar_agent.loop.driver import Driver
 from insar_agent.loop.events import EventBus
@@ -19,7 +22,8 @@ def empty_probe():
 
 def make_driver(store, workspace, **kw) -> Driver:
     defaults = dict(workspace=workspace, probe=empty_probe(), poll=0.05,
-                    startup_grace=15.0, allow_simulated=True, brain=Brain(None))
+                    startup_grace=15.0 * TIME_FACTOR, allow_simulated=True,
+                    brain=Brain(None))
     defaults.update(kw)
     return Driver(store, **defaults)
 
@@ -46,6 +50,7 @@ def test_turn_unknown_intent_asks_form(store, workspace):
     assert events[-1]["t"] == "ask"  # 转表单,不猜(§3.5 降级)
 
 
+@pytest.mark.timing  # 执行回合驱动真实 simulated 子进程(startup_grace 判定窗)
 def test_brain_removed_full_pipeline_still_works(store, workspace):
     """DESIGN.md:233 守护测试:拔掉 brain 整层,手动模式仍跑通全链。"""
     driver = make_driver(store, workspace, brain=Brain(None))
@@ -64,6 +69,7 @@ def test_brain_removed_full_pipeline_still_works(store, workspace):
     assert (workspace / "run.sh").exists()
 
 
+@pytest.mark.timing
 def test_execute_consumes_steer_between_steps(store, workspace):
     driver = make_driver(store, workspace)
     asyncio.run(collect(driver.turn("s1", "Ridgecrest 地震")))
@@ -80,6 +86,7 @@ def test_execute_consumes_steer_between_steps(store, workspace):
     assert store.get_run(run["run_id"])["status"] == "done"
 
 
+@pytest.mark.timing
 def test_pause_stops_after_current_step(store, workspace):
     driver = make_driver(store, workspace)
     asyncio.run(collect(driver.turn("s1", "Ridgecrest 地震")))
@@ -100,6 +107,7 @@ def test_pause_stops_after_current_step(store, workspace):
     assert store.get_run(run["run_id"])["status"] == "done"
 
 
+@pytest.mark.timing
 def test_kill_action_interrupts_run(store, workspace):
     driver = make_driver(store, workspace)
     asyncio.run(collect(driver.turn("s1", "Ridgecrest 地震")))
