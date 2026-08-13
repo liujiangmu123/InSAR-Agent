@@ -211,6 +211,20 @@ def _check_dependencies(home: Path) -> list[CheckResult]:
     return out
 
 
+def _check_download_credentials(home: Path) -> list[CheckResult]:
+    """数据下载凭证(workspace/credentials.json):只看配置存在性,绝不出网验证。"""
+    from insar_agent.runtime.credentials import configured_mode, load_credentials
+
+    label = {"token": "EDL token", "password": "Earthdata 账号密码"}.get(
+        configured_mode(load_credentials(home)))
+    return [CheckResult(
+        "数据下载凭证", "环境", STATUS_OK if label else STATUS_WARN,
+        f"已配置({label} 方式,credentials.json)" if label else
+        "未配置(第 1 步 asf_search/HyP3 真实下载需要 NASA Earthdata 凭证;模拟演示不需要)",
+        "" if label else "前端「环境」面板 →「数据下载凭证」填 EDL token 或账号密码;"
+                         "无账号先注册 https://urs.earthdata.nasa.gov")]
+
+
 # ---------------- 引擎(复用 probe_environment + WSL 缓存) ----------------
 
 def _check_engines(home: Path) -> list[CheckResult]:
@@ -524,6 +538,7 @@ _CHECKERS: tuple[tuple[str, Callable[[Path], list[CheckResult]]], ...] = (
     ("环境", _check_python),
     ("环境", _check_venv),
     ("环境", _check_dependencies),
+    ("环境", _check_download_credentials),
     ("引擎", _check_engines),
     ("数据库", _check_database),
     ("文件系统", _check_filesystem),

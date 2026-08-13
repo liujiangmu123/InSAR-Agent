@@ -382,6 +382,8 @@ def create_app(home: Path | None = None) -> FastAPI:
     set_usage_sink(usage_ledger.record)        # provider 保持纯传输层,经模块级回调上报用量
     from insar_agent.api.llm_router import create_llm_router
     app.include_router(create_llm_router(home, usage_ledger))  # LLM 密钥/模型配置 + 用量账本
+    from insar_agent.api.credentials_router import create_credentials_router
+    app.include_router(create_credentials_router(home))  # 数据下载凭证(Earthdata)
     app.include_router(version_router)             # 版本信息与更新检查(/api/version*)
     app.include_router(skills_router)              # 步骤技能文档(/api/skills*,规划/分诊知识源)
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
