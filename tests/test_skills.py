@@ -209,8 +209,8 @@ def client(tmp_path, monkeypatch):
 def test_api_list(client):
     r = client.get("/api/skills")
     assert r.status_code == 200
-    items = r.json()
-    assert [it["step"] for it in items] == [6]
+    items = r.json()["skills"]  # skills 信封(前端 skillpanel.js 的消费契约)
+    assert [it["capability"] for it in items] == [6]
     it = items[0]
     assert it["name"] == "unwrap-method-selection" and it["version"] == "1.2.3"
     assert len(it["content_hash"]) == 64
@@ -225,7 +225,7 @@ def test_api_detail_and_404(client):
     r = client.get("/api/skills/6")
     assert r.status_code == 200
     full = r.json()
-    assert full["step"] == 6 and full["content_hash"]
+    assert full["capability"] == 6 and full["content_hash"]
     # 全文按章节结构化返回(含 ### 子标题的完整正文)
     assert "### 细则" in full["sections"][SECTION_PARAMS]
     assert "path" not in full
@@ -269,7 +269,7 @@ def test_zero_impact_without_skills_dir(store, tmp_path, monkeypatch):
                             workspace=tmp_path / "ws")
     assert all("skill" not in step for step in doc["steps"].values())
     with TestClient(create_app(home=tmp_path / "home")) as c:
-        assert c.get("/api/skills").json() == []
+        assert c.get("/api/skills").json() == {"skills": []}
         assert c.get("/api/skills/6").status_code == 404
 
 
@@ -282,15 +282,19 @@ def test_brain_no_llm_path_unchanged_by_skill_context():
     assert t2.failure_class == FailureClass.OOM and t2.source == "rules"
 
 
-# ---------------- 仓库契约样例守护 ----------------
+# ---------------- 仓库契约守护 ----------------
 
-def test_repo_sample_skill_is_clean():
-    """skills/06-unwrap/SKILL.md 是格式标杆:整个 skills/ 树必须零告警加载。"""
+def test_repo_skills_tree_is_clean():
+    """仓库 skills/ 树(内容代理产出的 11 份正式文档)必须零告警加载:
+    十一步全覆盖、frontmatter 与目录前缀一致、五章节非空 —— 契约由本测试锁死,
+    任何一份文档漂移都在这里显形,而不是在规划/分诊运行时静默缺知识。"""
     root = Path(__file__).resolve().parents[1] / "skills"
     with warnings.catch_warnings():
         warnings.simplefilter("error", SkillDocWarning)
         skills = load_skills(root)
-    sk = skills.get(6)
-    assert sk is not None and sk.name == "unwrap-method-selection"
-    assert sk.applies_to == ("all",)
-    assert all(sk.sections[s].strip() for s in REQUIRED_SECTIONS)
+    assert set(skills) == set(range(1, 12))  # 11 步全覆盖
+    for sid, sk in skills.items():
+        assert sk.capability == sid
+        assert all(sk.sections[s].strip() for s in REQUIRED_SECTIONS), \
+            f"步骤 {sid}({sk.name})存在空章节"
+    assert skills[6].name == "06-unwrap" and skills[6].applies_to == ("all",)

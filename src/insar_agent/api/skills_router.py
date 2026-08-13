@@ -1,8 +1,13 @@
 """步骤技能文档端点(独立 APIRouter,由 api/app.py include_router 挂载)。
 
-- GET /api/skills            全列表:步骤号 / name / version / content_hash /
-                             description / applies_to / 章节摘要(首行截断)。
+- GET /api/skills            全列表:{"skills": [{capability / name / version /
+                             content_hash / description / applies_to /
+                             sections: {章节: 首行摘要}}]}。
 - GET /api/skills/{step_id}  单步全文:按章节结构化返回;无技能 → 404。
+
+响应形状与前端技能面板(prototype/js/skillpanel.js 头注)互为契约:列表带
+skills 信封、步骤号字段名用 capability(对齐 registry 语汇),面板对 404/
+网络错静默降级。
 
 纪律:
 - 每请求经 loader 重扫技能目录(loader 无缓存):改技能文件即生效,无需重启;
@@ -33,7 +38,7 @@ def _summary(text: str) -> str:
 
 def _meta(skill: StepSkill) -> dict:
     return {
-        "step": skill.capability,
+        "capability": skill.capability,
         "name": skill.name,
         "version": skill.version,
         "content_hash": skill.content_hash,
@@ -43,13 +48,13 @@ def _meta(skill: StepSkill) -> dict:
 
 
 @router.get("")
-def list_skills() -> list[dict]:
-    """全部已加载技能的清单(按步骤号排序;章节只给首行摘要)。"""
-    return [
+def list_skills() -> dict:
+    """全部已加载技能的清单(skills 信封,按步骤号排序;章节只给首行摘要)。"""
+    return {"skills": [
         {**_meta(skill),
          "sections": {name: _summary(text) for name, text in skill.sections.items()}}
         for _sid, skill in sorted(load_skills().items())
-    ]
+    ]}
 
 
 @router.get("/{step_id}")
