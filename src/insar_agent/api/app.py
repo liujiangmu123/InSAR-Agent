@@ -36,6 +36,7 @@ from starlette.datastructures import MutableHeaders
 
 from insar_agent.api.admin_router import create_admin_router
 from insar_agent.api.artifacts_router import create_artifacts_router
+from insar_agent.api.queue_router import create_queue_router
 from insar_agent.api.setup_router import create_setup_router
 from insar_agent.api.version_router import router as version_router
 from insar_agent.audit.contract import load_contract
@@ -47,6 +48,7 @@ from insar_agent.core.ledger import export_provenance
 from insar_agent.core.stale import preview_change
 from insar_agent.core.store import DELIVER_AS, Store
 from insar_agent.loop.driver import Driver
+from insar_agent.loop.queue import QueueScheduler, RunQueue
 from insar_agent.planner.feasibility import narrow_methods
 from insar_agent.planner.plan import fork_run
 from insar_agent.registry.capabilities import PIPELINE, REGISTRY
@@ -379,6 +381,11 @@ def create_app(home: Path | None = None) -> FastAPI:
                     allow_simulated=os.environ.get("INSAR_ALLOW_SIMULATED", "1") == "1")
                 store.create_session(session_id, session_id)
             return drivers[session_id]
+
+    # 运行队列:全局串行调度(并发=1,对齐本机重计算管控),startup 恢复 pending
+    run_queue = RunQueue(store)
+    QueueScheduler(run_queue, driver_of).install(app)
+    app.include_router(create_queue_router(store, run_queue, driver_of))
 
     # 回合泵任务的强引用(asyncio 只弱引用 task,不留强引用会被 GC 掐断)
     turn_tasks: set[asyncio.Task] = set()
