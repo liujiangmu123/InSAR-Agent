@@ -19,8 +19,8 @@ venv/
 .ruff_cache/
 *.egg-info/
 
-# 数据与产物（体积大，不入库）
-data/
+# 数据与产物（体积大，不入库；锚定根目录,勿误伤 src/insar_agent/data/ 源码包）
+/data/
 workspace/
 runs/
 *.h5
