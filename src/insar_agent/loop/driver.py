@@ -412,6 +412,15 @@ class Driver:
                     "warn", f"第 {sid} 步已被标记跳过,不执行(产物沿用现状)"))
                 yield self._emit(ev.overall(round(done_count / total * 100)))
                 continue
+            if step.state == "stale":
+                # 步间干预复位(2026-08-13 quake 旅程深验发现,P1):UI 的改参重跑
+                # 是「排队 SET_PARAMS(steer)+ 显式 step_ids」两连发,动作在本步
+                # 检查点(上方 _consume_steer)才被消费 —— 入口复位 pass 用的是
+                # 消费前的快照,此刻本步已 stale 但 stage 仍停在 VERIFIED,五阶段
+                # 幂等守卫会把重跑空转成 no-op:步骤卡照发 tool.end/step.end,
+                # 命令数却为 0,结果仍是旧配置。与入口 pass 同语义,补一次复位。
+                store.reset_step_for_rerun(run_id, sid)
+                step = store.load_step(run_id, sid)
             cap = self.registry[sid]
             yield self._emit(ev.step_start(sid))
             yield self._emit(ev.tool_start(
