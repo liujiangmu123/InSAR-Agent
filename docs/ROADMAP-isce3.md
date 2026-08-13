@@ -164,7 +164,7 @@ worker_settings: {threads_per_worker: 1, n_parallel_bursts: 1, block_shape: [512
 
 - JPL 主导的最后版本 2.6.3(2023);此后均为社区 bugfix:[v2.6.4](https://github.com/isce-framework/isce2/releases/tag/v2.6.4)(2025-05,S1C 支持)、[v2.6.5](https://github.com/isce-framework/isce2/releases/tag/v2.6.5)(**2026-06-30**,S1C 轨道重构修复 + **Sentinel-1D 支持**);
 - 值得注意:2.6.4/2.6.5 的提交者都是 **ASF 工程师**——HyP3 的 burst InSAR 与 ARIA GUNW 产线跑在 ISCE2 上,ASF 的商业依赖是 ISCE2 近期最强的"续命"力量;
-- conda-forge `isce2` 2.6.5 可装(linux-64/osx-64),我们 WSL 里是 2.6.3——**短期动作:升级到 2.6.5**(获得 S1C/S1D 支持,2025 年后新采集的 S1 数据必需)。
+- conda-forge `isce2` 2.6.5 可装(linux-64/osx-64)。**✅ 已完成(2026-08-13)**:WSL `insar` env 实测即 2.6.5(S1C/S1D 支持,2025 年后新采集的 S1 数据必需;本文初稿"WSL 里是 2.6.3"为过时信息),`scripts/wsl_setup.sh` 已钉定 `isce2=2.6.5` 防重装漂移,环境快照见 `docs/WSL-SETUP.md` §3.3。
 
 **已知不修的问题**(社区安装指南 [lijun99/isce2-install](https://github.com/lijun99/isce2-install),2026-04 更新):
 
@@ -233,7 +233,7 @@ worker_settings: {threads_per_worker: 1, n_parallel_bursts: 1, block_shape: [512
 1. WSL 增装独立 `insar3` env(§4 命令序列;**不动现有 insar env**——isce2 的 numpy<2 与 isce3 生态的 numpy≥2 硬冲突,分环境是唯一解);
 2. `wsl_probe`/probe 扩展三个引擎键,面板可见;
 3. **cap6 先行**:`dolphin_unwrap_snaphu` / `dolphin_unwrap_spurt` 作为解缠新方法(dolphin 可直接消费 ISCE2 topsStack 形态的输入,[官方文档明示](https://dolphin-insar.readthedocs.io/en/latest/getting-started/) `--slc-files merged/SLC/*/*.slc`)——不动上游即可演示"解缠失败→换方法→失效传播",兑现竞品报告借鉴项 #4;
-4. 顺手:现有 insar env 的 isce2 从 2.6.3 升 2.6.5(S1C/S1D 支持;独立动作,验证后更新 `scripts/wsl_setup.sh` 声明)。
+4. ~~顺手:现有 insar env 的 isce2 从 2.6.3 升 2.6.5~~ **✅ 已完成(2026-08-13)**:实测现网已是 2.6.5(无需升级),`scripts/wsl_setup.sh` 已钉定 `isce2=2.6.5` + apt snaphu,验证矩阵与环境快照落 `docs/WSL-SETUP.md` §3.3。
 
 ### 阶段 2:中期新增方法族——TOPS 全链(3-6 个月,≈15-20 人日)
 

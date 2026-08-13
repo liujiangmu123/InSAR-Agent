@@ -55,7 +55,7 @@ _ENGINES: dict[str, tuple[str, str]] = {
         "smallbaselineApp.py",
         "python3 -c 'import mintpy; print(mintpy.__version__)'",
     ),
-    # snaphu 无 --version:空跑的用法输出首行形如 `snaphu v2.0.7`(rc 非零,不影响取版本)
+    # snaphu 无 --version:空跑的用法输出首行形如 `snaphu v2.0.6`(rc 非零,不影响取版本)
     "snaphu": ("snaphu", "snaphu 2>&1 | head -n 2"),
 }
 _VERSION_RE = re.compile(r"(\d+(?:\.\d+)+[\w.\-+]*)")
