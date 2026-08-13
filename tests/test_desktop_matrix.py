@@ -101,6 +101,10 @@ def _hermetic_env(tmp: Path, port: int) -> dict[str, str]:
         "TMP": str(tmpdir),
         "PATH": r"C:\Windows\System32;C:\Windows",
         "INSAR_ENGINE_PREFIX": str(no_engines),
+        # 冻结包执行本地作业(wrapper/模拟脚本)需要外部解释器(GAP-1 修复的
+        # 解析序首位)。用跑测试的这个 python:密封闸门只针对「引擎探测」,
+        # 解释器不是引擎 —— 桌面产品形态由用户经 INSAR_PYTHON/引擎前缀提供。
+        "INSAR_PYTHON": sys.executable,
         "INSAR_HOME": str(tmp / "home"),
         "INSAR_PORT": str(port),
         "INSAR_ALLOW_SIMULATED": "1",
@@ -276,6 +280,17 @@ _PROBES: list[tuple] = [
     ("skills-list", "GET", "/api/skills", {}, {200},
      lambda b: isinstance(b.get("skills"), list)),
     ("skills-step", "GET", "/api/skills/6", {}, {200, 404}, None),
+    # report_router(/api/report)—— 无 run 的密封环境:400/404 结构化拒绝
+    ("report-draft-norun", "POST", "/api/report/draft",
+     {"json": {"session": "matrix-probe", "run_id": "no-such-run"}},
+     {400, 404}, None),
+    # visionqa_router(/api/vision-qa)—— 未配置识图模型/无 run 的拒绝面
+    ("visionqa-list-norun", "GET", "/api/vision-qa",
+     {"params": {"session": "matrix-probe", "run": "no-such-run"}},
+     {200, 404}, None),
+    ("visionqa-post-norun", "POST", "/api/vision-qa",
+     {"json": {"session": "matrix-probe", "run_id": "no-such-run",
+               "figure": "x.png"}}, {200, 400, 404}, None),
     # admin_router(/api/admin)
     ("admin-runs", "GET", "/api/admin/runs", {}, {200},
      lambda b: isinstance(b, list)),
@@ -430,15 +445,33 @@ def test_static_ui_index_and_assets_serve_source_bytes(backend):
 # 模拟 run 全链冒烟(规划 → 执行 → 终态 → 账本导出)
 # ---------------------------------------------------------------------------
 
-def test_turn_plans_quake_simulated(backend):
-    """quake 关键词规划回合:意图规则命中、云端 2-6 跳过、run ready 且
-    simulated(密封环境的直接证明 —— 引擎全空,规划必然落到模拟方法)。"""
+@pytest.fixture(scope="module")
+def planned_run(backend):
+    """规划一次、模块内共享(fixture 形态免疫 pytest-randomly 洗牌 ——
+    此前靠文件内顺序填 _CTX,随机顺序下游测试会在前置断言上误报)。"""
     client = backend["client"]
     r = client.post("/api/sessions", json={"id": SID, "name": "矩阵冒烟", "mode": "expert"})
     assert r.status_code == 200 and r.json()["session_id"] == SID
-
     events = _stream(client, "/api/turn",
                      {"session": SID, "text": "Ridgecrest 地震同震形变"})
+    state = client.get("/api/state", params={"session": SID}).json()
+    _CTX["run_id"] = state["run"]["run_id"]
+    return {"events": events, "state": state}
+
+
+@pytest.fixture(scope="module")
+def executed_run(backend, planned_run):
+    """执行一次、模块内共享(执行类断言与账本断言都依赖它,免疫洗牌)。"""
+    events = _stream(backend["client"], "/api/pipeline", {"session": SID},
+                     timeout=600.0)
+    state = _wait_terminal(backend["client"], SID)
+    return {"events": events, "state": state}
+
+
+def test_turn_plans_quake_simulated(planned_run):
+    """quake 关键词规划回合:意图规则命中、云端 2-6 跳过、run ready 且
+    simulated(密封环境的直接证明 —— 引擎全空,规划必然落到模拟方法)。"""
+    events = planned_run["events"]
     kinds = [e["t"] for e in events]
     for t in ("thinking", "plan", "say", "candidates"):
         assert t in kinds, f"规划回合缺 {t} 事件:{kinds}"
@@ -447,35 +480,22 @@ def test_turn_plans_quake_simulated(backend):
     assert any(e["t"] == "note" and "模拟" in e.get("text", "") for e in events), \
         "引擎全空必须给出显式「模拟执行」横幅(诚实性)"
 
-    state = client.get("/api/state", params={"session": SID}).json()
-    run = state["run"]
+    run = planned_run["state"]["run"]
     assert run["status"] == "ready" and run["scenario"] == "quake"
     assert bool(run["simulated"]) is True
-    st = {s["id"]: s["state"] for s in state["steps"]}
+    st = {s["id"]: s["state"] for s in planned_run["state"]["steps"]}
     assert sorted(st) == list(range(1, 12))
     assert all(st[sid] == "skipped" for sid in (2, 3, 4, 5, 6))
     assert all(st[sid] == "pending" for sid in (1, 7, 8, 9, 10, 11))
-    _CTX["run_id"] = run["run_id"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="已知缺陷(2026-08-13 桌面矩阵实测,P1):模拟执行链在冻结包下断裂 ——"
-           "runtime/jobs.LocalJobBackend.launch 与 engines/simulate.build 都用"
-           " sys.executable 当 Python 解释器,冻结态它是 insar-backend.exe 本身:"
-           "wrapper/模拟脚本没有被执行,反而误派生第二个后端实例(继承 INSAR_PORT"
-           "→端口占用秒退;若无 INSAR_PORT 会落到 8873)。job.pid 永不出现,步骤在"
-           " startup_grace(30s)后按 orphaned 失败,run 终态 failed。期望行为:"
-           "冻结态解析真实 Python(引擎前缀/PATH)或显式失败提示。修复归属产品"
-           "代码(另行分派,见 docs/DESKTOP-PARITY.md);修好后本测试 XPASS 提醒"
-           "改回普通断言。")
-def test_pipeline_executes_simulated_run_to_done(backend):
+# GAP-1 已修复(2026-08-13):runtime/jobs.wrapper_python() 冻结态解析真实
+# Python(INSAR_PYTHON > 引擎前缀 > PATH,落空显式失败),jobs/simulate/
+# localdata 三处调用点全部切换 —— xfail 按约定翻转为普通断言。
+def test_pipeline_executes_simulated_run_to_done(planned_run, executed_run):
     """执行全链(与源码 journey J2 同口径的冒烟):只跑 [1,7,8,9,10,11],
     逐步 exit 0,run 到 done —— 源码运行成立,冻结包必须同样成立。"""
-    client = backend["client"]
-    assert "run_id" in _CTX, "前置规划节点未完成"
-    events = _stream(client, "/api/pipeline", {"session": SID}, timeout=600.0)
-
+    events = executed_run["events"]
     started = [e["stepId"] for e in events if e["t"] == "step.start"]
     assert started == [1, 7, 8, 9, 10, 11], f"执行集合漂移:{started}"
     ends = {e["stepId"]: e for e in events if e["t"] == "step.end"}
@@ -483,20 +503,18 @@ def test_pipeline_executes_simulated_run_to_done(backend):
         {sid: ends.get(sid, {}).get("exit") for sid in started}
     assert any(e["t"] == "result" for e in events)
 
-    state = _wait_terminal(client, SID)
+    state = executed_run["state"]
     assert state["run"]["run_id"] == _CTX["run_id"]
     assert state["run"]["status"] == "done", state["run"]["status"]
     st = {s["id"]: s["state"] for s in state["steps"]}
     assert all(st[sid] == "done" for sid in (1, 7, 8, 9, 10, 11))
-    _CTX["executed"] = True
 
 
-def test_run_reaches_terminal_state_and_provenance_exports(backend):
+def test_run_reaches_terminal_state_and_provenance_exports(backend, executed_run):
     """无论执行结局如何(done / failed),run 必须收敛到终态且 provenance
     可导出、simulated 如实入账 —— 账本诚实性不随冻结形态回归。"""
     client = backend["client"]
-    assert "run_id" in _CTX, "前置规划节点未完成"
-    state = _wait_terminal(client, SID)
+    state = executed_run["state"]
     assert state["run"]["status"] in _TERMINAL
 
     r = client.get("/api/provenance", params={"session": SID})
@@ -565,14 +583,8 @@ def test_version_parity_with_source(backend):
     assert body["build"]["frozen"] is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="已知缺陷(2026-08-13 桌面矩阵实测,P1):步骤技能文档没进冻结包 ——"
-           "insar_backend.spec 的 datas 缺仓库根 skills/,entry.py 也未设"
-           " INSAR_SKILLS_DIR(skills/loader.py 头注声称会注入,实际没有);"
-           "loader 冻结态回退到 <dist>/insar-backend/skills(不存在)→ /api/skills"
-           "恒为空,规划/分诊失去技能知识源。期望:11 份与源码一致。修复归属"
-           "打包配置(另行分派,见 docs/DESKTOP-PARITY.md);修好后本测试 XPASS。")
+# GAP-2 已修复(2026-08-13):spec datas 增仓库根 skills/,entry.py 注入
+# INSAR_SKILLS_DIR(exe 旁优先、_internal 兜底)—— xfail 翻转为普通断言。
 def test_skills_count_matches_source_eleven(backend):
     """/api/skills 数量 = 11,与源码技能目录零差距。"""
     from insar_agent.skills.loader import load_skills

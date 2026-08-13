@@ -33,6 +33,10 @@ datas = [
     # 场景技能包整目录:registry/scenarios.py 用 Path(__file__) 同级 scenario_packs
     # 扫描,漏掉不报错 —— SCENARIOS 静默变空,意图识别整体失效(首次打包实测补上)
     (str(SRC_PKG / "registry" / "scenario_packs"), "insar_agent/registry/scenario_packs"),
+    # 步骤技能文档(仓库根 skills/,11 份 SKILL.md):skills/loader.py 冻结态由
+    # entry.py 注入 INSAR_SKILLS_DIR 指向此副本;漏掉则 /api/skills 恒空、
+    # 规划/分诊丢失技能上下文(DESKTOP-PARITY GAP-2 实测)
+    (str(REPO_ROOT / "skills"), "skills"),
 ]
 
 hiddenimports = sorted(set(

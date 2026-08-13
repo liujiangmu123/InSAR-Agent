@@ -43,11 +43,31 @@ def _ui_candidates() -> list[Path]:
     return [Path(__file__).resolve().parents[2] / "prototype"]
 
 
+def _skills_candidates() -> list[Path]:
+    """技能文档目录(skills/loader.py 的 INSAR_SKILLS_DIR):exe 旁优先
+    (便于不重打包热改技能),其次 _internal 打包副本(spec datas 落点)。"""
+    if _frozen():
+        exe_dir = Path(sys.executable).resolve().parent
+        cands = [exe_dir / "skills"]
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            cands.append(Path(meipass) / "skills")
+        return cands
+    return [Path(__file__).resolve().parents[2] / "skills"]
+
+
 def _resolve_env() -> None:
     if not os.environ.get("INSAR_UI_DIR"):
         for cand in _ui_candidates():
             if (cand / "index.html").is_file():
                 os.environ["INSAR_UI_DIR"] = str(cand)
+                break
+    # 技能目录注入(loader.py 头注声明的契约;漏注入 = /api/skills 恒空,
+    # DESKTOP-PARITY GAP-2 实测)——显式设置则完全尊重
+    if not os.environ.get("INSAR_SKILLS_DIR"):
+        for cand in _skills_candidates():
+            if cand.is_dir():
+                os.environ["INSAR_SKILLS_DIR"] = str(cand)
                 break
     if _frozen() and not os.environ.get("INSAR_HOME"):
         base = os.environ.get("LOCALAPPDATA") or str(Path.home())

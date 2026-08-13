@@ -55,7 +55,13 @@ datasets 3 / queue 3 / 会话与状态面 12 / 回合与干预面 7 / 导出面 
 
 ## 差距清单(缺陷不在矩阵内修,另行分派)
 
-### GAP-1(P1)冻结包无法执行本地作业 —— 模拟 run 全链断裂
+### ✅ GAP-1(已修复 2026-08-13)冻结包无法执行本地作业 —— 模拟 run 全链断裂
+
+> **修复**:`runtime/jobs.wrapper_python()` 冻结态解析真实解释器
+> (INSAR_PYTHON > 引擎前缀(显式/隐式)> PATH,全落空显式抛错),
+> jobs/simulate/localdata 三处调用点切换;矩阵 `_hermetic_env` 提供
+> INSAR_PYTHON(解释器不是引擎,不破密封语义)。重建 dist 后
+> `test_pipeline_executes_simulated_run_to_done` 常规断言通过。原始记录留档:
 
 - **现象**:`POST /api/pipeline` 后第 1 步永远等不到 wrapper 心跳,
   `startup_grace`(30 s)耗尽按 orphaned 判失败,run 终态 `failed`。
@@ -86,7 +92,11 @@ datasets 3 / queue 3 / 会话与状态面 12 / 回合与干预面 7 / 导出面 
 - **验收**:修复后 `test_pipeline_executes_simulated_run_to_done` 会 XPASS
   (strict xfail)提醒改回普通断言;`wrapper.err` 不再出现 uvicorn 日志。
 
-### GAP-2(P1)步骤技能文档未进冻结包 —— /api/skills 恒为空
+### ✅ GAP-2(已修复 2026-08-13)步骤技能文档未进冻结包 —— /api/skills 恒为空
+
+> **修复**:`insar_backend.spec` datas 增仓库根 `skills/`;entry.py 注入
+> INSAR_SKILLS_DIR(exe 旁优先、_internal 兜底)。重建 dist 后
+> `test_skills_count_matches_source_eleven` 常规断言通过(11/11)。原始记录留档:
 
 - **现象**:冻结包 `GET /api/skills` 返回 `{"skills": []}`(源码 11 份);
   `GET /api/skills/{step_id}` 恒 404。
