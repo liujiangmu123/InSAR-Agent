@@ -1,5 +1,16 @@
 # 深测波次跟踪清单(2026-08-12)
 
+## 24 代理波次(2026-08-13 晚)接力项
+
+- 【P0,来自 RESEARCH-chat-vs-pipeline】聊天自然语言参数指令闭环:用户在聊天说
+  「把第 6 步 min_coherence 改成 0.3」应产生 SET_PARAMS 动作(brain 意图解析
+  → /api/actions 队列),当前 driver 意图解析只识别场景。斜杠命令(/param)只
+  覆盖键盘精确输入,NL 路径缺失。待本波合并后实现(涉及 brain/facade + driver
+  意图消费,均为本波热点文件,故顺延)。
+- 研究报告其余 P1/P2 建议对照本波交付核销:计划 diff(plandiff 代理)、首访
+  引导(tour 代理)、面板自我介绍(tour 第②步)、starter verbs(空态代理的
+  聊天引导卡);未覆盖项(来源徽标全量、取消理由回传、运行回放)进下波候选。
+
 ## 第三波(16 代理,晚间)闭环记录
 
 - UI-DETAILS-AUDIT #1-4 全部闭环:审计面板消费服务端证据链、files/report 面板
