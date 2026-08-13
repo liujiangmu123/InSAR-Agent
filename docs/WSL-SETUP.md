@@ -11,7 +11,8 @@ insar-agent 的计算引擎(ISCE2 / MintPy / SNAPHU)运行在 WSL2 内,宿主侧
 | 发行版 | `insar`(Ubuntu 24.04 noble rootfs 导入,root 用户,无交互) |
 | 发行版磁盘 | `E:\wsl\insar`(ext4.vhdx 必须落 E: —— C: 空间不足,§0.5.3/§4.8) |
 | conda | Miniforge3 → `/opt/miniforge3`(清华镜像下载) |
-| 引擎 env | `/opt/miniforge3/envs/insar`:python=3.11 + isce2 + mintpy + snaphu + gdal + pyaps3(清华 conda-forge 镜像,`--override-channels`;libblas 为 openblas,Linux conda-forge 默认即是,脚本只校验) |
+| 引擎 env | `/opt/miniforge3/envs/insar`:python=3.11 + **isce2=2.6.5(钉定,防重装漂移)** + mintpy + snaphu + gdal + pyaps3(清华 conda-forge 镜像,`--override-channels`;libblas 为 openblas,Linux conda-forge 默认即是,脚本只校验) |
+| snaphu 二进制 | `/usr/bin/snaphu`(apt universe 2.0.6-2,步骤 1 安装)。conda-forge 的 `snaphu` 包是 snaphu-py 包装器(0.4.x),**不往 PATH 装可执行**,探测契约与解缠引擎依赖的是 apt 这份 |
 | 工作区 | `/home/insar/work`(Linux fs,含 `.jobs/` 作业目录;绝不放 `/mnt/*` 或 `/tmp`) |
 | 环境变量 | `/etc/profile.d/insar.sh`:`HDF5_USE_FILE_LOCKING=FALSE`、`INSAR_ENGINE_PREFIX`、引擎 PATH(含 ISCE2 applications 目录) |
 | 宿主全局配置 | `%USERPROFILE%\.wslconfig`:`[wsl2]` memory=40GB / processors=20 / swap=16GB / swapFile=`E:\wsl\swap.vhdx` |
@@ -67,9 +68,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\wsl_setup.ps1
 
 | 步骤 | 内容 | 失败退出码 |
 |---|---|---|
-| 1 | apt 源切清华镜像(noble,deb822 格式,原文件备份 `.insar_bak`)+ 装 wget/bzip2/ca-certificates | 10(源/update)/ 11(装包) |
+| 1 | apt 源切清华镜像(noble,deb822 格式,原文件备份 `.insar_bak`)+ 装 wget/bzip2/ca-certificates/**snaphu**(snaphu 二进制只有 apt 这份,见 §目标环境) | 10(源/update)/ 11(装包) |
 | 2 | Miniforge(清华镜像)→ `/opt/miniforge3`,已存在跳过 | 20(下载)/ 21(安装) |
-| 3 | `conda create -n insar -c <清华conda-forge> --override-channels python=3.11 isce2 mintpy snaphu gdal pyaps3`,已存在跳过;校验 libblas=openblas | 30(创建/残缺 env)/ 31(blas 校验) |
+| 3 | `conda create -n insar -c <清华conda-forge> --override-channels python=3.11 isce2=2.6.5 mintpy snaphu gdal pyaps3`(isce2 钉定 2.6.5,升级须先过验证矩阵),已存在跳过;校验 libblas=openblas | 30(创建/残缺 env)/ 31(blas 校验) |
 | 4 | 工作区 `/home/insar/work`(含 `.jobs/`)+ `/etc/profile.d/insar.sh` | 40 |
 
 前置失败(非 root / 非 Linux)退出码 1;全部成功 0,并在末尾做一次 `command -v` 引擎自检。
@@ -83,14 +84,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\wsl_setup.ps1
 # 机器可读:加 --json;单条命令超时:--timeout 60
 ```
 
-预期输出(全绿):
+预期输出(全绿;2026-08-13 现网实测原样):
 
 ```
 WSL 引擎探测  distro=insar  可达
   conda env: /opt/miniforge3/envs/insar
-  [ok] isce2   2.6.3          /opt/miniforge3/envs/insar/lib/python3.11/site-packages/isce/applications/topsApp.py
-  [ok] mintpy  1.6.1          /opt/miniforge3/envs/insar/bin/smallbaselineApp.py
-  [ok] snaphu  2.0.7          /opt/miniforge3/envs/insar/bin/snaphu
+  [ok] isce2   2.6.5          /opt/miniforge3/envs/insar/lib/python3.11/site-packages/isce/applications/topsApp.py
+  [ok] mintpy  1.6.4          /opt/miniforge3/envs/insar/bin/smallbaselineApp.py
+  [ok] snaphu  2.0.6          /usr/bin/snaphu
 ```
 
 退出码:`0` 全部就绪;`1` WSL/发行版不可达;`2` 可达但引擎不全。
@@ -98,7 +99,7 @@ WSL 引擎探测  distro=insar  可达
 探测契约:命令经 `wsl.exe -d insar -u root --exec bash -lc` 执行(登录 shell 才加载
 `/etc/profile.d/insar.sh`);`INSAR_ENGINE_PREFIX` 优先、回落 `/opt/miniforge3/envs/insar`。
 `merge_wsl_probe(probe, wsl_result)` 把结果并进 `ProbeResult`:引擎键带 ` (wsl)` 后缀
-(如 `isce2 (wsl)` → `"2.6.3"`),元数据挂 `probe.wsl["engine_probe"]`;
+(如 `isce2 (wsl)` → `"2.6.5"`),元数据挂 `probe.wsl["engine_probe"]`;
 **probe.py 本体未改,由后续在 `probe_environment` 处接线**。
 
 ### 3.2 手动抽查(WSL 内)
@@ -109,6 +110,34 @@ wsl -d insar -u root -- bash -lc 'smallbaselineApp.py -v'
 wsl -d insar -u root -- bash -lc 'snaphu 2>&1 | head -n 1'
 wsl -d insar -u root -- bash -lc 'echo $INSAR_ENGINE_PREFIX; ls /home/insar/work'
 ```
+
+### 3.3 环境快照(2026-08-13 实测,isce2 版本锁定基线)
+
+现网 `insar` 发行版关键包版本(`conda list -n insar`,渠道均为清华 conda-forge 镜像):
+
+| 包 | 版本 | 备注 |
+|---|---|---|
+| python | 3.11.15 | |
+| **isce2** | **2.6.5** | `py311h916084f_0`;S1C/S1D 支持(v2.6.5,2026-06-30 社区版);**`wsl_setup.sh` 已钉定 `isce2=2.6.5`**,升级须先过下方验证矩阵 |
+| mintpy | 1.6.4 | |
+| snaphu(conda) | 0.4.1 | snaphu-py 包装器,不含 PATH 可执行 |
+| snaphu(apt) | 2.0.6-2 | `/usr/bin/snaphu`,探测契约与解缠引擎用的这份 |
+| gdal | 3.10.3 | `gdal_translate --version` → GDAL 3.10.3, 2025/04/01 |
+| pyaps3 | 0.3.7 | |
+| numpy | 1.26.4 | isce2 的 numpy<2 钉死约束(上游不修,ROADMAP-isce3 §1.6) |
+| scipy | 1.17.1 | |
+| libblas | 3.11.0 (openblas) | 脚本步骤 3 校验项 |
+| proj / hdf5 / h5py | 9.6.2 / 1.14.6 / 3.16.0 | `PROJ_DATA` 指向 env share/proj,`proj.db` 在位 |
+
+同日验证矩阵(全绿):`stripmapApp.py`/`topsApp.py` 模块级 import 通过、
+`fixImageXml.py` 在 PATH、`source /etc/profile.d/insar.sh` 后 `gdal_translate --version`
+正常(PROJ_DATA 解析无误)、`snaphu` 自报 v2.0.6、宿主侧 `wsl_probe` 退出码 0。
+
+历史备注:发行版最初为手工装配(无哨兵、profile 缺 `INSAR_ENGINE_PREFIX`);
+2026-08-13 重跑 `wsl_setup.sh` 收敛 —— 哨兵 1-4 补齐,profile 由模板重写
+(`INSAR_ENGINE_PREFIX` 补上,PROJ/GDAL 三变量保留)。isce2 conda 包会在 env lib 下留
+`python3.1 -> python3.11` 兼容符号链接,profile 模板已用 `sort -V` 取最高真实版本,
+避免 `ISCE_HOME` 带着易误读的 `python3.1` 路径。
 
 ## 4. §4.8 三个 WSL 行为的处置
 

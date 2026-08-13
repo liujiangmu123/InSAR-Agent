@@ -14,9 +14,13 @@
 #
 # 步骤:
 #   1  apt 源切清华镜像(noble,deb822)+ 基础工具(wget/bzip2/ca-certificates)
+#      + snaphu 二进制(universe 2.0.6;conda-forge `snaphu` 是 snaphu-py 包装器,
+#      不往 PATH 装可执行,而探测契约与解缠引擎需要 `snaphu` 在位)
 #   2  Miniforge(Linux x86_64,清华镜像下载)→ /opt/miniforge3
 #   3  conda env `insar`(清华 conda-forge 镜像,--override-channels):
-#      python=3.11 isce2 mintpy snaphu gdal pyaps3;并校验 libblas 为 openblas 实现
+#      python=3.11 isce2=2.6.5 mintpy snaphu gdal pyaps3;并校验 libblas 为 openblas
+#      (isce2 钉定 2.6.5:2026-08-13 现网实测版本,支持 S1C/S1D,防未来重装漂移;
+#      升级须先跑 docs/VALIDATION-isce2-wsl.md 的验证矩阵再改这里)
 #   4  工作区 /home/insar/work(Linux fs,AGENT-DESIGN §4.8)+ /etc/profile.d/insar.sh
 #      (HDF5_USE_FILE_LOCKING=FALSE、INSAR_ENGINE_PREFIX、引擎 PATH)
 #
@@ -78,8 +82,10 @@ EOF
       || die 10 "注释旧 sources.list 失败"
   fi
   apt-get update || die 10 "apt-get update 失败(检查网络与镜像可达性)"
-  apt-get install -y --no-install-recommends wget bzip2 ca-certificates \
-    || die 11 "基础包安装失败(wget/bzip2/ca-certificates)"
+  # snaphu 走 apt(universe,2.0.6):conda-forge `snaphu` 已是 snaphu-py 包装器,
+  # 不提供 PATH 上的可执行;现网(2026-08-13 实测)即 /usr/bin/snaphu
+  apt-get install -y --no-install-recommends wget bzip2 ca-certificates snaphu \
+    || die 11 "基础包安装失败(wget/bzip2/ca-certificates/snaphu)"
   mark_done 1
 fi
 
@@ -112,10 +118,11 @@ else
   if [ -x "${ENV_PREFIX}/bin/python" ]; then
     log "检测到 ${ENV_PREFIX} 已存在,跳过创建"
   else
-    log "创建 conda env ${ENV_NAME}(python=3.11 isce2 mintpy snaphu gdal pyaps3;镜像:${CONDA_FORGE_MIRROR})"
+    log "创建 conda env ${ENV_NAME}(python=3.11 isce2=2.6.5 mintpy snaphu gdal pyaps3;镜像:${CONDA_FORGE_MIRROR})"
+    # isce2 钉定 2.6.5(S1C/S1D 支持;2026-08-13 现网实测版本,防重装漂移)
     "$CONDA" create -y -n "$ENV_NAME" \
       -c "$CONDA_FORGE_MIRROR" --override-channels \
-      python=3.11 isce2 mintpy snaphu gdal pyaps3 \
+      python=3.11 isce2=2.6.5 mintpy snaphu gdal pyaps3 \
       || die 30 "conda env 创建失败(网络中断可直接重跑本脚本;残缺时先 conda env remove -n ${ENV_NAME})"
   fi
   # libblas 校验:Linux conda-forge 默认即 openblas,这里只校验不切换(任务约定)
@@ -145,8 +152,10 @@ export PATH="${ENV_PREFIX}/bin:${MINIFORGE_PREFIX}/bin:\$PATH"
 export PROJ_DATA=${ENV_PREFIX}/share/proj
 export PROJ_LIB=${ENV_PREFIX}/share/proj
 export GDAL_DATA=${ENV_PREFIX}/share/gdal
-# ISCE2 应用脚本(topsApp.py 等)在 site-packages/isce/applications,不在 env bin
-_isce_apps="\$(ls -d ${ENV_PREFIX}/lib/python3.*/site-packages/isce/applications 2>/dev/null | head -n 1)"
+# ISCE2 应用脚本(topsApp.py 等)在 site-packages/isce/applications,不在 env bin。
+# sort -V 取最高真实版本:isce2 conda 包会留下 python3.1 -> python3.11 兼容符号链接,
+# 字典序第一条会选中它,ISCE_HOME 就会带着易误读的 python3.1 路径(2026-08-13 实测)
+_isce_apps="\$(ls -d ${ENV_PREFIX}/lib/python3.*/site-packages/isce/applications 2>/dev/null | sort -V | tail -n 1)"
 if [ -n "\$_isce_apps" ]; then
   export ISCE_HOME="\${_isce_apps%/applications}"
   export PATH="\$_isce_apps:\$PATH"

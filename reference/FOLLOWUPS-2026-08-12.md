@@ -15,8 +15,10 @@
   popover/重跑影响确认、桌面通知与会话分组、工具卡聚合、排队 chip。
 - Baja 代理编排:预检 25 项全绿,--launch 待用户批准(33 分钟重型计算)。
 - 遗留(下一波):REVIEW-r2 的 14 项 P2;done-run-可含-pending 已由 W8 决策三
-  处理(收尾明示);ISCE3 路线图按 docs/ROADMAP-isce3.md 分期;WSL isce2
-  2.6.3→2.6.5 升级;正式图标/签名/updater 密钥(RELEASE-CHECKLIST)。
+  处理(收尾明示);ISCE3 路线图按 docs/ROADMAP-isce3.md 分期;~~WSL isce2
+  2.6.3→2.6.5 升级~~(✅ 2026-08-13:实测现网已是 2.6.5,wsl_setup.sh 已钉定
+  isce2=2.6.5,快照见 docs/WSL-SETUP.md §3.3);正式图标/签名/updater 密钥
+  (RELEASE-CHECKLIST)。
 
 ## 20 代理波次(傍晚)闭环记录
 

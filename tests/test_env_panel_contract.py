@@ -62,7 +62,7 @@ def _wsl_reachable(*args, **kwargs):
         "engine_prefix": "/opt/miniforge3/envs/insar",
         "engines": {
             "isce2": {"present": True, "path": "/opt/isce2/bin/topsApp.py",
-                      "version": "2.6.3", "error": None},
+                      "version": "2.6.5", "error": None},
             "mintpy": {"present": True, "path": "/opt/env/bin/smallbaselineApp.py",
                        "version": "1.6.4", "error": None},
             "snaphu": {"present": False, "path": None, "version": None, "error": None},
@@ -134,7 +134,7 @@ def test_env_contract_wsl_reachable_merges_suffixed_engines(client, monkeypatch)
     probe = client.get("/api/env", params={"session": "demo"}).json()["probe"]
 
     # 合并规则：present 且有版本 → 版本串；present 无版本 → "present"；缺失 → None
-    assert probe["engines"]["isce2 (wsl)"] == "2.6.3"
+    assert probe["engines"]["isce2 (wsl)"] == "2.6.5"
     assert probe["engines"]["mintpy (wsl)"] == "1.6.4"
     assert probe["engines"]["snaphu (wsl)"] is None
 

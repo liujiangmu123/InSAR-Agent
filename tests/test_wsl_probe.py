@@ -24,7 +24,8 @@ _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 PREFIX = "/opt/miniforge3/envs/insar"
 ISCE_PATH = f"{PREFIX}/lib/python3.11/site-packages/isce/applications/topsApp.py"
 MINTPY_PATH = f"{PREFIX}/bin/smallbaselineApp.py"
-SNAPHU_PATH = f"{PREFIX}/bin/snaphu"
+# snaphu 二进制来自 apt(conda-forge snaphu 是 snaphu-py 包装器,不装 PATH 可执行)
+SNAPHU_PATH = "/usr/bin/snaphu"
 
 
 class FakeRunner:
@@ -59,10 +60,11 @@ def rules_all_present():
         ("command -v topsApp.py", (0, ISCE_PATH, "")),
         ("command -v smallbaselineApp.py", (0, MINTPY_PATH, "")),
         ("command -v snaphu", (0, SNAPHU_PATH, "")),
-        ("import isce", (0, "2.6.3", "")),
-        ("import mintpy", (0, "1.6.1", "")),
+        # 版本值对齐现网实测(2026-08-13):isce2 2.6.5 / mintpy 1.6.4 / apt snaphu 2.0.6
+        ("import isce", (0, "2.6.5", "")),
+        ("import mintpy", (0, "1.6.4", "")),
         # snaphu 空跑:版本在用法输出首行,rc 非零是正常现象
-        ("head -n 2", (1, "snaphu v2.0.7\nusage: snaphu [options] infile linelength", "")),
+        ("head -n 2", (1, "snaphu v2.0.6\nusage: snaphu [options] infile linelength", "")),
     ]
 
 
@@ -83,9 +85,9 @@ def test_all_engines_present_with_versions():
 
     eng = result["engines"]
     assert set(eng) == {"isce2", "mintpy", "snaphu"}
-    assert eng["isce2"] == {"present": True, "path": ISCE_PATH, "version": "2.6.3", "error": None}
-    assert eng["mintpy"]["present"] and eng["mintpy"]["version"] == "1.6.1"
-    assert eng["snaphu"]["present"] and eng["snaphu"]["version"] == "2.0.7"
+    assert eng["isce2"] == {"present": True, "path": ISCE_PATH, "version": "2.6.5", "error": None}
+    assert eng["mintpy"]["present"] and eng["mintpy"]["version"] == "1.6.4"
+    assert eng["snaphu"]["present"] and eng["snaphu"]["version"] == "2.0.6"
     # 调用次数:可达性 1 + 前缀 1 + 存在性 3 + 版本 3
     assert len(runner.calls) == 8
 
@@ -202,7 +204,7 @@ def _wsl_result(ok=True, **overrides):
         "error": None if ok else "发行版 'insar' 不可达:rc=1",
         "engine_prefix": PREFIX if ok else None,
         "engines": {
-            "isce2": {"present": True, "path": ISCE_PATH, "version": "2.6.3", "error": None},
+            "isce2": {"present": True, "path": ISCE_PATH, "version": "2.6.5", "error": None},
             "mintpy": {"present": True, "path": MINTPY_PATH, "version": None, "error": None},
             "snaphu": {"present": False, "path": None, "version": None, "error": None},
         },
@@ -217,7 +219,7 @@ def test_merge_adds_wsl_suffixed_engines():
 
     assert merged is probe  # 原地合并,返回同一对象
     # 来源标注:引擎键带 " (wsl)" 后缀
-    assert probe.engines["isce2 (wsl)"] == "2.6.3"
+    assert probe.engines["isce2 (wsl)"] == "2.6.5"
     assert probe.engines["mintpy (wsl)"] == "present"  # 在但取不到版本
     assert probe.engines["snaphu (wsl)"] is None       # 探测过但缺失
     # 原生键不受影响
@@ -225,7 +227,7 @@ def test_merge_adds_wsl_suffixed_engines():
     # ProbeResult 语义天然适用
     assert probe.engine_ok("isce2 (wsl)") and not probe.engine_ok("snaphu (wsl)")
     versions = probe.tool_versions()
-    assert versions["isce2 (wsl)"] == "2.6.3" and "snaphu (wsl)" not in versions
+    assert versions["isce2 (wsl)"] == "2.6.5" and "snaphu (wsl)" not in versions
     # 元数据进 probe.wsl,供解释与面板展示
     meta = probe.wsl["engine_probe"]
     assert meta["ok"] is True and meta["distro"] == "insar" and meta["engine_prefix"] == PREFIX
@@ -246,8 +248,8 @@ def test_probe_then_merge_end_to_end():
     result = probe_wsl_engines(runner=FakeRunner(rules))
     probe = merge_wsl_probe(ProbeResult(), result)
 
-    assert probe.engines["isce2 (wsl)"] == "2.6.3"
-    assert probe.engines["mintpy (wsl)"] == "1.6.1"
+    assert probe.engines["isce2 (wsl)"] == "2.6.5"
+    assert probe.engines["mintpy (wsl)"] == "1.6.4"
     assert probe.engines["snaphu (wsl)"] is None
     assert probe.to_dict()["wsl"]["engine_probe"]["ok"] is True
 
@@ -316,6 +318,8 @@ def test_scripts_contract_markers():
     assert "--override-channels" in sh and "python=3.11" in sh
     for pkg in ("isce2", "mintpy", "snaphu", "gdal", "pyaps3"):
         assert pkg in sh
+    assert "isce2=2.6.5" in sh                           # 版本钉定(防重装漂移,2026-08-13)
+    assert "ca-certificates snaphu" in sh                # snaphu 二进制走 apt(conda 包是 wrapper)
     assert "openblas" in sh                              # libblas 校验
     assert "/home/insar/work" in sh                      # 工作区在 Linux fs(§4.8)
     assert "HDF5_USE_FILE_LOCKING" in sh
