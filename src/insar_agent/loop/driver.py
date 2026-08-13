@@ -42,6 +42,7 @@ from insar_agent.runtime.executor import ExecContext, execute_step
 from insar_agent.runtime.jobs import JobBackend, LocalJobBackend
 from insar_agent.runtime.probe import ProbeResult, probe_environment
 from insar_agent.runtime.stream import CancelToken
+from insar_agent.skills.loader import SECTION_FAILURES, SECTION_PARAMS, skill_section_text
 
 log = logging.getLogger(__name__)
 
@@ -305,8 +306,11 @@ class Driver:
             feas = narrow_methods(cap, probe, scenario=sc.key,
                                   allow_simulated=self.allow_simulated)
             env_facts = f"可用引擎:{[e for e, v in probe.engines.items() if v] or '无(模拟)'}"
-            pick = self.brain.select(cap, feas, env_facts=env_facts, prefer=sc.step_overrides
-                                     .get(decision_step, {}).get("method"))
+            pick = self.brain.select(
+                cap, feas, env_facts=env_facts,
+                # 步骤技能《参数启发式》按场景匹配注入(无技能=空串,select 行为不变)
+                skill_hints=skill_section_text(decision_step, SECTION_PARAMS, scene=sc.key),
+                prefer=sc.step_overrides.get(decision_step, {}).get("method"))
             reply = (f"计划就绪。第 {decision_step} 步「{cap.name}」建议 {pick.method_id}"
                      f"({pick.reason};来源:{pick.source})。"
                      f"待跑 {len(todo)} 步,确认后开始执行。")
@@ -629,7 +633,10 @@ class Driver:
             # failed:分诊 → 处置建议(闭集,§4.12)。只读日志尾部:错误几乎
             # 总在末尾,triage 的 error_window 也只要 ±5 行(REVIEW-r2 P2-12)
             log_text = _tail_text(Path(step.log_path)) if step.log_path else ""
-            triage = self.brain.triage(log_text or (result.detail or ""))
+            triage = self.brain.triage(
+                log_text or (result.detail or ""),
+                # 步骤技能《常见失败与处置》附给分诊上下文(无技能=空串,行为不变)
+                skill_notes=skill_section_text(sid, SECTION_FAILURES))
             fc = step.failure_class or triage.failure_class.value
             disposition = DISPOSITIONS.get(FailureClass(fc) if fc in FailureClass._value2member_map_
                                            else FailureClass.UNKNOWN, {})
