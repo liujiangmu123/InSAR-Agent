@@ -31,9 +31,16 @@ step_overrides:
       dem_path: /home/insar/work/baja/dem/dem.wgs84
   4:
     method: isce2_stripmap_ifg
-    # 单干涉对(磁盘/预算公式按 pairs 估算)
+    # 单干涉对(磁盘/预算公式按 pairs 估算)。
+    # 多视比倒置(2026-08-13 C3 修正):registry 默认 10×2 是 S1 IW 比例
+    # (rg:az≈5:1);ALOS 条带像元几何倒置(FBS 方位 ~3.2 m < 地面距离 ~7-8 m),
+    # 须 az>rg 约 2:1 → 覆写 2×4。规划层声明(进新计划指纹/provenance);
+    # 分段 XML 维持实测形态不渲染 looks(stripmapApp 用内部默认,
+    # docs/VALIDATION-isce2-wsl.md 原件无该字段),既有 run 指纹不受影响
     params:
       pairs: 1
+      range_looks: 2
+      azimuth_looks: 4
   5:
     method: isce2_stripmap_filter
   6:
