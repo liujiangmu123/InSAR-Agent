@@ -147,9 +147,14 @@ class Driver:
 
         intent = self.brain.intent(text)
         if intent.need_form:
+            # 场景选项 = 技能包闭集(动态生成):此前硬编码三场景,第四包
+            # stripmap_coseismic 加入后表单脱节,用户无法从表单选到条带链
+            # (触发场景:tests/test_journey_permafrost.py 边界段 ask 断言)
+            from insar_agent.registry.scenarios import SCENARIOS
+
             yield self._emit(ev.ask(
                 "无法从描述中识别场景,请补充:",
-                [{"key": "scenario", "label": "场景", "options": ["quake", "permafrost", "landslide"]},
+                [{"key": "scenario", "label": "场景", "options": [s.key for s in SCENARIOS]},
                  {"key": "region", "label": "区域"}, {"key": "dates", "label": "时间范围"}]))
             return
         sc = intent.scenario
