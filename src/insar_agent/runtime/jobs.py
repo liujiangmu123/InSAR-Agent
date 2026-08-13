@@ -19,13 +19,14 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+from insar_agent.core.fsio import atomic_write_text
 
 HB_STALE_SECONDS = 5.0  # 心跳超过此秒数未更新 → orphaned(wrapper 每 0.3s 刷一次)
 
@@ -38,7 +39,15 @@ class JobState:
 
 @dataclass(frozen=True)
 class CommandPlan:
-    """一次外部命令的完整描述(由 engines 构建,executor 消费)。"""
+    """一次外部命令的完整描述(由 engines 构建,executor 消费)。
+
+    注入面纪律(REVIEW 2026-08-12 P2-8 不变量,勿破):shell_line 会被逐字
+    写进 cmd.sh 交给 bash 执行 —— 只允许由引擎内部常量拼接;任何外部可控值
+    (路径、用户参数)进入 shell_line 前必须经 shell_quote,数值参数必须先
+    转型收窄。argv 通道无此约束(不经 shell 解释)。env 的键名须匹配
+    [A-Z_][A-Z0-9_]*(WslJobBackend.prepare 强制断言),值由 prepare 统一
+    shell_quote。
+    """
 
     argv: list[str]
     cwd: str
@@ -57,9 +66,7 @@ class JobBackend(Protocol):
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)  # POSIX/Windows 都原子(§6.1 写入原则)
+    atomic_write_text(path, content)  # 统一原子写:异常清理 + 随机 tmp 名(core/fsio)
 
 
 def shell_quote(arg: str) -> str:

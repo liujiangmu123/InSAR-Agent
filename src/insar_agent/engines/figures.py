@@ -109,7 +109,12 @@ else:
     extent = None
 
 finite = vel[np.isfinite(vel)]
-lim = float(np.percentile(np.abs(finite), 98)) if finite.size else 1.0  # 对称限幅:零点居中
+if finite.size == 0:
+    # 全 NaN 自守(REVIEW-r2 P2-14):上游 not_all_nan 校验能拦,但脚本独立跑
+    # (复现/调试)时也绝不产出空图假产物 —— 与 velocity.h5 缺失同一失败口径
+    print("ERROR: velocity 全 NaN(0 个有效像元),拒绝出图", flush=True)
+    sys.exit(2)
+lim = float(np.percentile(np.abs(finite), 98)) or 1.0  # 对称限幅零点居中;全零场兜底 1.0
 cmap, cmap_name = pub_cmap(__CMAP__)
 
 fig, ax = plt.subplots(figsize=(140 * MM, 105 * MM))  # 1.5 栏物理尺寸
@@ -124,6 +129,12 @@ if geo and dem_path.exists():  # DEM 山影底图(可选,零新增依赖)
 
 im = ax.imshow(vel, cmap=cmap, vmin=-lim, vmax=lim, extent=extent,
                interpolation="nearest", zorder=1)
+if geo:
+    # 纵横校正(REVIEW-r2 P2-14):1°lat≈111.32 km 恒定,1°lon=111.32·cos(lat) km;
+    # imshow 默认 aspect="equal"(1°=1°)会把中纬度南北向视觉拉伸 ~1/cos(lat)。
+    # 校正后与下方比例尺的 cos(lat) 经度换算自洽,南北向长度亦真。
+    mid_lat = 0.5 * (extent[2] + extent[3])
+    ax.set_aspect(1.0 / max(np.cos(np.radians(mid_lat)), 0.05))
 cbar = fig.colorbar(im, ax=ax, shrink=0.75, pad=0.02, extend="both")
 cbar.set_label("LOS velocity (mm/yr)\\npositive = motion toward satellite")
 cbar.outline.set_linewidth(0.6)

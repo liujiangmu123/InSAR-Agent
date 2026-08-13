@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from insar_agent.core.fsio import atomic_write_text
 from insar_agent.core.store import Store
 
 
@@ -56,9 +57,5 @@ def export_run_script(store: Store, run_id: str, workspace: Path) -> str:
 def write_run_script(store: Store, run_id: str, workspace: Path) -> Path:
     text = export_run_script(store, run_id, workspace)
     target = workspace / "run.sh"
-    tmp = target.with_suffix(".sh.tmp")
-    tmp.write_text(text, encoding="utf-8", newline="\n")
-    import os
-
-    os.replace(tmp, target)
+    atomic_write_text(target, text, newline="\n")
     return target

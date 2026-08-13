@@ -9,6 +9,7 @@ from pathlib import Path
 
 from insar_agent.audit.contract import Threshold
 from insar_agent.audit.ladder import cloud_evidence, compute_evidence
+from insar_agent.core.fsio import atomic_write_text
 from insar_agent.core.store import Store
 
 SCHEMA_VERSION = "1.0"
@@ -121,9 +122,5 @@ def export_provenance(store: Store, run_id: str, *, contract: dict[str, Threshol
 def write_provenance(store: Store, run_id: str, *, contract, workspace: Path) -> Path:
     doc = export_provenance(store, run_id, contract=contract, workspace=workspace)
     target = workspace / "provenance.json"
-    tmp = target.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
-    import os
-
-    os.replace(tmp, target)
+    atomic_write_text(target, json.dumps(doc, ensure_ascii=False, indent=1))
     return target

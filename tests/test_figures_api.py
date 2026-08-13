@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -248,6 +249,92 @@ def test_artifact_file_dir_member_non_image_400_and_file_on_file_404(env):
     assert r2.status_code == 404
 
 
+# ---------------- 枚举-读取窗口 TOCTOU 与 symlink 口径(REVIEW-r2 P2-6/P2-7) ----------------
+
+def test_figures_row_vanishing_mid_listing_skipped_not_500(env, monkeypatch):
+    """存在性探测通过后、取 stat 元数据时文件已被覆写/清理(画廊 3s 轮询撞上
+    出图步骤的窗口):该行跳过,其余照列,绝不 500 整表(REVIEW-r2 P2-6)。
+
+    对该文件的 Path.stat 一律抛 FileNotFoundError:3.13- 的 is_file() 经
+    Path.stat(按「文件已缺失」跳过),3.14+ 的 is_file() 走 os.path 原语
+    (命中 entry 的 stat 竞态窗口)—— 两条路径的合同一致:跳过该行,不炸。"""
+    ws = env["ws"]
+    (ws / "products/figures/vanish.png").write_bytes(PNG_BYTES)
+    env["store"].record_artifact(RUN_ID, 10, "vanish", path="products/figures/vanish.png",
+                                 kind="FIGURE", layout="", policy="stat",
+                                 fp="stat:sha256:0001")
+    real_stat = Path.stat
+    seen = {"n": 0}
+
+    def racy_stat(self, *args, **kwargs):
+        if self.name == "vanish.png":
+            seen["n"] += 1
+            raise FileNotFoundError(2, "gone in race window", str(self))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", racy_stat)
+    r = env["client"].get("/api/figures", params={"session": "sess-a"})
+    assert r.status_code == 200
+    names = [f["name"] for f in r.json()["figures"]]
+    assert seen["n"] >= 1                # 竞态窗口确实被触发(而非文件根本没进列表)
+    assert "vanish.png" not in names     # 消失行跳过
+    assert "velocity.png" in names       # 其余行不受影响
+
+
+def test_figures_symlink_member_pointing_outside_excluded(env):
+    """目录成员是指向产物目录外的 symlink:不列出(与取回端点 404 口径一致,
+    不泄漏外部文件元数据、不产死图,REVIEW-r2 P2-7)。"""
+    outside = env["home"] / "secret.png"
+    outside.write_bytes(PNG_BYTES)
+    gal = env["ws"] / "products" / "linked"
+    gal.mkdir(parents=True, exist_ok=True)
+    (gal / "good.png").write_bytes(PNG_BYTES)
+    try:
+        os.symlink(outside, gal / "escape.png")
+    except OSError:
+        pytest.skip("当前环境无 symlink 权限(Windows 需管理员/开发者模式)")
+    env["store"].record_artifact(RUN_ID, 10, "linked_dir", path="products/linked",
+                                 kind="FIGURE", layout="", policy="stat",
+                                 fp="stat:sha256:0002")
+    c = env["client"]
+    members = [f for f in c.get("/api/figures",
+                                params={"session": "sess-a"}).json()["figures"]
+               if f["artId"] == "linked_dir"]
+    assert [m["name"] for m in members] == ["good.png"]
+    # 取回口径复核:escape 成员 resolve 越界 → 404(既有边界)
+    r = c.get("/api/artifact-file", params={
+        "session": "sess-a", "run_id": RUN_ID, "step": 10, "art_id": "linked_dir",
+        "file": "escape.png"})
+    assert r.status_code == 404
+
+
+def test_figures_member_resolving_outside_excluded_without_symlink(env, monkeypatch):
+    """symlink 口径的免权限版本(上一测试在无 symlink 权限的机器上会跳过):
+    对指定成员打桩 Path.resolve 使其落到产物目录外 —— 语义与「成员是指向
+    外部的链接」等价,枚举必须按取回口径排除它(REVIEW-r2 P2-7)。"""
+    outside = env["home"] / "secret2.png"
+    outside.write_bytes(PNG_BYTES)
+    gal = env["ws"] / "products" / "linked2"
+    gal.mkdir(parents=True, exist_ok=True)
+    (gal / "good.png").write_bytes(PNG_BYTES)
+    (gal / "escape.png").write_bytes(PNG_BYTES)
+    env["store"].record_artifact(RUN_ID, 10, "linked2_dir", path="products/linked2",
+                                 kind="FIGURE", layout="", policy="stat",
+                                 fp="stat:sha256:0003")
+    real_resolve = Path.resolve
+
+    def fake_resolve(self, *args, **kwargs):
+        if self.name == "escape.png":
+            return outside  # 模拟链接目标:resolve 后落在产物目录外
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    members = [f for f in env["client"].get(
+                   "/api/figures", params={"session": "sess-a"}).json()["figures"]
+               if f["artId"] == "linked2_dir"]
+    assert [m["name"] for m in members] == ["good.png"]
+
+
 # ---------------- 三档尺寸契约 + 元数据 sidecar(2026-08-12 图件浏览进阶) ----------------
 # engines/figures.py 的产物目录约定:<name>_browse.png(2048px 浏览档)/
 # <name>_thumb.png(320px 缩略档)归并进基图条目;<name>.json 为元数据 sidecar。
@@ -355,6 +442,9 @@ def test_figure_script_compiles_with_tier_and_sidecar_contract(tmp_path):
     assert "write_sidecar" in script and "save_tiers" in script
     # params 摘要以 Python 字面量注入(roma 已升级为 vik)
     assert "{'dpi': 300, 'cmap': 'vik', 'format': 'png+pdf'}" in script
+    # REVIEW-r2 P2-14:经纬度栅格纵横校正 + 全 NaN 自守必须在脚本里
+    assert "set_aspect" in script
+    assert "全 NaN" in script and "sys.exit(2)" in script
 
 
 def test_figure_script_renders_tiers_and_sidecar(tmp_path):
@@ -401,3 +491,24 @@ def test_figure_script_renders_tiers_and_sidecar(tmp_path):
     assert meta["params"] == {"dpi": 150, "cmap": "vik", "format": "png+pdf"}
     assert isinstance(meta["cmap"], str) and meta["cmap"]   # 实际所用(可能兜底 RdBu_r)
     assert meta["vlim"][1] > 0 and meta["vlim"][0] == -meta["vlim"][1]
+
+
+def test_figure_script_all_nan_velocity_exits_2_no_empty_figure(tmp_path):
+    """全 NaN velocity:脚本自守 sys.exit(2),不产出空图假产物(REVIEW-r2 P2-14)。"""
+    pytest.importorskip("matplotlib")
+    h5py = pytest.importorskip("h5py")
+    np = pytest.importorskip("numpy")
+
+    ws = tmp_path / "ws"
+    (ws / ".report").mkdir(parents=True)
+    with h5py.File(ws / "velocity.h5", "w") as f:
+        f.create_dataset("velocity", data=np.full((8, 9), np.nan, dtype="f4"))
+    plan = _figure_plan(ws, {"dpi": 100})
+    (ws / ".report/make_figures.py").write_text(
+        plan.files[".report/make_figures.py"], encoding="utf-8")
+    r = subprocess.run([sys.executable, "-u", ".report/make_figures.py"], cwd=ws,
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=120)
+    assert r.returncode == 2, f"stdout={r.stdout}\nstderr={r.stderr}"
+    assert "全 NaN" in (r.stdout + r.stderr)
+    assert not (ws / "products" / "figures" / "velocity.png").exists()

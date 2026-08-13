@@ -73,6 +73,26 @@ def test_tropo_method_switches_cfg(workspace):
     assert "mintpy.deramp                       = no" in cfg
 
 
+def test_mintpy_cfg_fallback_defaults_align_registry(workspace):
+    """绕过 planner 的空链渲染(桥接/手工 build):solidEarthTides 回退 no,
+    与 registry 第 8 步声明的默认 False 对齐(REVIEW-r2 P2-10 —— conda-forge
+    pysolid 的 Fortran DLL 在 Windows 上加载失败,SET 绝不能默认开启);
+    stepFuncDate 不再读第 8 步未声明的 step_func_date 参数,回退 auto。"""
+    cfg = mintpy_engine.render_cfg({"simulated": 0, "chain": {}},
+                                   this_step=7, this_method="mintpy_sbas",
+                                   this_params={})
+    assert "mintpy.solidEarthTides              = no" in cfg
+    assert "mintpy.topographicResidual.stepFuncDate      = auto" in cfg
+
+
+def test_mintpy_cfg_explicit_set_and_step_date_respected(workspace):
+    """显式声明照常生效:SET=yes 走参数,stepFuncDate 跟随第 9 步阶跃日期。"""
+    cfg = mintpy_engine.render_cfg(RUN, this_step=8, this_method="tropo_era5_pyaps",
+                                   this_params=CHAIN[8]["params"])
+    assert "mintpy.solidEarthTides              = yes" in cfg
+    assert "mintpy.topographicResidual.stepFuncDate      = 20190706T0320" in cfg
+
+
 def test_real_mode_routing():
     """真实模式:自建方法路由到真实实现;未实现的显式 ToolMissing,绝不静默造假。"""
     from insar_agent.engines import figures, localdata, qa

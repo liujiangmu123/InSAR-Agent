@@ -158,6 +158,43 @@ def test_log_pattern_hit_and_miss(tmp_path):
     assert absent.ok and absent.checks[0].detail == "无日志文件"
 
 
+def test_log_absent_hits_pattern_straddling_chunk_boundary(tmp_path):
+    """流式分块扫描(REVIEW P2-5):禁用模式恰好跨 1 MiB 块边界仍命中(重叠窗)。"""
+    from insar_agent.audit.runok import _LOG_SCAN_CHUNK
+
+    log = tmp_path / "job.log"
+    pad = "x" * (_LOG_SCAN_CHUNK - 3)  # 'ERR' 落在第一块末尾,'OR' 在第二块开头
+    log.write_text(pad + "ERROR: boom\n" + "tail\n" * 20, encoding="utf-8")
+    res = evaluate_run_ok(
+        _cap(run_ok=(RunOkCheck("log_absent", pattern=r"ERROR"),)),
+        exit_code=0, artifacts={}, log_path=log)
+    assert not res.ok
+    assert "ERROR" in res.checks[0].detail
+
+
+def test_log_absent_clean_multi_chunk_log_passes(tmp_path):
+    """干净的多块大日志(≈1.5 MiB)pass —— 语义与整读等价:全文无命中才算 absent。"""
+    log = tmp_path / "job.log"
+    log.write_text("all fine here\n" * 120_000, encoding="utf-8")
+    res = evaluate_run_ok(
+        _cap(run_ok=(RunOkCheck("log_absent", pattern=r"ERROR|Segmentation fault"),)),
+        exit_code=0, artifacts={}, log_path=log)
+    assert res.ok and res.checks[0].detail == ""
+
+
+def test_nan_fraction_corrupt_files_still_degrade_to_none(tmp_path):
+    """损坏的 npy/h5(预期内异常闭集)仍返回 None 降级 warn ——
+    except 收窄(REVIEW P2-2)不误伤既有降级语义。"""
+    bad_npy = tmp_path / "bad.npy"
+    bad_npy.write_bytes(b"\x93NUMPY garbage-truncated-header")
+    assert _nan_fraction(bad_npy) is None
+
+    pytest.importorskip("h5py")
+    bad_h5 = tmp_path / "bad.h5"
+    bad_h5.write_bytes(b"definitely not hdf5 bytes")
+    assert _nan_fraction(bad_h5) is None
+
+
 def test_metric_min_exactly_at_threshold_passes():
     """边界语义:值恰等于阈值 → 通过(≥,不是 >)。"""
     cap = _cap(quality_gate=(RunOkCheck("metric_min", metric="crossval_r",

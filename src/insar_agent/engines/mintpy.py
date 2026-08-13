@@ -127,8 +127,13 @@ def render_cfg(run: dict, *, this_step: int, this_method: str, this_params: dict
         tropo_method=tropo,
         ramp=p8.get("ramp", "linear"),
         dem_error="yes" if p8.get("dem_error", True) else "no",
-        step_func_date=str(p8.get("step_func_date", "") or step_date or "auto"),
-        solid_earth_tides="yes" if p8.get("solid_earth_tides", True) else "no",
+        # stepFuncDate 跟随第 9 步 step 方法的阶跃日期(DEM 误差校正共用拐点);
+        # 第 8 步并未声明 step_func_date 参数,不再读它(REVIEW-r2 P2-10 连带清理)
+        step_func_date=str(step_date or "auto"),
+        # 回退默认与 registry 声明对齐(False):绕过 planner 的调用(桥接/手工
+        # build/链缺项)不该拿到 SET=yes —— conda-forge pysolid 的 Fortran DLL
+        # 在 Windows 上加载失败是已记录的崩溃坑(REVIEW-r2 P2-10)
+        solid_earth_tides="yes" if p8.get("solid_earth_tides", False) else "no",
         poly_order=p9.get("poly_order", 1),
         periods=",".join(str(x) for x in periods) if periods else "auto",
         step_date=step_date or "auto",

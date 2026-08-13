@@ -6,9 +6,9 @@ cmd.sh / 引擎配置都是渲染产物,可 diff、可复现(§4.7 副产品:等
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 
+from insar_agent.core.fsio import atomic_write_text
 from insar_agent.runtime.jobs import CommandPlan
 
 
@@ -19,9 +19,7 @@ def render_plan_files(workspace: Path, plan: CommandPlan) -> str:
         content = plan.files[rel]
         target = workspace / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text(content, encoding="utf-8", newline="\n")
-        os.replace(tmp, target)
+        atomic_write_text(target, content, newline="\n")
         h.update(rel.encode())
         h.update(b"\x00")
         h.update(content.encode())

@@ -10,12 +10,18 @@ quality_gate 与 run_ok 分开:gate 失败是「质量门拦截」不是「错�
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from insar_agent.audit.contract import Threshold
 from insar_agent.registry.model import Capability, RunOkCheck
+
+log = logging.getLogger(__name__)
+
+_LOG_SCAN_CHUNK = 1 << 20  # log_absent 流式扫描块长(1 MiB)
+_LOG_SCAN_OVERLAP = 4096   # 块间重叠窗:跨块命中不漏(禁用模式闭集都是行内短模式)
 
 
 @dataclass
@@ -78,7 +84,10 @@ def _nan_fraction(path: Path) -> float | None:
             if total == 0:
                 return 1.0
             return float(np.isnan(arr).sum()) / float(total)
-        except Exception:
+        except (ImportError, OSError, ValueError, EOFError):
+            # 依赖缺失/文件损坏/格式不符:预期内降级(warn),但留 debug 痕
+            # 区分「读不了」与「格式不支持」(REVIEW P2-2:不再静默吞编程错误)
+            log.debug("npy NaN 统计失败:%s", path, exc_info=True)
             return None
     if path.suffix in _H5_SUFFIXES:
         try:
@@ -107,7 +116,9 @@ def _nan_fraction(path: Path) -> float | None:
                 for i in range(ds.shape[0]):
                     nan_count += int(np.isnan(ds[i]).sum())
                 return float(nan_count) / float(total)
-        except Exception:
+        except (ImportError, OSError, ValueError):
+            # h5py 缺失 / 文件损坏(h5py 统一抛 OSError)/ 数据集异常:同上留痕降级
+            log.debug("h5 NaN 统计失败:%s", path, exc_info=True)
             return None
     return None
 
@@ -143,8 +154,22 @@ def _eval_check(
     if kind == "log_absent":
         if log_path is None or not log_path.exists():
             return CheckResult(kind, True, "pass", "无日志文件")
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-        hit = re.search(check.pattern, text)
+        # 流式分块扫描(REVIEW P2-5):真实链 job.log 可达数百 MB,read_text
+        # 整读会在 VERIFIED 阶段瞬时吃满内存。块间保留重叠窗,跨块命中不漏;
+        # 语义与整读等价 ——「absent」仍指全文任何位置都不出现。
+        pattern = re.compile(check.pattern)
+        hit: re.Match[str] | None = None
+        carry = ""
+        with log_path.open("rb") as f:
+            while True:
+                chunk = f.read(_LOG_SCAN_CHUNK)
+                if not chunk:
+                    break
+                text = carry + chunk.decode("utf-8", errors="replace")
+                hit = pattern.search(text)
+                if hit:
+                    break
+                carry = text[-_LOG_SCAN_OVERLAP:]
         ok = hit is None
         return CheckResult(kind, ok, "pass" if ok else "fail",
                            f"日志命中禁用模式 {check.pattern!r}: {hit.group(0)!r}" if hit else "")
