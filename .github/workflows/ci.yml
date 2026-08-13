@@ -86,17 +86,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      # 三个门禁均零第三方依赖:node 内置 test runner + 纯 stdlib 脚本
-      - name: 前端 JS 单测(node --test tests/js)
-        # test_js.py 显式枚举 tests/js/*.test.mjs 传给 node --test,
-        # 规避不同 Node 版本对目录参数的解释差异,退出码与 node --test 一致
-        run: python scripts/test_js.py
-
-      - name: CSS 语法与断点清单检查
-        run: python scripts/check_css_syntax.py
-
-      - name: a11y 对比度审计(信息性:脚本恒退出 0,硬门禁在 tests/test_a11y_dom.py)
-        run: python scripts/check_a11y_contrast.py
+      # 零第三方依赖:node 内置 test runner + 纯 stdlib 脚本。
+      # check_frontend.py 一键串行跑齐:tests/js/*.test.mjs(node --test)+
+      # prototype/*.check.mjs(glob 动态发现,新增自动纳入)+ CSS 语法/断点质检 +
+      # a11y 对比度审计(信息性),汇总表输出;任一套件失败即退出非零挡门,
+      # 另列 prototype/js 模块「无测试覆盖」警告清单(不阻断)
+      - name: 前端质量门(scripts/check_frontend.py 一键跑齐)
+        run: python scripts/check_frontend.py
 
   rust:
     # 与桌面壳目标平台一致用 Windows(在 Linux 上跑 Tauri 需另装 webkit2gtk 等
