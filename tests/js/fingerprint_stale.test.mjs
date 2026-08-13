@@ -2,34 +2,42 @@
    指纹镜像 + 失效级联(setMethod / setParams / invalidate)锁定
    —— STALE 由依赖图推导而非硬编码;指纹含上游指纹,
    任何一步方法/参数变更都应级联改写全部下游指纹。
+   数据源:_registry.mjs(真实 /api/registry 快照)喂 setRegistry,
+   seedSteps 模拟服务端 /api/state 下发「前 5 步 done」的计划 ——
+   不再依赖 state.js 内置演示种子(已删除)。
    ============================================================ */
 import './_env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as St from '../../prototype/js/state.js';
 import {
-  STEP_DEFS, initSteps, setMethod, setParams, setStepState,
+  STEP_DEFS, setRegistry, setMethod, setParams, setStepState,
   snapshotSteps, restoreSteps, downstreamOf, fingerprint,
   st_, workSummary,
 } from '../../prototype/js/state.js';
+import { REGISTRY, seedSteps } from './_registry.mjs';
+
+setRegistry(REGISTRY);   // 步骤目录:注册表快照(11 步,拓扑与服务端一致)
+const seed5 = () => seedSteps(St, 5);
 
 test('指纹格式 4+4 hex,同配置下确定复现', () => {
-  initSteps(5);
+  seed5();
   assert.match(st_(6).fingerprint, /^[0-9a-f]{4}…[0-9a-f]{4}$/);
   assert.equal(fingerprint(6), st_(6).fingerprint); // 现算与缓存一致
   const fp6 = st_(6).fingerprint;
-  initSteps(5); // 重新初始化 → 同配置同指纹
+  seed5(); // 重新播种 → 同配置同指纹
   assert.equal(st_(6).fingerprint, fp6);
 });
 
 test('未知步骤:指纹给占位符,setMethod/setParams 返回空数组', () => {
-  initSteps(5);
+  seed5();
   assert.equal(fingerprint(99), '········');
   assert.deepEqual(setMethod(99, 'x'), []);
   assert.deepEqual(setParams(99, { a: 1 }), []);
 });
 
 test('setMethod 级联:自身与全部下游指纹变化,上游不变', () => {
-  initSteps(5);
+  seed5();
   const fps = new Map(STEP_DEFS.map((d) => [d.id, st_(d.id).fingerprint]));
   setMethod(5, 'boxcar');
   for (const id of [1, 2, 3, 4]) {
@@ -41,21 +49,21 @@ test('setMethod 级联:自身与全部下游指纹变化,上游不变', () => {
 });
 
 test('setMethod 返回受影响 id(自身+下游);重复设同方法幂等返回空', () => {
-  initSteps(5);
+  seed5();
   assert.deepEqual(setMethod(5, 'boxcar'), [5, 6, 7, 8, 9, 10, 11]);
   assert.deepEqual(setMethod(5, 'boxcar'), []); // 方法未变 → 不传播
 });
 
 test('setParams 等值 patch 幂等:不传播、不标脏', () => {
-  initSteps(5);
-  assert.deepEqual(setParams(5, { alpha: 0.4 }), []); // 与默认值相同
+  seed5();
+  assert.deepEqual(setParams(5, { alpha: 0.4 }), []); // 与注册表默认值相同
   assert.deepEqual(setParams(5, {}), []);
   assert.equal(st_(5).state, 'done');
   assert.equal(st_(5).stale, false);
 });
 
 test('级联只把「曾经完成」的标 stale,pending 保持 pending', () => {
-  initSteps(5);
+  seed5();
   setMethod(5, 'boxcar');
   assert.equal(st_(5).state, 'stale');
   assert.equal(st_(5).stale, true);
@@ -67,7 +75,7 @@ test('级联只把「曾经完成」的标 stale,pending 保持 pending', () => 
 });
 
 test('参数改回原值:指纹复原,但状态仍是 stale(前端镜像不做指纹比对自动恢复)', () => {
-  initSteps(5);
+  seed5();
   const fp5 = st_(5).fingerprint;
   const fp11 = st_(11).fingerprint;
   setParams(5, { alpha: 0.9 });
@@ -85,8 +93,14 @@ test('downstreamOf 沿依赖图 BFS:不含自身,升序,菱形依赖去重(11 �
   assert.deepEqual(downstreamOf(11), []);
 });
 
+test('注册表未加载(目录为空)时 downstreamOf 为空 —— 不再有内置演示依赖图', () => {
+  setRegistry([]);
+  assert.deepEqual(downstreamOf(1), []);
+  setRegistry(REGISTRY);   // 恢复给后续用例
+});
+
 test('snapshot/restore 全量回滚:状态/方法/参数/stale/指纹', () => {
-  initSteps(5);
+  seed5();
   const fpsBefore = STEP_DEFS.map((d) => st_(d.id).fingerprint);
   const snap = snapshotSteps();
   setMethod(5, 'boxcar');
@@ -105,7 +119,7 @@ test('snapshot/restore 全量回滚:状态/方法/参数/stale/指纹', () => {
 test('设计决策:running 步骤不被级联标 stale(上游变更时保持 running,失效裁决交给服务端)', () => {
   // 正在运行的步骤是否作废由服务端裁决(执行器接回或复位),前端镜像不抢跑,
   // 避免与服务端状态机打架——见 state.js invalidate 的设计决策注释。
-  initSteps(5);
+  seed5();
   setStepState(6, 'running');
   setParams(5, { alpha: 0.9 }); // 6 在受影响范围内
   assert.equal(st_(6).state, 'running');

@@ -174,6 +174,11 @@ function check(name, cond) {
 
 /* ---------------- 被测模块与假数据 ---------------- */
 const R = await import('./js/pipelinerail.js');
+// 步骤目录不再内置演示数据:用真实 /api/registry 快照水合(拓扑与服务端一致),
+// railEdges()/upstreamChain() 的缺省 defs 才有边可推
+const St = await import('./js/state.js');
+const { REGISTRY } = await import('../tests/js/_registry.mjs');
+St.setRegistry(REGISTRY);
 
 /* 11 步假状态,覆盖全部展示态:
    1 done · 2 skipped(云端) · 3 done · 4 running · 5 stale(参数变更,变更源)

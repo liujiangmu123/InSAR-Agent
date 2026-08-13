@@ -198,7 +198,10 @@ DOC.body.appendChild(stream);
 const Slash = await import('./js/slash.js');
 const St = await import('./js/state.js');
 const Stream = await import('./js/stream.js');
-St.initSteps(5);          // 与 app.js boot 相同的种子态(1–5 done,6–11 pending)
+// 步骤目录/镜像不再内置演示种子:注册表快照水合 + 模拟服务端计划(1–5 done,6–11 pending)
+const { REGISTRY, seedSteps } = await import('../tests/js/_registry.mjs');
+St.setRegistry(REGISTRY);
+seedSteps(St, 5);
 Stream.mount(stream);     // /status /help 卡片渲染进轨迹流
 
 const type = (text) => {
@@ -411,7 +414,8 @@ hooks.beforeKey(e);
 check('首项 ↑ 环绕到末项(/help)', activeId() === 'slash-opt-cmd-help');
 
 type('/method 6 ');
-check('「/method 6␣」实时渲染 4 个方法候选(STEP_DEFS 回退)', options().length === 4);
+check('「/method 6␣」实时渲染全部方法候选(STEP_DEFS 回退 = 注册表快照)',
+  options().length === St.def_(6).methods.length && options().length >= 4);
 e = keyEvt('Tab');
 check('Tab 补全首个方法', hooks.beforeKey(e) && e.defaultPrevented
   && input.value === '/method 6 snaphu_mcf');
@@ -425,7 +429,7 @@ check('Enter 在补全会改变输入时优先补全', hooks.beforeKey(e) === tr
 
 console.log('\n== ⑧ 提交:合法入队 / 非法红字不发请求 / Esc 一次性放行 ==');
 const St6before = St.st_(6).method;
-check('前置:第 6 步当前方法为 3D_FULL(种子态)', St6before === '3D_FULL');
+check('前置:第 6 步当前方法为注册表默认 snaphu_mcf', St6before === 'snaphu_mcf');
 const fp7before = St.st_(7).fingerprint;
 type('/method 6 icu');
 let handled = hooks.beforeSubmit('/method 6 icu');

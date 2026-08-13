@@ -1,4 +1,4 @@
-/* ============================================================
+﻿/* ============================================================
    plandiff 的无浏览器自查脚本(node prototype/plandiff.check.mjs)
    最小 DOM stub 下直接 import js/plandiff.js,覆盖:
      ① diff 算法(新增/方法变更/参数变更/重跑/跳过/移除/无变化)
@@ -181,6 +181,9 @@ function serialize(n, indent = '') {
 const St = await import('./js/state.js');
 const PD = await import('./js/plandiff.js');
 const { S } = St;
+// 步骤目录/镜像不再内置演示种子:注册表快照水合 + seedSteps 模拟服务端计划下发
+const { REGISTRY, seedSteps } = await import('../tests/js/_registry.mjs');
+St.setRegistry(REGISTRY);
 
 // 聊天流骨架:#stream > .stream-inner(计划卡插入点)
 const streamEl = new Element('div');
@@ -294,7 +297,7 @@ check('无变化文案', PD.summarize([], baseSnap()) === '相比上次:计划�
 console.log('\n== ③ 首个计划概览卡 ==');
 
 S.sessionId = 'sessA';
-St.initSteps(5);   // 1–5 done,6–11 pending(演示初始态)
+seedSteps(St, 5);   // 服务端计划:1–5 done,6–11 pending
 const card1 = PD.onPlan({ t: 'plan', items: [] });
 
 check('首个计划 → 概览卡插入聊天流', !!card1 && card1.isConnected && card1.matches('.plandiff'));
@@ -326,7 +329,7 @@ console.log('\n== ④ 重规划 diff 卡 ==');
 }
 
 S.sessionId = 'sessC';
-St.initSteps(11);                                  // 全部 done
+seedSteps(St, 11);                                 // 服务端计划:全部 done
 S.steps.get(6).method = 'snaphu_mcf';              // 造 canonical 前置:第 6 步当前方法
 PD.onPlan({ t: 'plan', items: [] });               // sessC 首个计划(建立基线)
 St.setMethod(6, 'icu');                            // 换方法 → 6–11 级联失效
@@ -359,15 +362,15 @@ check('两个会话各有独立存档键',
 {
   const a = JSON.parse(globalThis.sessionStorage.getItem('ia-plandiff:sessA'));
   const c = JSON.parse(globalThis.sessionStorage.getItem('ia-plandiff:sessC'));
-  check('存档内容互不污染(sessA 第 6 步仍是 3D_FULL,sessC 已是 icu)',
-    a.steps.find((s) => s.id === 6).method === '3D_FULL'
+  check('存档内容互不污染(sessA 第 6 步仍是注册表默认 snaphu_mcf,sessC 已是 icu)',
+    a.steps.find((s) => s.id === 6).method === 'snaphu_mcf'
     && c.steps.find((s) => s.id === 6).method === 'icu');
 }
 {
   S.sessionId = 'sessA';   // 回切:diff 基线必须来自 sessA 自己的存档
   const card4 = PD.onPlan({ t: 'plan', items: [] });
-  check('回切会话后 diff 对比自己的基线(3D_FULL→icu,而非 sessC 的 icu→icu)',
-    !!card4 && card4.querySelector('.pd-sum').textContent.includes('第 6 步方法 3D_FULL→icu'));
+  check('回切会话后 diff 对比自己的基线(snaphu_mcf→icu,而非 sessC 的 icu→icu)',
+    !!card4 && card4.querySelector('.pd-sum').textContent.includes('第 6 步方法 snaphu_mcf→icu'));
 }
 {
   // 模拟页面刷新(内存层丢失):loadPrev 从 sessionStorage 恢复
@@ -438,7 +441,7 @@ console.log('\n== ⑧ 事件形状兼容 ==');
 }
 {
   S.sessionId = 'sessD';
-  St.initSteps(11);
+  seedSteps(St, 11);
   PD.savePrev('sessD', [...PD.snapshotFromState(),
     { id: 12, name: '额外校验', method: 'mx', params: {}, state: 'done', stale: false }]);
   const card7 = PD.onPlan({ t: 'plan', items: [] });

@@ -1,9 +1,11 @@
 /* ============================================================
    数据不可用语义的无浏览器自查脚本(node prototype/demo-mode.check.mjs)
-   —— 「演示回落清除」之后,dock 各面板在后端不可达/无数据时必须渲染
-   诚实的错误态/空态(states 统一构造器),绝不再渲染内置假数据;
-   聊天层的 mock 演示模式(backend.mock.js 剧本)不在清除范围,仍验证:
+   —— 「核心层演示脚手架删除」(state.js 不再内置会话/步骤种子)与
+   「面板演示回落清除」(dock 各面板不可达/无数据渲染诚实错误态/空态)
+   两波之后的合并语义;聊天层 mock 演示模式(backend.mock.js)保留仍验证:
 
+   0. 启动空态:SESSIONS/STEP_DEFS/S.steps 启动全空,演示种子已删除
+      (界面数据只来自 /api/sessions、/api/registry、/api/state);
    A. file:// 短路:backend.sse 与各 *live 模块不发任何 API 请求,直接
       resolve null / 走 mock;
    B. 后端不可达(fetch 全部拒绝):每个取数入口 resolve null 而非抛错,
@@ -14,9 +16,10 @@
    D. 诚实状态 UI:gallery 错误态(带重试)/空态(带运行引导),
       tspoint 错误态/空态,面板绝不渲染演示图件网格与演示曲线;
       demoBanner 仅剩 env 面板一个消费方,fileslive/auditlive 不再导出;
-   E. 种子与渲染器边界:STEP_DEFS/SESSIONS/THRESHOLDS(聊天 mock 用)
-      仍在;figures.js 仅服务聊天演示流(stream.js)与 tspoint 真实
-      渲染;envdata.js 的 TERM_LOGS/TRACE/cmdSh 演示常量已删除;
+   E. 注册表水合与镜像种子:setRegistry(真实 /api/registry 快照)→
+      STEP_DEFS 11 步;setSessions 映射服务端行;seedSteps 模拟
+      服务端计划;fileTree 从注册表 outputs 派生;envdata.js 的
+      TERM_LOGS/TRACE/cmdSh 演示常量已删除;
    F. 源码级对齐:mock 事件类型 ⊆ app.js consume 分支;dock.js 不再
       含 files/audit/report/term/trace 的演示回落;file:// 判据保留。
 
@@ -208,7 +211,7 @@ async function collect(iter) {
 const API_FILE = await import('./js/backend.sse.js');            // useMock=true 实例
 const St = await import('./js/state.js');
 const { S, STEP_DEFS, SESSIONS, THRESHOLDS, LADDER, workSummary,
-        evidenceCeiling } = St;
+        evidenceCeiling, fileTree } = St;
 const Envlive = await import('./js/envlive.js');
 const Fileslive = await import('./js/fileslive.js');
 const Auditlive = await import('./js/auditlive.js');
@@ -220,8 +223,21 @@ const Queue = await import('./js/queue.js');
 const Figures = await import('./js/figures.js');
 const Envdata = await import('./js/envdata.js');
 const Mock = await import('./js/backend.mock.js');
+const { REGISTRY, seedSteps } = await import('../tests/js/_registry.mjs');
 
-St.initSteps(5);   // 演示种子:前 5 步 done,6–11 pending
+/* ---------------- 启动空态:演示种子已彻底删除 ---------------- */
+console.log('== 0. 启动空态(演示种子已删除) ==');
+check('01 启动时 SESSIONS 为空(不再内置 Ridgecrest/玉树/雅鲁藏布江演示会话)',
+  SESSIONS.length === 0);
+check('02 启动时 STEP_DEFS 为空(步骤目录只来自 /api/registry)',
+  STEP_DEFS.length === 0);
+check('03 启动时步骤镜像为空 + 无会话 id(计划只来自 /api/state)',
+  S.steps.size === 0 && S.sessionId === null);
+
+// 后续 mock 链路用真实注册表快照水合 + 模拟服务端计划(前 5 步 done)
+St.setRegistry(REGISTRY);
+seedSteps(St, 5);
+S.sessionId = 'ridgecrest-2019';   // mock 剧情引用的会话 id(仅测试进程内)
 
 /* ============================================================
    A. file:// 短路 —— 不发任何 API 请求
@@ -300,9 +316,15 @@ const stopPoll = Notify.startAdminPoll((m) => adminSeen.push(m), {
 await sleep(30);
 stopPoll();
 check('B10 notify.startAdminPoll:不可达 → onRuns(null)', adminSeen.length >= 1 && adminSeen[0] === null);
-check('B11 notify.groupSessions(adminMap=null) 按本地 tone 归组',
+// 会话镜像按服务端 /api/sessions 行播种(tone 统一 idle;真实状态由运维视图/实时态覆盖)
+St.setSessions([
+  { session_id: 'ridgecrest-2019', name: 'Ridgecrest 同震形变', mode: 'expert', created_at: 1755000000 },
+  { session_id: 's-b', name: '会话乙', mode: 'guide', created_at: 1755000100 },
+]);
+check('B11 notify.groupSessions(adminMap=null):服务端播种的会话统一按 idle 归组',
   JSON.stringify(Notify.groupSessions(SESSIONS, {}, null).map((g) => g.key))
-  === JSON.stringify(['active', 'idle']));
+  === JSON.stringify(['idle'])
+  && Notify.groupSessions(SESSIONS, {}, null)[0].items.length === 2);
 
 /* ============================================================
    C. useMock 切换链路(http 实例):失败 → note 警示 + mock 接管
@@ -437,35 +459,43 @@ check('D12 queue:恢复后 flush FIFO 发出并清空', sent[0] === '排队消�
 /* ============================================================
    E. 种子与渲染器边界(state / figures / envdata)
    ============================================================ */
-console.log('\n== E. 种子与渲染器边界 ==');
-check('E1 STEP_DEFS = 11 步且 id 连续,每步含 methods/params/outputs',
+console.log('\n== E. 注册表水合与镜像种子(演示种子已删除) ==');
+check('E1 setRegistry(注册表快照)→ STEP_DEFS = 11 步且 id 连续,每步含 methods/params/outputs',
   STEP_DEFS.length === 11
   && STEP_DEFS.every((d, i) => d.id === i + 1 && d.methods.length > 0 && d.params && Array.isArray(d.outputs)));
-check('E2 演示会话 SESSIONS ≥3 且含 ridgecrest 主会话',
-  SESSIONS.length >= 3 && SESSIONS.some((s) => s.id === 'ridgecrest-2019' && s.tone && s.sub));
-check('E3 initSteps(5) 后 workSummary:待跑恰为第 6–11 步',
+check('E2 setSessions 映射 /api/sessions 行:session_id→id,name/sub 齐备,不再有内置演示会话',
+  SESSIONS.length === 2 && SESSIONS.every((s) => s.id && s.name && s.sub && s.tone === 'idle')
+  && SESSIONS.some((s) => s.id === 'ridgecrest-2019'));
+check('E3 seedSteps(服务端计划,前 5 步 done)后 workSummary:待跑恰为第 6–11 步',
   JSON.stringify(workSummary().all) === JSON.stringify([6, 7, 8, 9, 10, 11]));
-check('E4 THRESHOLDS 5 项(3 项 PENDING)→ evidenceCeiling 封顶 audited(2)',
+
+const tree = fileTree();
+check('E4 fileTree 从注册表 outputs 派生:非空且每项含 path/kind/step/hash',
+  tree.length >= 10 && tree.every((f) => f.path && f.kind && f.step && 'hash' in f));
+check('E5 fileTree 覆盖注册表声明的配置/质检产物(unwrap.yaml + qa.json)',
+  ['params/unwrap.yaml', 'products/report/qa.json']
+    .every((p) => tree.some((f) => f.path === p)));
+check('E6 THRESHOLDS 5 项(3 项 PENDING)→ evidenceCeiling 封顶 audited(2)',
   THRESHOLDS.length === 5
   && THRESHOLDS.filter((t) => t.status === 'PENDING').length === 3
   && evidenceCeiling().level === 2);
-check('E5 LADDER 六级证据阶梯完整', LADDER.length === 6 && LADDER[5] === 'publishable');
+check('E7 LADDER 六级证据阶梯完整', LADDER.length === 6 && LADDER[5] === 'publishable');
 
 // figures.js 保留的边界:聊天演示流(stream.js resultCard/openLightbox)
 // 与 tspoint 真实渲染(timeSeriesSvg 画真实数据 / mapSvg 选点底图)仍消费;
 // dock 面板(gallery/files/audit/report/term/trace)已全部不再 import figures.js
-check('E6 figures:IMAGES 4 张(vel/ts/ifg/coh)供聊天演示流 openLightbox 消费',
+check('E8 figures:IMAGES 4 张(vel/ts/ifg/coh)供聊天演示流 openLightbox 消费',
   Figures.IMAGES.length === 4
   && JSON.stringify(Figures.IMAGES.map((i) => i.id)) === JSON.stringify(['vel', 'ts', 'ifg', 'coh'])
   && Figures.IMAGES.every((i) => i.name && i.title && i.step));
-check('E7 figures:figureSvg/mapSvg/timeSeriesSvg 渲染器产出可嵌入 SVG',
+check('E9 figures:figureSvg/mapSvg/timeSeriesSvg 渲染器产出可嵌入 SVG',
   /^<svg/.test(Figures.figureSvg('vel'))
   && /^<svg/.test(Figures.mapSvg(null, { hidePoints: true, markers: [{ x: 10, y: 10, color: '#f00', label: 'P1' }], note: 'n' }))
   && /^<svg/.test(Figures.timeSeriesSvg({ dates: ['06-10', '06-22'], series: [{ name: 'A', ts: [0, 1], color: '#f00' }] })));
 
-check('E8 envdata:TERM_LOGS/TRACE/cmdSh 演示常量已删除(终端/轨迹无假数据可用)',
+check('E10 envdata:TERM_LOGS/TRACE/cmdSh 演示常量已删除(终端/轨迹无假数据可用)',
   !('TERM_LOGS' in Envdata) && !('TRACE' in Envdata) && !('cmdSh' in Envdata));
-check('E9 envdata:ENGINES/DISKS/WSL/WORKSPACE/ENV_NOTE 环境演示数据齐备(env 面板范围外保留)',
+check('E11 envdata:ENGINES/DISKS/WSL/WORKSPACE/ENV_NOTE 环境演示数据齐备(env 面板范围外保留)',
   Envdata.ENGINES.length >= 4 && Envdata.DISKS.length >= 1
   && !!Envdata.WSL.text && !!Envdata.WORKSPACE.hint && /静态示意/.test(Envdata.ENV_NOTE));
 
