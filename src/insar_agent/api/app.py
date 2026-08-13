@@ -381,6 +381,8 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_doctor_router(home))  # 一键体检(/api/doctor,面向排障的秒级只读深检)
     from insar_agent.api.data_router import create_data_router; app.include_router(create_data_router(store))  # 点位时序数据
     app.include_router(create_diag_router(home))  # 诊断包一键导出(/api/diagnostics*)
+    from insar_agent.api.report_router import create_report_router
+    app.include_router(create_report_router(store, home))  # 方法章节草稿(/api/report/draft)
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
