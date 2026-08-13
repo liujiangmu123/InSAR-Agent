@@ -10,11 +10,16 @@ from pathlib import Path
 from typing import Any
 
 from insar_agent.registry.model import Capability
+from insar_agent.runtime.credentials import env_for_workspace
 from insar_agent.runtime.jobs import CommandPlan
 
 _FETCH_PY = """\
-# insar-agent 数据获取脚本(asf_search / hyp3_sdk;凭据走 ~/.netrc,不落盘)
+# insar-agent 数据获取脚本(asf_search / hyp3_sdk;凭据经环境变量注入,不进命令行)
+import os
 import sys
+_cred = ("token" if os.environ.get("EARTHDATA_TOKEN")
+         else "userpass" if os.environ.get("EARTHDATA_USERNAME") else "none")
+print("credentials:", _cred, flush=True)  # 只打印方式,绝不打印值
 print("search:", {dates!r}, "platform:", {platform!r}, "scenes:", {scenes!r}, flush=True)
 try:
     import asf_search  # noqa: F401
@@ -37,7 +42,8 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
     return CommandPlan(
         argv=["python", script_rel],
         cwd=str(workspace),
-        env={},
+        # 凭证注入(runtime/credentials):未配置为 {} 行为不变;值只进 env,不进命令行
+        env=env_for_workspace(workspace),
         files={script_rel: content},
         shell_line=f"python {script_rel}",
     )

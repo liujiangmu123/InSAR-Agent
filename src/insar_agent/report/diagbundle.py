@@ -369,6 +369,12 @@ def build_diag_bundle(home: Path | str, run_id: str | None = None, *,
         return json.dumps(_redact_obj(obj, mask_abs_paths=mask_abs_paths),
                           ensure_ascii=False, indent=1).encode("utf-8")
 
+    def _scrub(data: bytes) -> bytes:
+        from insar_agent.runtime.credentials import secret_values  # 凭证脱敏清单
+        for s in secret_values(home):  # credentials.json 密文值级擦除:哪怕被回显进日志也不入包
+            data = data.replace(s.encode("utf-8"), b"<credential>")
+        return data
+
     def _log_entry(arc: str, path: Path, limit: int) -> bytes | None:
         try:
             text, truncated, size = _tail_file(path, limit)
@@ -478,9 +484,9 @@ def build_diag_bundle(home: Path | str, run_id: str | None = None, *,
     zip_path = out_dir / _zip_name(out_dir)
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("manifest.json", _dump(manifest))
+            zf.writestr("manifest.json", _scrub(_dump(manifest)))
             for arc, data in entries:
-                zf.writestr(arc, data)
+                zf.writestr(arc, _scrub(data))
     except BaseException:
         zip_path.unlink(missing_ok=True)  # 半截 zip 不留盘
         raise
