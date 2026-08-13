@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<title>InSAR-Agent 路 宸ヤ綔鍖?/title>
+<title>InSAR-Agent · 工作区</title>
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/stream.css">
@@ -28,30 +28,30 @@
 <link rel="stylesheet" href="css/notify.css">
 <link rel="stylesheet" href="css/presets.css">
 <script type="module">
-  // 妗岄潰/棣栧惎澧炲己:鐜鍚戝(鍚庣灏辩华鍒欓潤榛?+ 绐楀彛鏍囬鐘舵€佸悓姝?鍧囧畨鍏ㄩ檷绾?
+  // 桌面/首启增强:环境向导(后端就绪则静默)+ 窗口标题状态同步;均安全降级
   import('./js/setup.js').then((m) => m.maybeShowSetupWizard()).catch(() => {});
   import('./js/titlebar.js').then((m) => m.initTitleSync()).catch(() => {});
-  import('./js/emptystate.js').then((m) => m.watchSessionsEmpty()).catch(() => {});   // states 鎺ュ叆:浼氳瘽鍒楄〃绌烘€佸畧鏈?
+  import('./js/emptystate.js').then((m) => m.watchSessionsEmpty()).catch(() => {});   // states 接入:会话列表空态守望
 </script>
 </head>
 <body>
 
-<a href="#prompt" class="sr-only">璺冲埌杈撳叆妗?/a>
+<a href="#prompt" class="sr-only">跳到输入框</a>
 
-<button class="scrim" id="scrim" type="button" hidden aria-label="鍏抽棴娴眰闈㈡澘"></button>
+<button class="scrim" id="scrim" type="button" hidden aria-label="关闭浮层面板"></button>
 
 <div class="app">
 
-  <!-- ============ 鏈€宸﹀鑸潯 ============ -->
-  <nav class="rail" aria-label="涓诲鑸?>
+  <!-- ============ 最左导航条 ============ -->
+  <nav class="rail" aria-label="主导航">
     <div class="brand" aria-hidden="true">IA</div>
 
-    <button class="rail-btn" id="railChat" type="button" aria-pressed="true" aria-label="瀵硅瘽" title="瀵硅瘽">
+    <button class="rail-btn" id="railChat" type="button" aria-pressed="true" aria-label="对话" title="对话">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
     </button>
 
-    <button class="rail-btn" id="railSessions" type="button" aria-pressed="true" aria-label="浼氳瘽鍒楄〃" title="浼氳瘽鍒楄〃 ">
+    <button class="rail-btn" id="railSessions" type="button" aria-pressed="true" aria-label="会话列表" title="会话列表 ">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
         <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
@@ -59,106 +59,106 @@
 
     <div class="rail-sp"></div>
 
-    <button class="rail-btn" id="btnTheme" type="button" aria-label="鍒囨崲涓婚" title="鍒囨崲涓婚 Ctrl+J" aria-keyshortcuts="Control+J"></button>
+    <button class="rail-btn" id="btnTheme" type="button" aria-label="切换主题" title="切换主题 Ctrl+J" aria-keyshortcuts="Control+J"></button>
 
-    <button class="rail-btn" id="btnTour" type="button" aria-label="鐣岄潰寮曞" title="鐣岄潰寮曞锛堥殢鏃堕噸鐪嬶級">?</button>
+    <button class="rail-btn" id="btnTour" type="button" aria-label="界面引导" title="界面引导（随时重看）">?</button>
 
-    <button class="rail-btn" id="railDock" type="button" aria-pressed="true" aria-label="鍙充晶闈㈡澘" title="鍙充晶闈㈡澘 Ctrl+B" aria-keyshortcuts="Control+B">
+    <button class="rail-btn" id="railDock" type="button" aria-pressed="true" aria-label="右侧面板" title="右侧面板 Ctrl+B" aria-keyshortcuts="Control+B">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
     </button>
   </nav>
 
-  <!-- ============ 浼氳瘽渚ф爮 ============ -->
-  <aside class="sider" id="sider" aria-label="浼氳瘽">
+  <!-- ============ 会话侧栏 ============ -->
+  <aside class="sider" id="sider" aria-label="会话">
     <div class="sider-hd">
-      <span class="lbl">浼氳瘽</span>
+      <span class="lbl">会话</span>
       <span class="grow"></span>
-      <button class="icon-btn" id="btnNew" type="button" aria-label="鏂板缓浼氳瘽" title="鏂板缓浼氳瘽">
+      <button class="icon-btn" id="btnNew" type="button" aria-label="新建会话" title="新建会话">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
           <path d="M12 5v14M5 12h14"/></svg>
       </button>
     </div>
     <div class="sess-list" id="sessions"></div>
     <div class="sider-ft">
-      <div class="seg" id="modeSwitch" role="group" aria-label="鍐崇瓥妯″紡">
-        <button type="button" data-mode="expert" aria-pressed="true">涓撳</button>
-        <button type="button" data-mode="guide" aria-pressed="false">鍚戝</button>
+      <div class="seg" id="modeSwitch" role="group" aria-label="决策模式">
+        <button type="button" data-mode="expert" aria-pressed="true">专家</button>
+        <button type="button" data-mode="guide" aria-pressed="false">向导</button>
       </div>
-      <div class="who"><span class="av" aria-hidden="true">甯?/span><span>璁插笀璐﹀彿 路 鏈満 WSL2</span></div>
+      <div class="who"><span class="av" aria-hidden="true">师</span><span>讲师账号 · 本机 WSL2</span></div>
     </div>
   </aside>
 
-  <!-- ============ 涓诲尯锛氳建杩规祦 ============ -->
+  <!-- ============ 主区：轨迹流 ============ -->
   <main class="main">
     <header class="topbar">
       <span class="tt">InSAR-Agent<span class="sl">/</span></span>
-      <span class="st" id="subtitle">Ridgecrest 鍚岄渿褰㈠彉 路 11 瀵?/span>
-      <span class="tag is-stale" title="鍚庣鏈帴鍏ワ紝鏁板€间负绀烘剰鍊?>DEMO</span>
+      <span class="st" id="subtitle">Ridgecrest 同震形变 · 11 对</span>
+      <span class="tag is-stale" title="后端未接入，数值为示意值">DEMO</span>
       <span class="grow"></span>
       <span class="budget" id="budget" role="status" aria-live="polite" hidden></span>
       <span class="tag" id="status" role="status" aria-live="polite">
-        <span class="led"></span><span id="statusText">绌洪棽</span>
+        <span class="led"></span><span id="statusText">空闲</span>
       </span>
-      <button class="icon-btn" id="btnNotify" type="button" aria-label="閫氱煡涓績" title="閫氱煡涓績" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></button>
+      <button class="icon-btn" id="btnNotify" type="button" aria-label="通知中心" title="通知中心" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></button>
       <button class="btn btn-wrn" id="btnRun" type="button" hidden
-              title="鎵ц寰呰繍琛屾楠?Ctrl+Enter" aria-keyshortcuts="Control+Enter">
+              title="执行待运行步骤 Ctrl+Enter" aria-keyshortcuts="Control+Enter">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 3l14 9-14 9z"/></svg>
-        <span class="lbl">閲嶈窇澶辨晥姝ラ</span>
+        <span class="lbl">重跑失效步骤</span>
       </button>
     </header>
 
-    <div class="stream" id="stream" role="log" aria-label="Agent 鎵ц杞ㄨ抗" aria-live="polite"></div>
+    <div class="stream" id="stream" role="log" aria-label="Agent 执行轨迹" aria-live="polite"></div>
 
     <div class="composer">
       <div class="composer-in">
-        <div class="attach-row" id="attachRow" hidden aria-label="寰呭彂閫侀檮浠? aria-live="polite"></div>
+        <div class="attach-row" id="attachRow" hidden aria-label="待发送附件" aria-live="polite"></div>
         <div class="box">
-          <label class="sr-only" for="prompt">鍚?InSAR-Agent 鎻忚堪浠诲姟</label>
+          <label class="sr-only" for="prompt">向 InSAR-Agent 描述任务</label>
           <textarea id="prompt" rows="1" aria-keyshortcuts="Control+K"
-            placeholder="鎻忚堪鐮旂┒浠诲姟锛屼緥濡傦細鍒嗘瀽鐜夋爲鍐诲湡 2020-2023 鐨?SBAS 鏃跺簭褰㈠彉"></textarea>
+            placeholder="描述研究任务，例如：分析玉树冻土 2020-2023 的 SBAS 时序形变"></textarea>
 
           <input type="file" id="fileInput" multiple hidden>
-          <button class="cbtn" id="btnAttach" type="button" aria-label="闄勫姞鏂囦欢锛堟紨绀猴細涓嶄笂浼狅級" title="闄勫姞鏂囦欢锛堟紨绀猴細涓嶄笂浼狅級">
+          <button class="cbtn" id="btnAttach" type="button" aria-label="附加文件（演示：不上传）" title="附加文件（演示：不上传）">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
           </button>
 
-          <button class="cbtn" id="btnClear" type="button" aria-label="娓呯┖杈撳叆" title="娓呯┖杈撳叆">
+          <button class="cbtn" id="btnClear" type="button" aria-label="清空输入" title="清空输入">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
           </button>
 
-          <button class="cbtn send" id="btnSend" type="button" aria-label="鍙戦€? title="鍙戦€?Enter" aria-keyshortcuts="Enter" disabled>
+          <button class="cbtn send" id="btnSend" type="button" aria-label="发送" title="发送 Enter" aria-keyshortcuts="Enter" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
           </button>
 
-          <button class="cbtn stop" id="btnStop" type="button" aria-label="鍋滄" title="鍋滄 Esc" aria-keyshortcuts="Escape" hidden>
+          <button class="cbtn stop" id="btnStop" type="button" aria-label="停止" title="停止 Esc" aria-keyshortcuts="Escape" hidden>
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
           </button>
         </div>
         <div class="cmeta">
-          <span><kbd>Enter</kbd> 鍙戦€?路 <kbd>Shift</kbd>+<kbd>Enter</kbd> 鎹㈣</span>
+          <span><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span>
           <span class="grow"></span>
-          <span><kbd>Ctrl</kbd>+<kbd>B</kbd> 闈㈡澘 路 <kbd>Ctrl</kbd>+<kbd>K</kbd> 鑱氱劍 路 <kbd>Esc</kbd> 鍋滄 路 <kbd>?</kbd> 蹇嵎閿?/span>
+          <span><kbd>Ctrl</kbd>+<kbd>B</kbd> 面板 · <kbd>Ctrl</kbd>+<kbd>K</kbd> 聚焦 · <kbd>Esc</kbd> 停止 · <kbd>?</kbd> 快捷键</span>
         </div>
       </div>
     </div>
   </main>
 
-  <!-- ============ 鍙充晶 Dock ============ -->
-  <aside class="dock" id="dock" aria-label="涓婁笅鏂囬潰鏉?>
+  <!-- ============ 右侧 Dock ============ -->
+  <aside class="dock" id="dock" aria-label="上下文面板">
     <div class="grip" id="grip" role="separator" aria-orientation="vertical"
-         aria-label="璋冩暣闈㈡澘瀹藉害" tabindex="0"></div>
-    <div class="dock-tabs" id="dockTabs" role="tablist" aria-label="闈㈡澘瑙嗗浘"></div>
+         aria-label="调整面板宽度" tabindex="0"></div>
+    <div class="dock-tabs" id="dockTabs" role="tablist" aria-label="面板视图"></div>
     <div class="dock-body" id="dockBody"></div>
   </aside>
 
 </div>
 
-<!-- ============ 鐏 ============ -->
-<div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="鍥句欢鍏ㄥ睆鏌ョ湅">
+<!-- ============ 灯箱 ============ -->
+<div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="图件全屏查看">
   <div class="top">
     <span class="t"></span>
     <span class="s"></span>
@@ -166,19 +166,19 @@
     <button class="ghost-btn" data-act="dock" type="button">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
-      鍦ㄥ彸渚ч潰鏉挎墦寮€
+      在右侧面板打开
     </button>
     <button class="ghost-btn" data-act="close" type="button">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
         <path d="M6 6l12 12M18 6L6 18"/></svg>
-      鍏抽棴 Esc
+      关闭 Esc
     </button>
   </div>
   <div class="canvas"></div>
 </div>
 
 <script type="module" src="js/app.js"></script>
-<!-- 鍙揪鎬у寮哄眰:蹇嵎閿府鍔╂诞灞?+ aria-modal 娴眰鐨勭劍鐐瑰湀瀹?鐙珛浜庝笟鍔￠€昏緫,鍙畨鍏ㄩ檷绾? -->
+<!-- 可达性增强层:快捷键帮助浮层 + aria-modal 浮层的焦点圈定(独立于业务逻辑,可安全降级) -->
 <script type="module" src="js/a11y.js"></script>
 <script type="module" src="js/cmdk.js"></script>
 <script type="module" src="js/skillpanel.js"></script>
@@ -188,12 +188,12 @@
 <script type="module" src="js/doctorpanel.js"></script>
 <script type="module" src="js/bridge.js" defer></script>
 <script type="module" src="js/slash.js"></script>
-<script type="module" src="js/figcompare.js"></script><!-- 褰卞儚缃戞牸鍙屽浘瀵规瘮(鍗峰笜/闂儊/骞舵帓),浜嬩欢濮旀墭娉ㄥ叆,鍙畨鍏ㄩ檷绾?-->
-<script type="module" src="js/provview.js"></script><!-- 瀹¤闈㈡澘涓嬪崐鍖?provenance 璐︽湰娴忚(鑷垵濮嬪寲) -->
+<script type="module" src="js/figcompare.js"></script><!-- 影像网格双图对比(卷帘/闪烁/并排),事件委托注入,可安全降级 -->
+<script type="module" src="js/provview.js"></script><!-- 审计面板下半区:provenance 账本浏览(自初始化) -->
 <script type="module" src="js/responsive.js"></script>
-<!-- 璇婃柇鍖呭鍑?鐜闈㈡澘銆屽鍑鸿瘖鏂寘銆嶆寜閽?鑷垵濮嬪寲,鍙畨鍏ㄩ檷绾? -->
+<!-- 诊断包导出:环境面板「导出诊断包」按钮(自初始化,可安全降级) -->
 <script type="module" src="js/diagexport.js"></script>
-<!-- 鏁版嵁闆嗗尯(鏂囦欢闈㈡澘椤堕儴,鑷垵濮嬪寲;鏁版嵁婧?/api/datasets) -->
+<!-- 数据集区(文件面板顶部,自初始化;数据源 /api/datasets) -->
 <script type="module" src="js/datasets.js"></script>
 <script type="module" src="js/notify.js"></script>
 <script type="module" src="js/presets.js"></script>
