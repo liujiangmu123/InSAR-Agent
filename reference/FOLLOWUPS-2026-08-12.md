@@ -2,6 +2,11 @@
 
 ## 24 代理波次(2026-08-13 晚)接力项
 
+- 【AUDIT-api-r3 两 P2】①diagbundle 并发生成命名竞态(8 并发实测只产 6 文件,
+  建议 mkstemp 原子占名);②fsio.atomic_write_text 并发写同文件时 os.replace
+  WinError 5 偶发 500(建议 replace 短重试)。均非安全性,下波修。
+- 【本机基线噪声】Python 3.14 下 test_a11y_dom 8 项失败为 html.parser 行为
+  差异(CI 钉 3.11 不受影响)——advisor 代理已用 HEAD 原版复现实证非回归。
 - 【下波候选(串行依赖,勿并行)】①图件类型扩展(时序曲线/基线网络图/相干
   直方图/剖面提取)——等 C3-C8 代理释放 figures.py+capabilities.py;②投稿包
   一键导出(figures+captions+methods+results+引用)——等图注与结果章节落地;
