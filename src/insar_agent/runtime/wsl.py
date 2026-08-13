@@ -118,9 +118,12 @@ class WslJobBackend:
         if not self.keepalive:
             return
         if self._keepalive_proc is None or self._keepalive_proc.poll() is not None:
+            # CREATE_NO_WINDOW:冻结版(无控制台宿主)缺此标志会弹可见控制台
+            # (2026-08-13 冻结复验发现的唯一 _NO_WINDOW 缺口)
             self._keepalive_proc = subprocess.Popen(
                 ["wsl.exe", "-d", self.paths.distro, "--exec", "sleep", "infinity"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW)
 
     def release_keepalive(self) -> None:
         """释放本实例拉起的保活进程(wsl.exe sleep infinity;WSL P2 释放钩子)。

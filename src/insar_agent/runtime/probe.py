@@ -104,13 +104,26 @@ def _windows_mem_gb() -> float | None:
         return None
 
 
-#: 隐式引擎环境的扫描根(优先级序):本机 README 验证过的安装位在前
-_KNOWN_ENV_ROOTS = (
-    Path(r"E:\miniforge3\envs"),
-    Path.home() / "miniforge3" / "envs",
-    Path.home() / "mambaforge" / "envs",
-    Path(r"C:\miniforge3\envs"),
-)
+#: 测试覆盖钩子:置为 tuple 时 _known_env_roots() 直接返回它(兼容既有
+#: monkeypatch 用法);None = 按下方惰性逻辑计算
+_KNOWN_ENV_ROOTS: tuple[Path, ...] | None = None
+
+
+def _known_env_roots() -> tuple[Path, ...]:
+    """隐式引擎环境的扫描根(优先级序):本机 README 验证过的安装位在前。
+
+    惰性求值:Path.home() 在 USERPROFILE/HOMEPATH 全缺的环境抛 RuntimeError,
+    模块级求值会炸掉整个后端(冻结版实测,frozen-probe 核查 xfail 记录)。"""
+    if _KNOWN_ENV_ROOTS is not None:
+        return _KNOWN_ENV_ROOTS
+    roots = [Path(r"E:\miniforge3\envs")]
+    try:
+        home = Path.home()
+        roots += [home / "miniforge3" / "envs", home / "mambaforge" / "envs"]
+    except (RuntimeError, OSError):
+        pass  # 无家目录环境(服务账户/精简容器):跳过用户级安装位
+    roots.append(Path(r"C:\miniforge3\envs"))
+    return tuple(roots)
 
 
 def _implicit_engine_prefix() -> str | None:
@@ -120,7 +133,7 @@ def _implicit_engine_prefix() -> str | None:
     环境优先;找不到返回 None(行为与旧版完全一致)。"""
     site_rel = ("Lib/site-packages/mintpy" if sys.platform == "win32"
                 else "lib/python3.11/site-packages/mintpy")
-    for root in _KNOWN_ENV_ROOTS:
+    for root in _known_env_roots():
         try:
             if not root.is_dir():
                 continue
