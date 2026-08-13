@@ -5,7 +5,9 @@
 用户可随时继续对话(API 层并发调用 turn)。
 
 驱动两类回合:
-    turn(text)      规划回合:意图 → 探测 → 计划 → 候选决策点(不执行)
+    turn(text)      对话回合:LLM 可用时先走 converse(自然语言聊天 + 闭集动作
+                    映射到既有路径);无 LLM / LLM 失败走规则路径
+                    (意图 → 探测 → 计划 → 候选决策点,行为与手动流水线一致)
     execute(run)    执行回合:逐步跑五阶段执行器,消费干预,失败分诊,收尾审计
 
 所有事件同时:yield 给调用方(HTTP 流式响应)+ 发布到 EventBus(全局 SSE)
@@ -15,9 +17,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from pathlib import Path
@@ -25,7 +29,8 @@ from typing import AsyncIterator
 
 from insar_agent.audit.contract import load_contract
 from insar_agent.audit.verify import verify_metrics
-from insar_agent.brain.facade import Brain
+from insar_agent.brain.facade import Brain, ConverseResult
+from insar_agent.brain.provider import BrainUnavailable
 from insar_agent.core.actions import apply_action
 from insar_agent.core.failures import DISPOSITIONS, FailureClass
 from insar_agent.core.ledger import write_provenance
@@ -36,6 +41,7 @@ from insar_agent.loop.events import EventBus
 from insar_agent.planner.plan import PlanResult, make_plan
 from insar_agent.registry.capabilities import REGISTRY, topo_order
 from insar_agent.registry.model import Capability
+from insar_agent.registry.scenarios import Scenario, scenario_of
 from insar_agent.report.script import write_run_script
 from insar_agent.runtime.backend_select import backend_for_job_dir, backend_for_step
 from insar_agent.runtime.executor import ExecContext, execute_step
@@ -182,7 +188,7 @@ class Driver:
             idle_timeout_override=self._idle_override,
             total_timeout_override=self._total_override)
 
-    # ---------------- 规划回合 ----------------
+    # ---------------- 对话回合 ----------------
 
     async def turn(self, session_id: str, text: str) -> AsyncIterator[dict]:
         store = self.store
@@ -190,8 +196,47 @@ class Driver:
         if session is None:
             store.create_session(session_id, session_id)
             session = store.get_session(session_id)
+        # converse 的滚动历史 = 本条消息之前的最近 8 条:必须在落库当前消息
+        # 之前取,否则当前消息在 prompt 里出现两次(历史一次 + 用户消息一次)
+        history = store.chat_history(session_id, limit=8) if self.brain.enabled else []
         store.append_chat(session_id, "user", text)
 
+        # ---- 对话入口(LLM 可用时):converse 先行,动作映射到既有代码路径 ----
+        # Brain(provider=None)/未配置不进此块,直接走下方规则路径 —— 「无 LLM
+        # 时系统退化为手动流水线、行为逐字节不变」的铁律(守护测试锁死)不动。
+        if self.brain.enabled:
+            outcome: ConverseResult | None = None
+            try:
+                outcome = self.brain.converse(
+                    text, history=history,
+                    state_summary=self._converse_state(session_id),
+                    registry=self.registry)
+            except BrainUnavailable:
+                # 诚实降级:LLM 失败不装哑,说明一句后走规则路径(与无 LLM 同轨)
+                yield self._emit(ev.note("warn", "LLM 暂不可用,已退化为关键词模式"))
+            if outcome is not None:
+                if (outcome.action or {}).get("type") == "plan":
+                    # plan 动作:reply 是规划前的过渡语;场景已过闭集校验,
+                    # 之后与规则路径共用同一套规划流程(绝不绕过校验/状态机)
+                    yield self._emit(ev.say([outcome.reply]))
+                    store.append_chat(session_id, "agent", outcome.reply)
+                    sc = scenario_of(outcome.action["scenario"])
+                    assert sc is not None  # facade 闭集校验保证 key 在场景包内
+                    if outcome.action.get("region") or outcome.action.get("timerange"):
+                        # LLM 抽取的区域/时间只覆盖场景包的展示元数据,
+                        # 不进指纹(Scenario.region/dates 本就是展示字段)
+                        sc = dataclasses.replace(
+                            sc, region=outcome.action.get("region", sc.region),
+                            dates=outcome.action.get("timerange", sc.dates))
+                    async for event in self._plan_turn(session_id, session, text, sc,
+                                                       intent_source="converse"):
+                        yield event
+                else:
+                    async for event in self._apply_converse(session_id, outcome):
+                        yield event
+                return
+
+        # ---- 规则路径(无 LLM / LLM 失败):行为与历史版本逐字节一致 ----
         intent = self.brain.intent(text)
         if intent.need_form:
             # 场景选项 = 技能包闭集(动态生成):此前硬编码三场景,第四包
@@ -206,11 +251,20 @@ class Driver:
             return
         sc = intent.scenario
         assert sc is not None
+        async for event in self._plan_turn(session_id, session, text, sc,
+                                           intent_source=intent.source):
+            yield event
+
+    # ---------------- 规划回合(turn 的规划主体,converse plan 动作与规则路径共用) ----------------
+
+    async def _plan_turn(self, session_id: str, session: dict, text: str,
+                         sc: Scenario, *, intent_source: str) -> AsyncIterator[dict]:
+        store = self.store
         mode = session["mode"]
         yield self._emit(ev.thinking(
             "解析意图与约束",
             f"区域:{sc.region or '待定'}\n目标:{sc.chain} 时序形变\n时间范围:{sc.dates or '待定'}\n"
-            f"场景:{sc.label}(来源:{intent.source})\n"
+            f"场景:{sc.label}(来源:{intent_source})\n"
             f"模式:{'专家(每步人工确认方法)' if mode == 'expert' else '向导(自动决策,关键节点征询)'}"))
 
         # ---- 环境探测(真实,不 mock) ----
@@ -259,7 +313,7 @@ class Driver:
         else:
             plan = make_plan(store, session_id, registry=self.registry, probe=probe,
                              scenario=sc, workspace=str(self.workspace),
-                             intent={"text": text, "source": intent.source},
+                             intent={"text": text, "source": intent_source},
                              overrides=overrides or None,
                              allow_simulated=self.allow_simulated,
                              agent_hash=self.agent_hash)
@@ -321,6 +375,115 @@ class Driver:
             reply = "全部步骤已完成。可改参数试探(fork)或导出报告。"
             yield self._emit(ev.say([reply]))
             store.append_chat(session_id, "agent", reply)
+
+    # ---------------- converse 动作映射(turn 的对话入口辅助) ----------------
+
+    async def _apply_converse(self, session_id: str,
+                              outcome: ConverseResult) -> AsyncIterator[dict]:
+        """converse 动作 → 既有代码路径的映射(plan 除外,turn 直接接规划流程)。
+
+        纪律:绝不绕过既有校验/状态机 —— execute 走 self.execute(运行锁/
+        control 位/租约照常),set_* 走 pending_actions 队列(消费点的
+        apply_change 再校验一次,双保险)。reply 一律走既有 say 事件形状
+        (parts 列表),前端零改动即可渲染。
+        """
+        store = self.store
+        kind = (outcome.action or {}).get("type")
+
+        if kind is None:
+            # 纯聊天(含动作越界被拦截):只落一条 agent 消息,不碰 run/plan 状态
+            yield self._emit(ev.say([outcome.reply]))
+            store.append_chat(session_id, "agent", outcome.reply)
+            return
+
+        action = outcome.action
+        assert action is not None
+        if kind == "execute":
+            # 等价用户点「运行流水线」:无 run / 计划有问题 / 锁被占等由
+            # execute 入口的既有检查发 note,这里不重复造判断
+            yield self._emit(ev.say([outcome.reply]))
+            store.append_chat(session_id, "agent", outcome.reply)
+            async for event in self.execute(session_id):
+                yield event
+            return
+
+        if kind == "status":
+            status_text = self._run_status_text(session_id)
+            yield self._emit(ev.say([outcome.reply, status_text]))
+            store.append_chat(session_id, "agent", f"{outcome.reply}\n{status_text}")
+            return
+
+        if kind == "check_env":
+            env_text = self._env_summary_text()
+            yield self._emit(ev.say([outcome.reply, env_text]))
+            store.append_chat(session_id, "agent", f"{outcome.reply}\n{env_text}")
+            return
+
+        # set_params / set_method:闭集校验已在 facade 完成,这里入队。
+        # deliver_as=steer:在跑 run 步间生效;空闲 run 由下次 execute 的
+        # 检查点/入口消费 —— 与前端「改参数」按钮同一条队列语义。
+        run = store.latest_run(session_id)
+        if run is None:
+            yield self._emit(ev.say([outcome.reply]))
+            store.append_chat(session_id, "agent", outcome.reply)
+            yield self._emit(ev.note(
+                "warn", "当前会话还没有 run,参数/方法修改无处归属;"
+                        "先说一句任务需求(场景/区域/时间)完成规划"))
+            return
+        if kind == "set_params":
+            act_name, payload = "SET_PARAMS", {"params": action["params"]}
+        else:
+            act_name, payload = "SET_METHOD", {"method": action["method"]}
+        store.push_action(scope="step", target=str(action["step"]), action=act_name,
+                          payload=payload, deliver_as="steer", run_id=run["run_id"])
+        yield self._emit(ev.say([outcome.reply]))
+        store.append_chat(session_id, "agent", outcome.reply)
+        yield self._emit(ev.intervention(
+            f"已排队:第 {action['step']} 步 {act_name} {payload}"
+            f"(steer,下一检查点生效)", affected=[action["step"]]))
+
+    def _env_summary_text(self) -> str:
+        """环境探测一行摘要(check_env 动作回复与 converse 状态注入共用)。"""
+        probe = self.probe()
+        ok = [f"{e} {v}" for e, v in sorted(probe.engines.items()) if v]
+        missing = [e for e, v in sorted(probe.engines.items()) if not v]
+        return (f"引擎可用:{'、'.join(ok) if ok else '无(将以模拟模式演示)'};"
+                f"缺失:{'、'.join(missing) if missing else '无'};"
+                f"磁盘 {probe.disk_free_gb:.0f} GB 可用,CPU {probe.cpu_count} 核")
+
+    def _run_status_text(self, session_id: str) -> str:
+        """最近 run 状态 + 步骤矩阵一行摘要(status 动作回复与状态注入共用)。"""
+        run = self.store.latest_run(session_id)
+        if run is None:
+            return "当前会话还没有 run;说一句任务需求(场景/区域/时间)即可开始规划。"
+        groups: dict[str, list[int]] = {}
+        for s in self.store.load_steps(run["run_id"]):
+            groups.setdefault(s.state, []).append(s.step_id)
+        matrix = ";".join(f"{state} {ids}" for state, ids in sorted(groups.items()))
+        sim = "(模拟)" if run.get("simulated") else ""
+        return (f"最近 run {run['run_id']}{sim}:场景 {run.get('scenario') or '-'},"
+                f"状态 {run['status']};步骤:{matrix or '无'}")
+
+    def _converse_state(self, session_id: str) -> str:
+        """converse 的系统状态摘要(注入 user 消息;system prompt 保持静态)。
+
+        四行:环境探测、最近 run 状态与步骤矩阵、可用场景闭集、数据源配置。
+        全部只读、一行一项 —— 上下文预算纪律(§3.3 约束四)对会话职责同样成立。
+        """
+        from insar_agent.registry.scenarios import SCENARIOS
+
+        src = os.environ.get("INSAR_HYP3_SOURCE", "")
+        if not src:
+            data_line = "未配置(INSAR_HYP3_SOURCE)"
+        else:
+            data_line = f"{src}({'在位' if Path(src).is_dir() else '路径不存在'})"
+        scenarios = "、".join(f"{s.key}({s.label})" for s in SCENARIOS)
+        return "\n".join([
+            f"环境:{self._env_summary_text()}",
+            f"运行:{self._run_status_text(session_id)}",
+            f"可用场景:{scenarios}",
+            f"数据源:{data_line}",
+        ])
 
     # ---------------- 执行回合 ----------------
 
