@@ -79,7 +79,9 @@ def _try_version(exe: str) -> str:
                             creationflags=_NO_WINDOW)
         out = (cp.stdout or cp.stderr or "").strip().splitlines()
         return out[0][:40] if out else "present"
-    except Exception:
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+        # 预期内失败闭集:启动失败/超时/输出不可解码 —— 存在性已确认,版本让步。
+        # 收窄自 except Exception(REVIEW P2-2:编程错误不再被吞)
         return "present"
 
 
@@ -100,7 +102,9 @@ def _windows_mem_gb() -> float | None:
         stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
         ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
         return round(stat.ullTotalPhys / (1 << 30), 1)
-    except Exception:
+    except (OSError, AttributeError):
+        # ctypes 面的预期失败:DLL/API 不可用(OSError)、非 Windows 解释器缺
+        # windll(AttributeError)。内存量是展示项,取不到即 None(REVIEW P2-2 收窄)
         return None
 
 
@@ -184,8 +188,8 @@ def probe_environment(workspace: Path | str = ".", *, with_versions: bool = Fals
                     capture_output=True, text=True, timeout=60, creationflags=_NO_WINDOW)
                 if cp.returncode == 0 and cp.stdout.strip():
                     result.engines["mintpy"] = cp.stdout.strip()
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+                pass  # 版本探测尽力而为:启动失败/超时/输出不可解码保持 present(P2-2 收窄)
 
     for cred, (file_hint, env_hint) in _CREDENTIALS.items():
         ok = bool(env_hint and os.environ.get(env_hint))

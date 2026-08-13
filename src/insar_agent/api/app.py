@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+import threading
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -170,6 +171,10 @@ def create_app(home: Path | None = None) -> FastAPI:
     store = Store(db)
     contract = load_contract()
     drivers: dict[str, Driver] = {}
+    # FastAPI 同步端点在线程池并发执行:driver_of 的 check-then-set 不互斥时,
+    # 同一会话的两个首次请求会各建一个 Driver(各自 EventBus/探测,SSE 订阅到
+    # 与实际执行不同的总线而收不到事件,REVIEW P2-7)
+    drivers_lock = threading.Lock()
 
     app = FastAPI(title="insar-agent", version="0.1.0")
 
@@ -191,13 +196,14 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
-        if session_id not in drivers:
-            ws = home / "sessions" / session_id
-            drivers[session_id] = Driver(
-                store, workspace=ws, brain=Brain(LLMProvider()),
-                allow_simulated=os.environ.get("INSAR_ALLOW_SIMULATED", "1") == "1")
-            store.create_session(session_id, session_id)
-        return drivers[session_id]
+        with drivers_lock:
+            if session_id not in drivers:
+                ws = home / "sessions" / session_id
+                drivers[session_id] = Driver(
+                    store, workspace=ws, brain=Brain(LLMProvider()),
+                    allow_simulated=os.environ.get("INSAR_ALLOW_SIMULATED", "1") == "1")
+                store.create_session(session_id, session_id)
+            return drivers[session_id]
 
     # 回合泵任务的强引用(asyncio 只弱引用 task,不留强引用会被 GC 掐断)
     turn_tasks: set[asyncio.Task] = set()
@@ -324,8 +330,10 @@ def create_app(home: Path | None = None) -> FastAPI:
             wsl_result = probe_wsl_engines_cached(timeout=30.0)  # TTL 缓存,与向导共享
             if wsl_result.get("ok"):
                 merge_wsl_probe(probe, wsl_result)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 —— 可选探测绝不拖垮环境面板
+            # wsl_probe 契约上已把 runner 异常内部归一化,这里兜底编程性意外;
+            # 留 debug 痕便于排障,不再静默(REVIEW P2-2)
+            log.debug("WSL 引擎探测合并失败,按未探测处置", exc_info=True)
         return {
             "probe": probe.to_dict(),
             "thresholds": [{"key": k, "value": t.value, "source": t.source,
@@ -569,6 +577,10 @@ def create_app(home: Path | None = None) -> FastAPI:
         坏数据/被篡改的 DB 行 —— 与 check_session_id 同理,读文件前必须
         在边界处规范化复核:绝对路径、盘符、../ 穿越都不放行。
         调用方对 None 统一按 404 处理,错误信息不携带磁盘路径。
+
+        既定边界(REVIEW-r2 P2-7):经目录联接/符号链接导入的产物树 resolve
+        后落在工作区外,同样返回 None(404)—— 联接树产物不经本 API 直读;
+        今天的 figures 均由脚本在工作区内直写目录,不受影响。
         """
         base = Path(run["workspace"]).resolve()
         rel = Path(rel_path)
@@ -591,6 +603,11 @@ def create_app(home: Path | None = None) -> FastAPI:
         三档缺档一律回退原图;_browse/_thumb 文件不单独成条目。
         同名 .json sidecar 存在且可解析时并入 meta 字段(坏文件容忍不并入)。
         尺寸与 mtime 取落盘原图实测值,不信 DB 记录(可能已被覆写)。
+
+        健壮性与口径(REVIEW-r2 P2-6/P2-7):画廊 3s 轮询会撞上出图步骤的
+        覆写/清理窗口 —— 枚举与 stat 之间消失的文件逐行跳过,绝不 500 整表;
+        目录成员 resolve 后必须仍落在产物目录内(与取回端点同一判据),
+        指向外部的符号链接不列出(列了也取不回,还泄漏外部文件元数据)。
         """
         run = resolve_run(session, run_id, required=False)
         if run is None:
@@ -604,8 +621,11 @@ def create_app(home: Path | None = None) -> FastAPI:
             return "/api/artifact-file?" + urlencode(q)
 
         def entry(art: dict, target: Path, member: str | None = None,
-                  browse: str | None = None, thumb: str | None = None) -> dict:
-            st = target.stat()
+                  browse: str | None = None, thumb: str | None = None) -> dict | None:
+            try:
+                st = target.stat()
+            except OSError:
+                return None  # is_file()/iterdir() 与 stat() 的窗口内文件被清理:跳过该行
             full = file_url(art, member)
             item = {
                 "step": art["step_id"], "artId": art["art_id"],
@@ -620,6 +640,15 @@ def create_app(home: Path | None = None) -> FastAPI:
                 item["meta"] = meta
             return item
 
+        def within(member: Path, base: Path) -> bool:
+            # 成员口径与 /api/artifact-file 的取回判据一致:resolve 后仍须落在
+            # 产物目录内 —— symlink 指向外部的成员不列(REVIEW-r2 P2-7);
+            # resolve 期间文件消失(竞态)按不在场处置
+            try:
+                return member.resolve().is_relative_to(base)
+            except OSError:
+                return False
+
         items = []
         for art in store.artifacts_of(run["run_id"]):
             target = resolve_artifact_file(run, art["path"])
@@ -627,14 +656,20 @@ def create_app(home: Path | None = None) -> FastAPI:
                 continue
             if Path(art["path"]).suffix.lower() in _IMAGE_MEDIA_TYPES:
                 if target.is_file():
-                    items.append(entry(art, target))
+                    item = entry(art, target)
+                    if item is not None:
+                        items.append(item)
             elif target.is_dir():
                 # 目录型产物(注册表里 figures 声明的是 products/figures 目录):
                 # 枚举目录内图像文件 —— 真实链的图件都长在这里,只按产物路径
                 # 后缀过滤会让画廊对标准管线永远空转(2026-08-12 终验发现)
-                children = sorted(p for p in target.iterdir()
-                                  if p.is_file()
-                                  and p.suffix.lower() in _IMAGE_MEDIA_TYPES)
+                try:
+                    children = sorted(p for p in target.iterdir()
+                                      if p.is_file()
+                                      and p.suffix.lower() in _IMAGE_MEDIA_TYPES
+                                      and within(p, target))
+                except OSError:
+                    continue  # 目录本身在枚举窗口内被清理:整个产物行跳过
                 by_stem = {p.stem: p.name for p in children}
                 listed = 0
                 for child in children:
@@ -644,9 +679,12 @@ def create_app(home: Path | None = None) -> FastAPI:
                     if any(stem.endswith(sfx) and stem[:-len(sfx)] in by_stem
                            for sfx in _TIER_SUFFIXES):
                         continue
-                    items.append(entry(art, child, member=child.name,
-                                       browse=by_stem.get(stem + "_browse"),
-                                       thumb=by_stem.get(stem + "_thumb")))
+                    item = entry(art, child, member=child.name,
+                                 browse=by_stem.get(stem + "_browse"),
+                                 thumb=by_stem.get(stem + "_thumb"))
+                    if item is None:
+                        continue
+                    items.append(item)
                     listed += 1
                     if listed >= 100:
                         break

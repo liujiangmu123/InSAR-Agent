@@ -14,6 +14,7 @@ POST /save 是用户刚做的选择,直接覆盖进程内 env,本进程立即生
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import sys
@@ -24,6 +25,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from insar_agent.runtime.probe import probe_environment
+
+log = logging.getLogger(__name__)
 
 # settings.json 键 → 进程环境变量
 _ENV_OF = {
@@ -153,8 +156,10 @@ def create_setup_router(home: Path | str | None = None) -> APIRouter:
             wsl_result = probe_wsl_engines_cached(timeout=30.0)
             if wsl_result.get("ok"):
                 merge_wsl_probe(probe, wsl_result)
-        except Exception:
-            pass  # 纯查询,失败静默:没装 WSL 的机器行为不变
+        except Exception:  # noqa: BLE001 —— 可选探测绝不拖垮向导
+            # 纯查询,失败不改变行为(没装 WSL 的机器照常);留 debug 痕,
+            # 不再完全静默(REVIEW P2-2)
+            log.debug("WSL 引擎探测合并失败,按未探测处置", exc_info=True)
 
         prefix = os.environ.get("INSAR_ENGINE_PREFIX") or None
         prefix_exists = bool(prefix) and Path(prefix).is_dir()

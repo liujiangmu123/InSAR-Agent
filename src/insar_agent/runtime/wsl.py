@@ -158,6 +158,12 @@ class WslJobBackend:
                 wsl_job_dir: str | None = None) -> None:
         """job_dir 传 WSL 侧 POSIX 路径的宿主映射;目录先在 WSL 内建好
         (顺带拉起 VM),契约小文件经 9p 写入。"""
+        for key in plan.env:
+            # env 键名逐字进 cmd.sh 的 export 语句(值经 shell_quote,键名无处
+            # 可引用):白名单断言收口注入面(REVIEW-r2 P2-4 顺带项);先校验
+            # 再做任何副作用,失败不留半截作业目录
+            if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key):
+                raise ValueError(f"环境变量名不合法,拒绝写入 cmd.sh:{key!r}")
         posix = wsl_job_dir or self._to_posix(job_dir)
         self.ensure_keepalive()
         made = self._wsl(f"mkdir -p {shell_quote(posix)}")
@@ -169,6 +175,8 @@ class WslJobBackend:
         # cwd 换算成 WSL 坐标系(Windows 工作区 → /mnt 只读输入,§4.9);
         # 保留原始宿主路径为注释,cmd.sh 仍可 diff 可复现
         cwd = str(self.paths.to_wsl(plan.cwd))
+        # shell_line 是逐字通道(注入面纪律见 CommandPlan docstring:只准引擎
+        # 内部常量拼接,外部值必须 shell_quote 后进入)
         line = plan.shell_line or " ".join(shell_quote(a) for a in plan.argv)
         env_lines = "\n".join(f"export {k}={shell_quote(v)}" for k, v in plan.env.items())
         (job_dir / "cmd.sh").write_text(
@@ -215,6 +223,12 @@ class WslJobBackend:
                 want = start_f.read_text().strip()
         except OSError:
             return JobState("unknown")
+        if not re.fullmatch(r"\d+", pid):
+            # job.pid 内容非纯数字 = 契约文件损坏/被篡改。该值会被插进以 root
+            # 执行的 bash 命令(/proc/<pid>/stat 探测),不校验即是注入面
+            # (REVIEW-r2 P2-4)。按 orphaned 处置:进程存活无法证实,且坏 pid
+            # 不会自愈,无需按 unknown 重试
+            return JobState("orphaned")
         # 在 WSL 内核实,绝不在宿主 os.kill(§0.5.2:宿主没有 POSIX 信号 API)
         try:
             got = self._wsl(f"awk '{{print $22}}' /proc/{pid}/stat 2>/dev/null || true",

@@ -622,3 +622,41 @@ def test_health_and_error_bodies_are_json(client):
     assert r.status_code == 404
     assert r.headers["content-type"].startswith("application/json")
     _detail_of(r)
+
+
+# ---------------- 7. driver_of 并发(REVIEW P2-7) ----------------
+
+def test_driver_of_concurrent_first_requests_build_single_driver(home, monkeypatch):
+    """同一会话的并发首次请求只构造一个 Driver。
+
+    FastAPI 同步端点跑线程池:check-then-set 无锁时两个首请求各建一个
+    Driver(各自 EventBus/探测),/api/events 可能订阅到与实际执行不同的
+    总线而收不到事件。构造函数注入 sleep 拉大竞态窗口,无锁必现双建。
+    """
+    import insar_agent.api.app as app_module
+
+    _seal(monkeypatch)
+    created: list[int] = []
+    real_driver = app_module.Driver
+
+    class SlowDriver(real_driver):
+        def __init__(self, *args, **kwargs):
+            created.append(1)
+            time.sleep(0.15)  # 拉大构造窗口:竞态若存在,8 线程必然重复构造
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "Driver", SlowDriver)
+    app = app_module.create_app(home=home)
+    with TestClient(app) as c:
+        codes: list[int] = []
+
+        def hit():
+            codes.append(c.get("/api/registry", params={"session": "racer"}).status_code)
+
+        threads = [threading.Thread(target=hit) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+    assert codes and all(code == 200 for code in codes)
+    assert len(created) == 1  # 无锁时为 2-8:各线程各建一个 Driver

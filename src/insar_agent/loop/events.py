@@ -35,7 +35,9 @@ class EventBus:
                 try:
                     q.get_nowait()
                     q.put_nowait(event)
-                except Exception:
+                except (asyncio.QueueEmpty, asyncio.QueueFull):
+                    # 预期内的队列竞态闭集(恰被抽干/又被塞满)→ 视作死订阅者剔除;
+                    # 其他异常是编程错误,不吞(REVIEW P2-2 收窄)
                     dead.append(q)
         for q in dead:
             self._subscribers.discard(q)

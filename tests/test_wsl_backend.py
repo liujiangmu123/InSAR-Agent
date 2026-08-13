@@ -353,6 +353,45 @@ def test_state_alive_orphaned_by_proc_starttime(tmp_path):
     assert backend.state(tmp_path).kind == "unknown"
 
 
+def test_state_rejects_non_numeric_pid_without_shelling_out(tmp_path):
+    """job.pid 内容非纯数字(契约损坏/篡改):按 orphaned 处置,且绝不把它
+    插进以 root 执行的 bash(REVIEW-r2 P2-4 注入面收口)。"""
+    (tmp_path / "job.pid").write_text("1/stat; touch /tmp/pwned #\n")
+    backend, runner = _backend(tmp_path, rules=[])
+    st = backend.state(tmp_path)
+    assert (st.kind, st.exit_code) == ("orphaned", None)
+    assert runner.calls == []  # 坏 pid 根本不进 wsl.exe
+
+
+def test_state_rejects_empty_or_padded_pid(tmp_path):
+    backend, runner = _backend(tmp_path, rules=[])
+    (tmp_path / "job.pid").write_text("\n")            # 空内容
+    assert backend.state(tmp_path).kind == "orphaned"
+    (tmp_path / "job.pid").write_text("-4242\n")       # 负号也不是合法 pid 形态
+    assert backend.state(tmp_path).kind == "orphaned"
+    assert runner.calls == []
+
+
+def test_prepare_rejects_invalid_env_key_before_side_effects(tmp_path):
+    """env 键名逐字进 cmd.sh 的 export 语句:白名单([A-Z_][A-Z0-9_]*)外
+    显式拒绝,且失败发生在一切副作用之前(不 spawn wsl.exe、不留半截作业目录)。"""
+    backend, runner = _backend(tmp_path)
+    bad = CommandPlan(argv=["true"], cwd=r"E:\ws",
+                      env={"OMP_NUM_THREADS; rm -rf /": "8"}, files={},
+                      shell_line="true")
+    with pytest.raises(ValueError, match="环境变量名"):
+        backend.prepare(tmp_path / "a1", bad,
+                        wsl_job_dir="/home/insar/work/.jobs/r1/s03/a1")
+    assert runner.calls == []
+    assert not (tmp_path / "a1").exists()
+    # 小写键同样拒绝(白名单是精确形态,不是"看起来无害")
+    lower = CommandPlan(argv=["true"], cwd=r"E:\ws", env={"path": "/x"}, files={},
+                        shell_line="true")
+    with pytest.raises(ValueError, match="环境变量名"):
+        backend.prepare(tmp_path / "a2", lower,
+                        wsl_job_dir="/home/insar/work/.jobs/r1/s03/a2")
+
+
 def test_cancel_touches_contract_file(tmp_path):
     backend, runner = _backend(tmp_path, rules=[])
     backend.cancel(tmp_path)
