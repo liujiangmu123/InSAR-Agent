@@ -37,6 +37,12 @@ _STATEMENT_MIGRATIONS: tuple[str, ...] = (
     # 迁移清单再列一份是显式台账 —— 未来 schema 重放策略若收紧,旧库不掉索引。
     "CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at, session_id)",
     "CREATE INDEX IF NOT EXISTS idx_trace_run_ts ON trace(run_id, ts)",
+    # 运行队列(loop/queue.py:全局串行调度的持久 FIFO)。建表走迁移而不动
+    # schema.sql 主文件:CREATE IF NOT EXISTS 幂等重放,新旧库同路径补齐。
+    "CREATE TABLE IF NOT EXISTS run_queue ("
+    " id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, session_id TEXT NOT NULL,"
+    " step_ids_json TEXT, enqueued_at REAL NOT NULL, started_at REAL,"
+    " state TEXT NOT NULL DEFAULT 'pending')",  # state: pending|running|done|cancelled
 )
 
 
