@@ -385,6 +385,8 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_diag_router(home))  # 诊断包一键导出(/api/diagnostics*)
     from insar_agent.api.data_catalog_router import create_data_catalog_router  # 数据集清单
     app.include_router(create_data_catalog_router(home))  # /api/datasets*(文件面板「数据集」区)
+    from insar_agent.api.recommend_router import create_recommend_router  # 处理路线推荐
+    app.include_router(create_recommend_router(home))  # /api/recommend(数据集 → 路线优劣对比)
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
