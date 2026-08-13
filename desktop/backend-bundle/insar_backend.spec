@@ -52,7 +52,10 @@ a = Analysis(
     runtime_hooks=[],
     # hypothesis:dev-only 测试库,经 pydantic.v1._hypothesis_plugin /
     # hypothesis.extra.numpy 的可选 import 被静态分析拖进包(首次打包实测),显式排除
-    excludes=["tkinter", "hypothesis"],
+    # PIL:requirements.txt 声明为「桌面打包脚本(非 agent 运行时)」,却经
+    # pygments.formatters.img 的可选 import 被拖进包(冻结探测复验实测,xref 溯源);
+    # 该 formatter 只在显式请求 ImageFormatter 时才 import,后端无此路径,排除安全
+    excludes=["tkinter", "hypothesis", "PIL"],
     noarchive=False,
 )
 
