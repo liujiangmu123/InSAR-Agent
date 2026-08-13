@@ -36,6 +36,7 @@ from starlette.datastructures import MutableHeaders
 
 from insar_agent.api.admin_router import create_admin_router
 from insar_agent.api.artifacts_router import create_artifacts_router
+from insar_agent.api.diag_router import create_diag_router
 from insar_agent.api.doctor_router import create_doctor_router
 from insar_agent.api.queue_router import create_queue_router
 from insar_agent.api.setup_router import create_setup_router
@@ -379,6 +380,7 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_artifacts_router(store))  # 产物清单(/api/artifacts,文件面板数据源)
     app.include_router(create_doctor_router(home))  # 一键体检(/api/doctor,面向排障的秒级只读深检)
     from insar_agent.api.data_router import create_data_router; app.include_router(create_data_router(store))  # 点位时序数据
+    app.include_router(create_diag_router(home))  # 诊断包一键导出(/api/diagnostics*)
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
