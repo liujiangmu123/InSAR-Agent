@@ -11,8 +11,11 @@
      渲染层(renderMarkdown)才碰 document,全部走 createElement + textContent,
      不用 innerHTML —— LLM 润色内容按不可信数据处理。
 
-   失败语义:后端不可达 / 无 run(404)/ file:// 打开 → resolve null,
-   绝不抛错;调用方拿到 null 就回落 dock.js 的静态演示草稿。
+   失败语义(无演示回落):
+   - 后端不可达 / file:// 打开 / 响应异常 → resolve null(调用方渲染
+     错误态带重试),绝不抛错;
+   - 后端可达但会话还没有 run(404)→ resolve { noRun: true }(调用方
+     渲染空态带运行引导)。
    ============================================================ */
 import { S } from './state.js';
 import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
@@ -28,7 +31,8 @@ export function invalidate() {
 }
 
 /** 拉取真实方法草稿(带 30s TTL 缓存;force=true 跳过缓存)。
-    404(本会话还没有 run)与网络失败统一返回 null —— 调用方回落演示草稿。
+    404(本会话还没有 run)→ { noRun: true }(空态);网络失败/其他
+    HTTP 错误 → null(错误态)。
     runId 可选(run 历史切换器接线,runswitch.js):缺省取 activeRunId(),
     非空 → /api/methods.md 带 run_id 生成历史 run 的方法草稿;缓存按 run
     区分,null(最新)行为与接线前完全一致。 */
@@ -42,6 +46,7 @@ export function fetchReportLive({ force = false, runId = activeRunId() } = {}) {
       const qs = new URLSearchParams({ session: S.sessionId });
       if (runId) qs.set('run_id', runId);
       const resp = await fetch(`/api/methods.md?${qs}`);
+      if (resp.status === 404) return { noRun: true };   // 会话无 run:空态(非错误)
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const markdown = await resp.text();
       return {

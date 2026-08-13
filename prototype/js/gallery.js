@@ -1,22 +1,22 @@
 /* ============================================================
    影像网格 + 灯箱(零依赖,面板 2「影像」的产物画廊)
-   数据源优先级:
-     1. GET /api/figures —— 真实运行产物,三档尺寸契约:
-        thumbUrl(320px 缩略,网格/胶片条)/ url(2048px browse,灯箱)/
-        fullUrl(原图,「查看原图」);sidecar 元数据并入 meta 字段;
-     2. 后端不可达 / file:// / 列表为空 —— 回落 figures.js 的
-        演示 SVG,并在卡片与灯箱上明确标注「演示图件」。
+   数据源:GET /api/figures —— 真实运行产物,三档尺寸契约:
+     thumbUrl(320px 缩略,网格/胶片条)/ url(2048px browse,灯箱)/
+     fullUrl(原图,「查看原图」);sidecar 元数据并入 meta 字段。
+   失败语义(无演示回落,states 统一构造器):
+     - 后端不可达 / file:// / 响应异常 → renderError(带重试);
+     - 可达但没有产物(新会话/还没出图) → renderEmpty(带运行引导);
+     绝不渲染内置假数据。
    灯箱(交互范式依据 RESEARCH-insar-viewer-ux / RESEARCH-raster-viewer-tech):
      - Canvas pan/zoom:滚轮缩放(锚点在光标)+ 拖拽平移 + 双击复位 +
        键盘 +/− 缩放,高 DPI 感知(devicePixelRatio);
      - 底部胶片条:当前图高亮,点击跳转(Vertex 浏览查看器范式);
      - 对比模式:卷帘(clip-path)/ 混合(透明度滑杆)/ 闪烁(定时交替,
-       间隔可调)/ 并排(双画布同步 pan/zoom,仅真实产物);Esc 逐层退出。
+       间隔可调)/ 并排(双画布同步 pan/zoom);Esc 逐层退出。
    与 stream.js 的 #lightbox(单图演示灯箱)互不依赖。
    ============================================================ */
 import { h } from './dom.js';
 import { S } from './state.js';
-import { figureNode, IMAGES } from './figures.js';
 import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
 import * as ES from './emptystate.js';          // states 接入:空态/骨架/错误态统一构造器
 
@@ -45,7 +45,7 @@ function fetchFigures() {
       if (!resp.ok) return null;
       return await resp.json();
     } catch {
-      return null;   // 离线/跨域/解析失败:一律回落演示,不打断 UI
+      return null;   // 离线/跨域/解析失败:归一为 null(错误态),不打断 UI
     }
   })();
   return cache.promise;
@@ -87,8 +87,8 @@ export function metaLine(meta) {
 }
 
 /* ---------------- 条目归一化 ----------------
-   真实产物与演示图件共用一个条目形状,网格与灯箱不再分辨来源:
-   { name, label, step, date, demo, meta, url/fullUrl/thumbUrl,
+   /api/figures 响应条目 → 网格与灯箱共用的条目形状:
+   { name, label, step, date, meta, url/fullUrl/thumbUrl,
      node() → 网格缩略节点 } */
 
 export function realItem(fig) {
@@ -103,7 +103,6 @@ export function realItem(fig) {
     step: fig.step,
     date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
     size: fig.size,
-    demo: false,
     meta,
     url: fig.url,                          // browse 档(灯箱/对比)
     fullUrl: fig.fullUrl || fig.url,       // 原图(查看原图)
@@ -111,20 +110,6 @@ export function realItem(fig) {
     node: () => h('img', {
       src: thumb, alt: fig.name, loading: 'lazy', draggable: 'false',
     }),
-  };
-}
-
-function demoItem(g) {
-  return {
-    name: g.name,
-    label: g.title || g.name,
-    step: g.step,
-    date: '',
-    title: g.title,
-    demo: true,
-    meta: null,
-    url: null, fullUrl: null, thumbUrl: null,
-    node: () => figureNode(g.id),
   };
 }
 
@@ -147,33 +132,38 @@ async function load(box) {
   const data = await fetchFigures();
   if (!box.isConnected) return;   // 面板已切走/重渲染,丢弃过期结果
 
-  const real = Array.isArray(data?.figures) && data.figures.length > 0;
-  const items = real ? data.figures.map(realItem) : IMAGES.map(demoItem);
-  // states 接入:非 real 的两个分支交给统一构造器 —— 后端不可达(catch 归一为
-  // null)= 错误态带「重试」;可达但无产物 = 空态卡 + 既有运行入口(自定义事件
-  // 解耦);演示网格保留在下方,卡片自身已带「演示图件」角标。
-  const stateNode = real ? null : (data === null
-    ? ES.renderError(null, {
-        message: '产物列表读取失败——后端不可达或响应异常;以下为演示图件(手绘 SVG,非真实产物)。',
-        retry: () => { invalidate(); load(box); } })
-    : ES.renderEmpty(null, { icon: 'image', title: '还没有产物图件',
-        hint: '运行流水线的出图步骤即可生成——以下为演示图件(手绘 SVG,非真实产物)。',
-        action: { label: '运行流水线以生成图件', event: 'states:run-pipeline' } }));
-  const note = real
-    ? `真实运行产物 · ${items.length} 张(GET /api/figures)。网格用缩略档,灯箱用 2048px 浏览档,原图另开。`
-    : '';
+  const head = h('h3', { class: 'sect' }, '产物图件 · 点击查看大图',
+    h('button', {
+      class: 'glx-refresh', type: 'button', title: '重新读取产物列表',
+      'aria-label': '刷新产物列表',
+      onclick: () => { invalidate(); load(box); },
+    }, '刷新'));
 
-  box.replaceChildren(...[
-    h('h3', { class: 'sect' }, real ? '产物图件 · 点击查看大图' : '产物图件(演示) · 点击查看大图',
-      real ? h('button', {
-        class: 'glx-refresh', type: 'button', title: '重新读取产物列表',
-        'aria-label': '刷新产物列表',
-        onclick: () => { invalidate(); load(box); },
-      }, '刷新') : null),
-    stateNode,
+  // 后端不可达 / 响应异常(catch 归一为 null)→ 错误态带「重试」,不装有数据
+  if (data === null) {
+    box.replaceChildren(head, ES.renderError(null, {
+      message: '产物列表读取失败——后端不可达或响应异常。',
+      retry: () => { invalidate(); load(box); },
+    }));
+    return;
+  }
+
+  const items = (Array.isArray(data.figures) ? data.figures : []).map(realItem);
+  // 可达但没有产物(新会话/还没出图)→ 空态卡 + 既有运行入口(自定义事件解耦)
+  if (!items.length) {
+    box.replaceChildren(head, ES.renderEmpty(null, {
+      icon: 'image', title: '还没有产物图件',
+      hint: '运行流水线的出图步骤即可生成——图件与元数据将在此展示。',
+      action: { label: '运行流水线以生成图件', event: 'states:run-pipeline' },
+    }));
+    return;
+  }
+
+  box.replaceChildren(
+    head,
     grid(items),
-    note ? h('p', { class: 'blurb' }, note) : null,
-  ].filter(Boolean));
+    h('p', { class: 'blurb' },
+      `真实运行产物 · ${items.length} 张(GET /api/figures)。网格用缩略档,灯箱用 2048px 浏览档,原图另开。`));
 }
 
 /** 网格节点(导出供 node 单测校验 DOM 结构)。 */
@@ -186,9 +176,7 @@ export function grid(items) {
       'aria-label': `查看大图:${it.name}(第 ${it.step} 步)`,
       onclick: (e) => openLightbox(items, i, e.currentTarget),
     },
-      h('div', { class: 'glx-thumb' },
-        it.node(),
-        it.demo ? h('span', { class: 'glx-demo' }, '演示图件') : null),
+      h('div', { class: 'glx-thumb' }, it.node()),
       h('div', { class: 'glx-meta' },
         h('span', { class: 'glx-name', title: it.name }, it.label),
         h('span', { class: 'glx-sub' },
@@ -339,7 +327,7 @@ function openLightbox(items, idx, returnFocus) {
       class: 'glx-strip-item', type: 'button', role: 'listitem', title: it.name,
       'aria-label': `第 ${i + 1} 张:${it.name}`,
       onclick: () => onStripClick(i),
-    }, it.demo ? it.node() : h('img', {
+    }, h('img', {
       src: it.thumbUrl, alt: '', loading: 'lazy', draggable: 'false',
     })));
   });
@@ -384,7 +372,7 @@ function show(i) {
   // 预热相邻两张 browse 档,翻页零等待(经典 lightbox 预加载模式)
   for (const d of [1, -1]) {
     const it = lb.items[(((lb.idx + d) % n) + n) % n];
-    if (it && !it.demo && it.url) new Image().src = it.url;
+    if (it && it.url) new Image().src = it.url;
   }
 }
 
@@ -403,8 +391,6 @@ function setMode(mode) {
 function startCompare(bIdx) {
   lb.bIdx = bIdx;
   lb.mode = 'compare';
-  const A = lb.items[lb.idx], B = lb.items[bIdx];
-  if (lb.cmpMode === 'side' && (A.demo || B.demo)) lb.cmpMode = 'swipe';   // 并排仅限真实产物
   renderAll();
 }
 
@@ -444,28 +430,21 @@ function renderStage() {
   clearStage();
   const it = lb.items[lb.idx];
   if (lb.mode !== 'compare') {
-    // view/pick 共用普通大图台面:真实产物走 canvas pan/zoom,演示 SVG 原样嵌入
-    if (it.demo) {
-      lb.stage.replaceChildren(h('div', { class: 'glx-demo-host' },
-        it.node(), h('span', { class: 'glx-demo' }, '演示图件')));
-    } else {
-      const canvas = h('canvas', { class: 'glx-lb-canvas', 'aria-label': `大图:${it.name}` });
-      lb.stage.replaceChildren(canvas);
-      const v = attachViewer(canvas);
-      lb.viewers.push(v);
-      v.load(it.url);
-    }
+    // view/pick 共用普通大图台面:canvas pan/zoom
+    const canvas = h('canvas', { class: 'glx-lb-canvas', 'aria-label': `大图:${it.name}` });
+    lb.stage.replaceChildren(canvas);
+    const v = attachViewer(canvas);
+    lb.viewers.push(v);
+    v.load(it.url);
     return;
   }
   const A = lb.items[lb.idx], B = lb.items[lb.bIdx];
   lb.stage.replaceChildren(lb.cmpMode === 'side' ? buildSide(A, B) : buildOverlay(A, B));
 }
 
-/** 对比图层:真实产物用 browse 档 <img>,演示图件复用其 SVG 节点。 */
+/** 对比图层:browse 档 <img>。 */
 function cmpLayer(it) {
-  return it.demo
-    ? h('div', { class: 'glx-cmp-node' }, it.node())
-    : h('img', { class: 'glx-cmp-img', src: it.url, alt: it.name, draggable: 'false' });
+  return h('img', { class: 'glx-cmp-img', src: it.url, alt: it.name, draggable: 'false' });
 }
 
 function chip(tag, it) {
@@ -545,27 +524,23 @@ function renderTools() {
         : '与另一张图对比(卷帘 / 混合 / 闪烁 / 并排)',
       onclick: () => setMode(lb.mode === 'pick' ? 'view' : 'pick'),
     }, lb.mode === 'pick' ? '取消选择' : '对比'));
-    if (!it.demo && it.fullUrl) {
+    if (it.fullUrl) {
       kids.push(h('a', {
         class: 'glx-lb-btn', href: it.fullUrl, target: '_blank', rel: 'noopener',
         title: '在新标签页打开原图(全分辨率)',
       }, '查看原图'));
     }
   } else {
-    const A = lb.items[lb.idx], B = lb.items[lb.bIdx];
-    const bothReal = !A.demo && !B.demo;
-    const mk = (id, label, enabled = true, why = '') => h('button', {
+    const mk = (id, label) => h('button', {
       class: 'glx-lb-btn', type: 'button', 'aria-pressed': String(lb.cmpMode === id),
-      disabled: enabled ? null : true, title: why || label,
+      title: id === 'side' ? '并排 + 同步缩放平移' : label,
       onclick: () => {
         if (lb.cmpMode === id) return;
         lb.cmpMode = id;
         renderStage(); renderTools(); updateBar();
       },
     }, label);
-    kids.push(
-      mk('swipe', '卷帘'), mk('blend', '混合'), mk('flicker', '闪烁'),
-      mk('side', '并排', bothReal, bothReal ? '并排 + 同步缩放平移' : '演示图件不支持并排画布'));
+    kids.push(mk('swipe', '卷帘'), mk('blend', '混合'), mk('flicker', '闪烁'), mk('side', '并排'));
     if (lb.cmpMode === 'blend') kids.push(blendSlider());
     if (lb.cmpMode === 'flicker') kids.push(flickerSlider());
     kids.push(h('button', {
@@ -638,7 +613,7 @@ function updateBar() {
     lb.metaEl.textContent = metaLine(it.meta);   // 无 sidecar 时为空,保持现状
     lb.hintEl.textContent = lb.mode === 'pick'
       ? '在胶片条选择第二张图(Esc 取消)'
-      : (it.demo ? '' : '滚轮缩放 · 拖拽平移 · 双击复位 · +/− 缩放');
+      : '滚轮缩放 · 拖拽平移 · 双击复位 · +/− 缩放';
   }
   lb.countEl.textContent = n > 1 ? `${lb.idx + 1} / ${n}` : '';
 }

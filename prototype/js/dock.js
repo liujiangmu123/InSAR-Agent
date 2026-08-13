@@ -5,12 +5,11 @@
    ============================================================ */
 import { h, txt, icon, $, keepScroll, toast } from './dom.js';
 import {
-  S, LADDER, STEP_DEFS, def_, st_, fileTree, validateParam, workSummary,
+  S, LADDER, STEP_DEFS, def_, st_, validateParam, workSummary,
   THRESHOLDS, evidenceCeiling,
 } from './state.js';
-import { figureNode, figureSvg, mapSvg, timeSeriesSvg, IMAGES, POINTS, DATES } from './figures.js';
 import { galleryView } from './gallery.js';
-import { ENV_NOTE, WSL, WORKSPACE, ENGINES, DISKS, TERM_LOGS, cmdSh, TRACE } from './envdata.js';
+import { ENV_NOTE, WSL, WORKSPACE, ENGINES, DISKS } from './envdata.js';
 import * as API from './backend.sse.js';   // 面板 7/8 实时数据；离线时各视图回落演示数据
 import * as RS from './runswitch.js';       // run 历史切换器(仅流水线面板顶部挂载)
 import * as ES from './emptystate.js';      // states 接入:空态/骨架/错误态统一构造器(零依赖)
@@ -358,14 +357,14 @@ export function buildCmd(stepId) {
    影像视图：画廊 + 小地图 + 点位时序
    ============================================================ */
 function imagesView() {
-  // 产物图件网格:真实产物(GET /api/figures → /api/artifact-file)优先,
-  // 后端不可达/无产物时回落演示图件 —— 数据源与灯箱逻辑全在 gallery.js。
+  // 产物图件网格:真实产物(GET /api/figures → /api/artifact-file),
+  // 不可达 → 错误态带重试 / 无产物 → 空态带运行引导 —— 全在 gallery.js。
   const gal = galleryView();
 
   // 下半区(空间浏览小地图 + 点位时序卡)整体归 tspoint.js:点击地图 →
-  // GET /api/timeseries-point 取真实单像元时序(Shift 叠加对比),后端
-  // 不可达/模拟运行无真实产物时回落演示曲线。动态 import 与 envlive 同策略,
-  // 不新增模块级 import(与并行分支的 dock.js 改动解耦)。
+  // GET /api/timeseries-point 取真实单像元时序(Shift 叠加对比);不可达/
+  // 无真实时序时由 tspoint.js 渲染诚实的错误态/空态。动态 import 与
+  // envlive 同策略,不新增模块级 import(与并行分支的 dock.js 改动解耦)。
   const spatial = h('div', null);
   import('./tspoint.js').then((m) => { if (spatial.isConnected) m.mountSpatial(spatial); });
 
@@ -375,118 +374,17 @@ function imagesView() {
     spatial);
 }
 
-function tsCard(p) {
-  const svg = timeSeriesSvg({
-    title: '', unit: 'mm', w: 340, h: 190, dates: DATES,
-    series: [{ name: p.name, ts: p.ts, color: p.ref ? '#0c1e3a' : '#dc2626' }],
-  });
-  return h('div', { class: 'tscard' },
-    h('div', { class: 'hd' }, `${p.name} · 点位时序`,
-      h('span', { class: 'mono' }, p.ref ? 'GNSS 实测对照' : 'MintPy 反演')),
-    h('div', { html: svg }),
-    h('div', { class: 'stats' },
-      h('span', null, '年均速率 ', h('b', { style: { color: p.rate < 0 ? 'var(--bad)' : 'var(--accent)' } },
-        `${p.rate > 0 ? '+' : ''}${p.rate} mm/yr`)),
-      p.std !== null ? h('span', null, '不确定度 ', h('b', null, `±${p.std}`)) : null,
-      h('span', null, '时序点数 ', h('b', null, String(p.ts.length))),
-      p.ref ? h('span', null, '用作 GNSS 校验 ', h('b', null, '✓')) : null));
-}
-
 /* ============================================================
-   文件视图：产物树（从步骤输出派生）+ 预览
+   文件视图：真实产物树（GET /api/artifacts）
    ============================================================ */
-const FILE_TEXT = {
-  'params/unwrap.yaml': () => {
-    const st = st_(6);
-    return [
-      ['# 解缠参数（第 6 步决策产物）', 'cm'],
-      [`method: ${st.method}`, 'hi'],
-      `min_coherence: ${st.params.min_coherence}`,
-      `threads: ${st.params.threads}`,
-      '',
-      ['# 上游指纹', 'cm'],
-      `upstream: ${st_(5).fingerprint}`,
-      [`fingerprint: ${st.fingerprint}`, 'hi'],
-    ];
-  },
-  'provenance.json': () => {
-    const s6 = st_(6), s7 = st_(7), s11 = st_(11);
-    return [
-      '{',
-      '  "schema_version": "1.0",',
-      '  "run_id": "01J8X…-ridgecrest-2019",',
-      '  "chain": "ISCE2 → SNAPHU → MintPy",',
-      '  "steps": {',
-      '    "6": {',
-      '      "name": "解缠",',
-      [`      "method": "${s6.method}",`, 'hi'],
-      `      "params": ${JSON.stringify(s6.params)},`,
-      `      "fingerprint": "${s6.fingerprint}",`,
-      `      "upstream": "${st_(5).fingerprint}",`,
-      '      "tool": "SNAPHU 2.0.7",',
-      `      "status": "${s6.state}"`,
-      '    },',
-      `    "7": { "method": "${s7.method}", "fingerprint": "${s7.fingerprint}" },`,
-      `    "11": { "qa": "crossval_ps_sbas", "corr": 0.92, "level": "${LADDER[S.evidenceLevel]}" }`,
-      '  },',
-      '  "environment": { "python": "3.11.9", "conda_env_sha": "4f21…9ac3" },',
-      '  "repo": { "git_head": "08471c2", "status": "clean" }',
-      '}',
-    ];
-  },
-  'products/report/methods_draft.md': () => [
-    ['# 2.3 InSAR 时序形变分析', 'hi'],
-    '',
-    '本研究使用 Sentinel-1 降轨影像（2019-06-10 — 2019-08-15，7 个获取日期），',
-    '经 ASF HyP3 生成 11 个小基线干涉对，Goldstein 滤波',
-    `（α=${st_(5).params.alpha}）后采用 ${st_(6).method} 解缠〔prov-6〕。`,
-    '',
-    '断层西侧同震 LOS 位移 −182.0 ± 12.4 mm〔prov-10〕，东侧 +96.5 ± 8.7 mm，',
-    '与 GNSS 站 P580 相关系数 0.86，PS/SBAS 交叉验证一致性 0.92。',
-    '',
-    ['> 证据边界：报告处理链贯通性与量级一致性，非经标定的形变产品；', 'cm'],
-    ['> 12 天重访采样不足以分离同震与震后早期形变。', 'cm'],
-  ],
-};
-
 function filesView() {
   /* 真实化（GET /api/artifacts，经 fileslive.js 拉取与 30s 缓存）：
-     加载中骨架屏 → 真实产物树（步骤分组 + 三段指纹详情卡）；无 run /
-     后端不可达 → 回落 fileTree() 演示派生并顶部醒目标注「演示数据」。
+     加载中骨架屏 → 真实产物树（步骤分组 + 三段指纹详情卡）；
+     后端不可达 → 错误态带重试；会话还没有 run → 空态带运行引导。
      fileslive.js 走动态 import，不新增模块级 import（同 envView 做法，
      与并行分支的 dock.js 改动解耦）。 */
   const root = h('div', null,   // states 接入:请求中分支 → 树形骨架(fileslive 动态 import 前的首帧)
     ES.renderSkeleton(null, { kind: 'tree', rows: 6, label: '正在读取产物清单（GET /api/artifacts）' }));
-
-  // ---- 演示回落：原 fileTree() 派生树原样保留，仅加顶部横幅 ----
-  const demoBody = (FILES) => {
-    const tree = fileTree();
-    const rows = h('div', { class: 'rows' }, ...tree.map((f) => h('button', {
-      class: 'row', type: 'button',
-      'aria-current': String(S.selectedFile === f.path),
-      onclick: () => { S.selectedFile = f.path; refresh(); },
-    },
-      h('span', { class: 'ic' }, icon(f.isDir ? 'folder' : 'file')),
-      h('span', { class: 'nm' }, f.path),
-      f.hash && !f.isDir ? h('span', { class: 'hs' }, f.hash) : null,
-      h('span', { class: 'mt' }, `#${f.step}`),
-      f.stale ? h('span', { class: 'led', style: { background: 'var(--stale)' }, title: 'STALE' })
-              : f.exists ? h('span', { class: 'led', style: { background: 'var(--ok)' }, title: '有效' })
-              : h('span', { class: 'led', style: { background: 'var(--border-strong)' }, title: '未生成' }))));
-
-    return [
-      FILES.demoBanner('产物树为步骤输出的演示派生（state.js fileTree，指纹为示意值），非真实 run 记录。', {
-        onRetry: () => { FILES.invalidate(); refresh(); },
-      }),
-      h('h3', { class: 'sect' }, '数据与产物 · 由步骤输出派生'),
-      rows,
-      S.selectedFile ? filePreview(S.selectedFile, tree) : null,
-      h('h3', { class: 'sect' }, '指纹'),
-      h('p', { class: 'blurb' },
-        '每个产物携带 sha256 指纹与生成命令。参数变更 → 指纹失配 → 标 STALE。' +
-        '指纹计算包含：method + params + 上游指纹 + 工具版本 + 输入清单。'),
-    ].filter(Boolean);
-  };
 
   (async () => {
     const FILES = await import('./fileslive.js');
@@ -494,141 +392,47 @@ function filesView() {
     root.replaceChildren(FILES.skeleton());        // 骨架屏：等待清单结果
     const data = await FILES.fetchFilesLive();
     if (!root.isConnected) return;                 // 面板已切走，丢弃过期结果
-    root.replaceChildren(...(data
-      ? FILES.liveBody(data, {
-          onRefresh: () => { FILES.invalidate(); refresh(); },
-          openImages,
-        })
-      : demoBody(FILES)));
+    if (data === null) {
+      // 后端不可达/响应异常 → 错误态带重试，绝不渲染假产物树
+      root.replaceChildren(
+        h('h3', { class: 'sect' }, '数据与产物'),
+        ES.renderError(null, {
+          message: '产物清单读取失败——后端不可达或响应异常（GET /api/artifacts）。',
+          retry: () => { FILES.invalidate(); refresh(); },
+        }));
+      return;
+    }
+    if (data.noRun) {
+      // 后端可达但会话还没有 run → 空态带运行引导
+      root.replaceChildren(
+        h('h3', { class: 'sect' }, '数据与产物'),
+        ES.renderEmpty(null, {
+          icon: 'folder', title: '还没有 run 记录',
+          hint: '运行一次流水线即可生成——每个产物的路径、大小与三段指纹在此可查。',
+          action: { label: '运行流水线', event: 'states:run-pipeline' },
+        }));
+      return;
+    }
+    root.replaceChildren(...FILES.liveBody(data, {
+      onRefresh: () => { FILES.invalidate(); refresh(); },
+      openImages,
+    }));
   })();
 
   return root;
 }
 
-function filePreview(path, tree) {
-  const f = tree.find((x) => x.path === path);
-  const isImg = /\.png$/.test(path);
-  const textGen = FILE_TEXT[path];
-
-  const tags = h('div', { class: 'tags' },
-    h('span', null, f?.hash || '—'),
-    h('span', null, f?.kind || ''),
-    h('span', null, f?.stale ? 'STALE · 待重跑' : f?.exists ? '有效' : '未生成'),
-    h('span', null, `由第 ${f?.step} 步生成`));
-
-  if (isImg) {
-    const figId = path.includes('vel_') ? 'vel' : 'ts';
-    return h('div', { class: 'fview' },
-      h('div', { class: 'bar' }, path.split('/').pop(),
-        h('span', { class: 'mono' }, f?.hash || ''), h('span', { class: 'ro' }, '只读预览')),
-      h('div', { class: 'pic' }, figureNode(figId)),
-      tags,
-      h('div', { style: { padding: '0 11px 10px' } },
-        h('button', { class: 'btn btn-gho btn-sm', type: 'button', onclick: () => hooks.lightbox?.(figId) },
-          icon('expand'), '全屏查看')));
-  }
-
-  if (!textGen) {
-    return h('div', { class: 'fview' },
-      h('div', { class: 'bar' }, path, h('span', { class: 'ro' }, '只读')),
-      h('div', { class: 'empty' }, '目录或二进制产物，此处仅展示元数据。'),
-      tags);
-  }
-
-  const pre = h('pre');
-  for (const row of textGen()) {
-    const [text, cls] = Array.isArray(row) ? row : [row, ''];
-    pre.appendChild(cls ? h('span', { class: cls }, text) : txt(text));
-    pre.appendChild(txt('\n'));
-  }
-  return h('div', { class: 'fview' },
-    h('div', { class: 'bar' }, path.split('/').pop(),
-      h('span', { class: 'mono' }, f?.hash || ''), h('span', { class: 'ro' }, '只读')),
-    pre, tags);
-}
-
 /* ============================================================
-   审计视图：证据阶梯 + provenance 树 + 指标契约
+   审计视图：服务端证据阶梯 + 每步来源 + 阈值台账
    ============================================================ */
 function auditView() {
   /* 真实化(/api/provenance 权威证据链 + /api/env 阈值台账,经 auditlive.js
      拉取与 30s 缓存):run 存在即渲染服务端证据级 —— 级别词汇严格用后端
-     六级(evidence.ladder),不再展示本地 LADDER 自算的级别;
-     无 run(404)/后端不可达 → 回落本地演示渲染并顶部醒目标注「演示数据」
-     (横幅与 env 面板同款)。auditlive.js 走动态 import,不新增模块级
-     import(与并行分支的 dock.js 改动解耦)。 */
+     六级(evidence.ladder);后端不可达 → 错误态带重试;会话还没有 run
+     (404)→ 空态带运行引导,绝不渲染本地自算的演示证据链。
+     auditlive.js 走动态 import,不新增模块级 import(与并行分支解耦)。 */
   const root = h('div', null,   // states 接入:请求中分支 → 列表骨架(auditlive 动态 import 前的首帧)
     ES.renderSkeleton(null, { kind: 'list', rows: 6, label: '正在读取证据链(GET /api/provenance)' }));
-
-  // ---- 演示回落:state.js 本地演示逻辑(仅离线/无 run 时展示) ----
-  const demoBody = (AUD) => {
-    const ladder = h('div', { class: 'ladder', role: 'list' },
-      ...LADDER.map((lv, i) => h('div', {
-        class: `lv${i <= S.evidenceLevel ? ' on' : ''}${i === S.evidenceLevel ? ' cur' : ''}`,
-        role: 'listitem',
-        title: i <= S.evidenceLevel ? '已达成' : '未达成',
-      }, lv)));
-
-    const s6 = st_(6), s9 = st_(9);
-    // 面板联动 §7.3 第 4 条：每个节点标注来源步骤，点击跳流水线并选中该步
-    const tree = h('div', { class: 'tree' },
-      ...[
-        ['产物', `velocity.h5 · ${s9.fingerprint}`, 9],
-        ['└ 命令', `timeseries2velocity.py --method ${s9.method}`, 9],
-        ['　└ 输入', `timeseries_corrected.h5 · ${st_(8).fingerprint}`, 8],
-        ['　　└ 命令', `smallbaselineApp.py --dostep invert_network --method ${st_(7).method}`, 7],
-        ['　　　└ 输入', `data/unw · ${s6.fingerprint}`, 6],
-        ['　　　　└ 命令', `snaphu.py --method ${s6.method}`, 6],
-        ['　　　　　└ 输入', `data/ifg_filt · ${st_(5).fingerprint}`, 5],
-      ].map(([k, v, sid]) => h('button', {
-        class: 'ln', type: 'button',
-        title: `第 ${sid} 步 · ${def_(sid)?.name || ''} —— 点击跳到流水线`,
-        'aria-label': `跳转到流水线第 ${sid} 步 ${def_(sid)?.name || ''}`,
-        onclick: () => gotoStep(sid),
-      },
-        h('span', { class: 'k' }, k), h('span', { class: 'v' }, v))));
-
-    const contract = h('div', { class: 'contract' },
-      metricRow('ps_count', 'preferred', 'ps_plot.h5 : n_ps', 'ok', '重解析一致'),
-      metricRow('mean_velocity', 'preferred', 'velocity.h5 : velocity', 'ok', '重解析一致'),
-      metricRow('gnss_correlation', 'preferred', 'crossval.json : pearson_r', 'ok', '重解析一致'),
-      metricRow('seasonal_amplitude', 'forbidden', '12 天采样不足以解析', 'bad', '硬 gate'),
-      metricRow('ps_count', 'forbidden', 'log 文件（叙述非数据）', 'bad', '硬 gate'));
-
-    const partial = STEP_DEFS.some((d) => st_(d.id).state === 'failed');
-
-    const { pending } = evidenceCeiling();
-
-    // 阈值台账：来源与标定状态显式可见（§4.13）
-    const thr = h('div', { class: 'contract' }, ...THRESHOLDS.map((t) => h('div', { class: 'm' },
-      h('span', { class: 'nm' }, t.key),
-      h('span', { class: 'mono', style: { color: 'var(--text)' } }, String(t.value)),
-      h('span', { class: `tag is-${t.status === 'OK' ? 'ok' : 'stale'}` },
-        t.status === 'OK' ? 'A 上游默认' : '⚠ PENDING'),
-      h('span', { class: 'src' }, t.ref))));
-
-    return [
-      AUD.demoBanner('审计为本地演示逻辑(state.js 自算),非服务端证据链;完成一次运行后自动接入真实账本。', {
-        onRetry: () => { AUD.invalidate(); refresh(); },
-      }),
-      h('h3', { class: 'sect' }, `六级证据阶梯 · 当前 ${LADDER[S.evidenceLevel]}`),
-      ladder,
-      pending.length ? h('div', { class: 'note is-stale', style: { marginTop: '9px' } },
-        icon('warn'), h('span', null, h('b', null, `${pending.length} 个阈值未标定`),
-          '，证据级别封顶 audited。validated 需先完成阈值标定。')) : null,
-      h('p', { class: 'blurb' },
-        `已达 ${LADDER[S.evidenceLevel]}：处理链跑通、QA 指标经复核、artifact 与 provenance 已记录。` +
-        'validated 需双链交叉验证阈值完成标定；calibrated 需 GNSS 标定 —— 两者均属 next-milestone scope。'),
-      h('h3', { class: 'sect' }, 'Provenance 上游数据流'),
-      tree,
-      h('h3', { class: 'sect' }, '质量门阈值台账'),
-      thr,
-      h('h3', { class: 'sect' }, '指标来源契约'),
-      contract,
-      partial ? h('div', { class: 'note is-bad', style: { marginTop: '10px' } },
-        icon('warn'), 'Partial evidence is still useful evidence. 失败步骤已同样触发审计。') : null,
-    ];
-  };
 
   (async () => {
     const AUD = await import('./auditlive.js');
@@ -636,23 +440,32 @@ function auditView() {
     root.replaceChildren(AUD.skeleton());          // 骨架屏:等待证据链读取
     const data = await AUD.fetchAuditLive();
     if (!root.isConnected) return;                 // 面板已切走,丢弃过期结果
-    root.replaceChildren(...(data
-      ? AUD.renderLive(data, {
-          onRefresh: () => { AUD.invalidate(); refresh(); },
-          gotoStep,
-        })
-      : demoBody(AUD)));
+    if (data === null) {
+      root.replaceChildren(
+        h('h3', { class: 'sect' }, '六级证据阶梯'),
+        ES.renderError(null, {
+          message: '证据链读取失败——后端不可达或响应异常(GET /api/provenance)。',
+          retry: () => { AUD.invalidate(); refresh(); },
+        }));
+      return;
+    }
+    if (data.noRun) {
+      root.replaceChildren(
+        h('h3', { class: 'sect' }, '六级证据阶梯'),
+        ES.renderEmpty(null, {
+          icon: 'shield', title: '还没有证据链记录',
+          hint: '运行一次流水线即可生成——每步证据来源、六级评定与阈值台账在此可审。',
+          action: { label: '运行流水线', event: 'states:run-pipeline' },
+        }));
+      return;
+    }
+    root.replaceChildren(...AUD.renderLive(data, {
+      onRefresh: () => { AUD.invalidate(); refresh(); },
+      gotoStep,
+    }));
   })();
 
   return root;
-}
-
-function metricRow(name, role, src, tone, verdict) {
-  return h('div', { class: 'm' },
-    h('span', { class: 'nm' }, name),
-    h('span', { class: `tag is-${tone}` }, role),
-    h('span', { class: 'src' }, src),
-    h('span', { class: 'tag' }, verdict));
 }
 
 /* ============================================================
@@ -663,50 +476,11 @@ function reportView() {
      run done 后渲染服务端生成的真实方法草稿 —— 顶部标注生成来源
      （X-Narrate-Source：llm = LLM 增强 / template = 规则生成）＋「下载 .md」
      Blob 下载；草稿里的〔prov-N〕可溯引用渲染为特殊样式（.cite）。
-     无 run（404）/ 后端不可达 → 回落原静态演示草稿 + 「演示数据」横幅。
+     后端不可达 → 错误态带重试；会话还没有 run（404）→ 空态带运行引导，
+     绝不渲染数字为示意值的静态演示草稿。
      reportlive.js 走动态 import，不新增模块级 import（与并行分支解耦）。 */
   const root = h('div', null,   // states 接入:请求中分支 → 段落骨架(报告面板此前只有一行裸文本)
     ES.renderSkeleton(null, { kind: 'text', rows: 7, label: '正在获取方法草稿（GET /api/methods.md）' }));
-
-  // ---- 演示回落：原静态草稿（数字为示意值），顶部醒目标注 ----
-  const demoBody = (RPT) => [
-    h('div', {
-      class: 'note is-stale', role: 'status',
-      style: { display: 'flex', alignItems: 'center', gap: '7px',
-               marginBottom: '10px', borderStyle: 'dashed' },
-    },
-      icon('warn'),
-      h('span', { style: { flex: '1' } },
-        h('b', null, '演示数据（未接入真实运行）'),
-        ' 本会话还没有可导出的运行记录，或后端不可达 —— 以下草稿为静态示意，数字非真实结果。'),
-      h('button', {
-        class: 'btn btn-gho btn-sm', type: 'button',
-        'aria-label': '重试拉取真实方法草稿',
-        onclick: () => { RPT.invalidate(); refresh(); },
-      }, icon('refresh'), '重试')),
-    h('h3', { class: 'sect' }, '论文方法草稿'),
-    h('div', { class: 'draft' },
-      h('h4', null, '2.3 InSAR 时序形变分析'),
-      h('p', null, `…经 ISCE2 配准与干涉处理，Goldstein 滤波（α=${st_(5).params.alpha}）后`,
-        `采用 ${st_(6).method} 解缠`, h('span', { class: 'cite' }, '〔prov-6〕'),
-        `，MintPy ${st_(7).method} 反演，形变模型 ${st_(9).method}。`),
-      h('p', null, '断层西侧同震 LOS 位移 −182.0 ± 12.4 mm',
-        h('span', { class: 'cite' }, '〔prov-10〕'),
-        '，东侧 +96.5 ± 8.7 mm，GNSS 相关 0.86，PS/SBAS 一致性 0.92。'),
-      h('div', { class: 'boundary' },
-        h('b', null, '证据边界：'), '报告处理链一致性与 GNSS 量级吻合，',
-        h('b', null, '非'), '经标定的形变产品；12 天采样', h('b', null, '不足以'), '分离同震与震后早期形变。')),
-    h('h3', { class: 'sect' }, '导出 · 客户端生成'),
-    h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
-      h('button', { class: 'btn btn-pri', type: 'button', style: { flex: '1' }, onclick: () => hooks.export?.('md') }, '.md 草稿'),
-      h('button', { class: 'btn btn-gho', type: 'button', style: { flex: '1' }, onclick: () => hooks.export?.('json') }, 'provenance.json'),
-      h('button', { class: 'btn btn-gho', type: 'button', style: { flex: '1' }, onclick: () => hooks.export?.('sh') }, '裸命令 .sh')),
-    h('h3', { class: 'sect' }, '等价裸命令行脚本'),
-    h('p', { class: 'blurb' }, '论文可复现性要求：系统必须能导出与 Agent 执行等价的命令行脚本。'),
-    h('div', { class: 'shell' },
-      '#!/usr/bin/env bash\nset -euo pipefail\n\n' +
-      STEP_DEFS.map((d) => buildCmd(d.id).replace(/^\$ /, '')).join('\n')),
-  ];
 
   // ---- 实测渲染：服务端真实草稿 + 来源标注 + 「下载 .md」 ----
   const liveBody = (RPT, data) => {
@@ -747,7 +521,26 @@ function reportView() {
     if (!root.isConnected) return;
     const data = await RPT.fetchReportLive();
     if (!root.isConnected) return;                 // 面板已切走，丢弃过期结果
-    root.replaceChildren(...(data ? liveBody(RPT, data) : demoBody(RPT)));
+    if (data === null) {
+      root.replaceChildren(
+        h('h3', { class: 'sect' }, '论文方法草稿'),
+        ES.renderError(null, {
+          message: '方法草稿读取失败——后端不可达或响应异常（GET /api/methods.md）。',
+          retry: () => { RPT.invalidate(); refresh(); },
+        }));
+      return;
+    }
+    if (data.noRun) {
+      root.replaceChildren(
+        h('h3', { class: 'sect' }, '论文方法草稿'),
+        ES.renderEmpty(null, {
+          icon: 'doc', title: '还没有方法草稿',
+          hint: '完成一次流水线运行即可生成——草稿由 provenance 账本确定派生，〔prov-N〕逐条可溯。',
+          action: { label: '运行流水线', event: 'states:run-pipeline' },
+        }));
+      return;
+    }
+    root.replaceChildren(...liveBody(RPT, data));
   })();
 
   return root;
@@ -841,26 +634,6 @@ function download(filename, text, mime = 'text/plain') {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-/** 剪贴板写入：clipboard API 优先，file:// 等场景退回隐藏 textarea。 */
-async function copyText(text, okMsg) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast(okMsg);
-  } catch {
-    const ta = h('textarea', { style: { position: 'fixed', top: '-100px', opacity: '0' } }, text);
-    document.body.appendChild(ta);
-    ta.select();
-    let ok = false;
-    try { ok = document.execCommand('copy'); } catch { ok = false; }
-    ta.remove();
-    toast(ok ? okMsg : '复制失败：浏览器未授权剪贴板访问');
-  }
-}
-
-function fmtWall(sec) {
-  return sec >= 120 ? `${Math.round(sec / 60)} min` : `${sec} s`;
 }
 
 /* 面板 7/8 实时数据的短 TTL 缓存：Dock.refresh 在运行期间高频触发，
@@ -1114,36 +887,34 @@ function envView() {
    终端视图（面板 8 · §7.7）
    实时：步骤下拉（/api/state）→ 该步日志尾部（/api/logs）
         + 正则过滤 + ERROR/WARNING 高亮 + 跳到末尾。
-   后端不可达（file:// / 静态托管）→ 回落 envdata.js 演示日志。
+   后端不可达 → 错误态带重试；会话没跑过 → 空态带运行引导。
    ============================================================ */
 const termLive = { step: null, filter: '' };
+
+/** 终端面板的错误态：后端不可达/响应异常（/api/state 归一为 null）。 */
+function termErrorBody() {
+  return h('div', null,
+    h('h3', { class: 'sect' }, '终端 · 步骤日志（服务端）'),
+    ES.renderError(null, {
+      message: '运行状态读取失败——后端不可达或响应异常（GET /api/state）。',
+      retry: () => { liveCache.delete(`state:${S.sessionId}`); refresh(); },
+    }));
+}
 
 function termView() {
   const body = h('div', null,   // states 接入:请求中分支 → 段落骨架(等待 /api/state)
     ES.renderSkeleton(null, { kind: 'text', rows: 5, label: '正在读取运行状态（GET /api/state）' }));
-  /* 后端可达 → loadTermView 沿用实时路径（/api/state 选步骤 + /api/logs 读日志）；
-     不可达 → 回落 envdata.js 的 TERM_LOGS 演示日志，顶部醒目标注「演示数据」。
+  /* /api/state 可达 → 实时路径（选步骤 + /api/logs 读日志）；
+     不可达（null）→ 错误态带重试，绝不渲染演示日志。
      state 有 3 秒短缓存（cachedFetch），紧随其后的 loadTermView 同键读取直接复用。 */
-  (async () => {
-    const state = await cachedFetch(`state:${S.sessionId}`, () => API.fetchState());
-    if (!body.isConnected) return;                    // 面板已切走，丢弃过期结果
-    if (state === null) {
-      const LIVE = await import('./envlive.js');
-      if (!body.isConnected) return;
-      body.replaceChildren(
-        LIVE.demoBanner('以下为离线示意日志（envdata.js 的 TERM_LOGS），非真实运行输出。'),
-        termDemoView());
-      return;
-    }
-    loadTermView(body);
-  })();
+  loadTermView(body);
   return body;
 }
 
 async function loadTermView(body) {
   const state = await cachedFetch(`state:${S.sessionId}`, () => API.fetchState());
   if (!body.isConnected) return;                      // 面板已切走/重渲染，丢弃过期结果
-  if (state === null) { body.replaceChildren(termDemoView()); return; }
+  if (state === null) { body.replaceChildren(termErrorBody()); return; }
   if (!state.steps?.length) {
     body.replaceChildren(h('div', null,   // states 接入:无数据分支 → 空态卡 + 既有运行入口(自定义事件解耦)
       h('h3', { class: 'sect' }, '终端 · 步骤日志（服务端）'),
@@ -1259,143 +1030,12 @@ function termLiveView(state) {
       'ERROR / WARNING 行自动高亮；过滤支持正则，无效正则自动退回文本匹配。'));
 }
 
-/* ---------------- 演示回退（后端未接入时的 mock 日志） ---------------- */
-const termUI = { step: null, filter: '' };
-
-function termDemoView() {
-  // 只有「跑过」的步骤才有全量日志：done / stale / failed，
-  // 以及 §7.8 的 interrupted / orphaned（中断前已产生日志，排查断点正需要看）
-  const avail = STEP_DEFS.filter((d) => {
-    const st = st_(d.id);
-    return st && (st.stale
-      || ['done', 'stale', 'failed', 'interrupted', 'orphaned'].includes(st.state));
-  });
-  if (!avail.length) {
-    return h('div', null,
-      h('h3', { class: 'sect' }, '终端 · 全量日志'),
-      h('div', { class: 'fview' },
-        h('div', { class: 'empty' }, '暂无已完成步骤 —— 运行流水线后，每一步的完整日志在此可检索。')));
-  }
-  if (!avail.some((d) => d.id === termUI.step)) termUI.step = avail[avail.length - 1].id;
-
-  const cur = def_(termUI.step);
-  const lines = TERM_LOGS[termUI.step] || [];
-
-  const tabs = h('div', { class: 'term-tabs', role: 'group', 'aria-label': '选择步骤日志' },
-    ...avail.map((d) => h('button', {
-      class: 'pin', type: 'button', 'aria-pressed': String(d.id === termUI.step),
-      'aria-label': `查看第 ${d.id} 步 ${d.name} 的日志`,
-      onclick: () => { termUI.step = d.id; refresh(); },
-    }, `${d.id} ${d.name}`)));
-
-  const logBox = h('pre', {
-    class: 'term-log', tabindex: '0',
-    'aria-label': `第 ${termUI.step} 步 ${cur.name} 完整日志`,
-  });
-  const lineEls = lines.map(([text, tone]) =>
-    h('span', { class: `tl${tone ? ` is-${tone}` : ''}` }, text));
-  for (const el of lineEls) logBox.appendChild(el);
-
-  const meta = h('div', { class: 'term-meta' });
-  const applyFilter = () => {
-    const q = termUI.filter.trim();
-    let re = null;
-    if (q) {
-      try { re = new RegExp(q, 'i'); }
-      catch { re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }   // 无效正则退回文本匹配
-    }
-    let shown = 0;
-    for (const el of lineEls) {
-      const hit = !re || re.test(el.textContent);
-      el.classList.toggle('hide', !hit);
-      if (hit) shown++;
-    }
-    meta.textContent = re ? `${shown}/${lineEls.length} 行匹配` : `${lineEls.length} 行`;
-  };
-
-  const filterInp = h('input', {
-    type: 'search', value: termUI.filter,
-    placeholder: '过滤日志 · 支持正则（如 ERROR|WARN）',
-    'aria-label': '过滤日志，支持正则表达式',
-    oninput: (e) => { termUI.filter = e.target.value; applyFilter(); },
-  });
-
-  const jumpToError = () => {
-    const vis = lineEls.filter((el) => !el.classList.contains('hide'));
-    const target = vis.find((el) => el.classList.contains('is-err'))
-                || vis.find((el) => el.classList.contains('is-warn'));
-    if (!target) { toast('当前可见日志无 ERROR / WARNING 行'); return; }
-    logBox.scrollTop = Math.max(0, target.offsetTop - logBox.clientHeight / 2);
-    target.classList.remove('hit'); void target.offsetWidth; target.classList.add('hit');
-    if (!target.classList.contains('is-err')) toast('无 ERROR 行 · 已定位首个 WARNING');
-  };
-
-  const script = cmdSh(termUI.step, buildCmd(termUI.step).replace(/^\$ /, ''));
-  applyFilter();
-
-  return h('div', null,
-    h('h3', { class: 'sect' }, '终端 · 全量日志（已完成步骤）'),
-    tabs,
-    h('div', { class: 'term-tools' },
-      filterInp,
-      h('button', {
-        class: 'btn btn-gho btn-sm', type: 'button',
-        'aria-label': '跳到首个错误行', onclick: jumpToError,
-      }, icon('warn'), '跳到首个错误'),
-      h('button', {
-        class: 'btn btn-gho btn-sm', type: 'button', 'aria-label': '复制为 issue 模板',
-        onclick: () => copyText(issueTemplate(termUI.step, lines), '已复制 issue 模板（环境信息 + 日志尾部）'),
-      }, icon('clip'), '复制为 issue 模板')),
-    logBox,
-    meta,
-    h('p', { class: 'blurb' },
-      '日志为演示数据（后端未接入，无 log_path 可读）。真实实现从分层落盘的日志文件读全量，非内存缓冲。'),
-    h('h3', { class: 'sect' }, `cmd.sh · 第 ${termUI.step} 步等价裸命令`),
-    h('div', { class: 'shell' }, script),
-    h('div', { class: 'term-acts' },
-      h('button', {
-        class: 'btn btn-gho btn-sm', type: 'button', 'aria-label': '复制 cmd.sh 脚本',
-        onclick: () => copyText(script, `已复制 cmd.sh（第 ${termUI.step} 步）`),
-      }, icon('clip'), '复制'),
-      h('button', {
-        class: 'btn btn-gho btn-sm', type: 'button', 'aria-label': '在 WSL 中手动执行此步',
-        onclick: () => toast('演示模式：真实版本将打开 WSL 终端，在步骤工作目录执行这份 cmd.sh'),
-      }, icon('bolt'), '在 WSL 中手动执行此步')),
-    h('p', { class: 'blurb' },
-      '每步都有一份真实执行过的脚本 —— 「等价裸命令」承诺的现场证明：脱离 Agent 也能复现该步（§7.7）。'));
-}
-
-/** issue 模板：环境信息 + 日志尾部，供「复制为 issue 模板」使用。 */
-function issueTemplate(stepId, lines) {
-  const d = def_(stepId), st = st_(stepId);
-  const tailN = Math.min(15, lines.length);
-  const tail = lines.slice(-tailN).map(([t]) => t).join('\n');
-  return [
-    '### InSAR-Agent 问题报告（演示模板）',
-    '',
-    `- 会话：${S.sessionId} · 第 ${stepId} 步 ${d.name} · 方法 \`${st.method}\``,
-    `- 指纹：\`${st.fingerprint}\` · 状态：${st.state}${st.stale ? '（STALE）' : ''}`,
-    `- WSL2：${WSL.text}（环境信息为示意值 · 后端未接入）`,
-    `- 引擎：${ENGINES.map((e) => `${e.name} ${e.ok ? e.ver : `✗ ${e.note || '缺失'}`}`).join(' / ')}`,
-    `- 磁盘：${DISKS.map((k) => `${k.id}: ${k.free}G 可用/${k.total}G`).join(' · ')}`,
-    `- 质量门：${THRESHOLDS.filter((t) => t.status !== 'OK').length} 项 PENDING · 证据上限 ${LADDER[evidenceCeiling().level]}`,
-    '',
-    `<details><summary>日志尾部（最后 ${tailN} 行）</summary>`,
-    '',
-    '```',
-    tail,
-    '```',
-    '</details>',
-    '',
-  ].join('\n');
-}
-
 /* ============================================================
    轨迹视图（面板 7 · Lab Notebook）
    实时：GET /api/trace（SQLite trace 表，OpenDiscoveryTrace 对齐），
         表格式列出 step_no / phase / action / error / revision_trigger，
         顶部「导出 JSON」（Blob 下载）。
-   后端不可达 → 回落 envdata.js 演示轨迹。
+   后端不可达 → 错误态带重试；没有轨迹记录 → 空态带运行引导。
    ============================================================ */
 function traceView() {
   const body = h('div', null,   // states 接入:请求中分支 → 列表骨架(等待 /api/trace)
@@ -1407,7 +1047,16 @@ function traceView() {
 async function loadTraceView(body) {
   const rows = await cachedFetch(`trace:${S.sessionId}`, () => API.fetchTrace());
   if (!body.isConnected) return;
-  if (rows === null) { body.replaceChildren(traceDemoView()); return; }
+  if (rows === null) {
+    // 后端不可达/响应异常 → 错误态带重试，绝不渲染演示轨迹
+    body.replaceChildren(h('div', null,
+      h('h3', { class: 'sect' }, '轨迹 · OpenDiscoveryTrace（服务端）'),
+      ES.renderError(null, {
+        message: '轨迹读取失败——后端不可达或响应异常（GET /api/trace）。',
+        retry: () => { liveCache.delete(`trace:${S.sessionId}`); refresh(); },
+      })));
+    return;
+  }
   body.replaceChildren(traceLiveView(rows));
 }
 
@@ -1476,97 +1125,6 @@ function traceLiveView(rows) {
     h('p', { class: 'blurb' },
       'schema 对齐 OpenDiscoveryTrace：step_no / phase / action / error / revision_trigger。' +
       '悬停行可见 thought 与 observation；导出 JSON 含全部字段。'));
-}
-
-/* ---------------- 演示回退（后端未接入时的 mock 轨迹） ---------------- */
-function traceDemoView() {
-  const errs = TRACE.filter((e) => e.error?.occurred).length;
-  const recovOk = TRACE.filter((e) => e.recovery?.attempted && e.recovery?.successful).length;
-
-  return h('div', null,
-    h('h3', { class: 'sect' }, 'Lab Notebook · OpenDiscoveryTrace'),
-    h('div', { class: 'tstats' },
-      h('span', { class: 'tag' }, `${TRACE.length} 条记录`),
-      h('span', { class: 'tag is-bad' }, `${errs} 次 error`),
-      h('span', { class: 'tag is-ok' }, `恢复成功 ${recovOk}/${errs}`),
-      h('span', { class: 'tag is-stale' }, '演示数据 · 后端未接入')),
-    h('div', { class: 'term-acts', style: { marginTop: '0', marginBottom: '8px' } },
-      h('button', {
-        class: 'btn btn-pri btn-sm', type: 'button',
-        'aria-label': '导出轨迹为 JSON', onclick: exportTraceJson,
-      }, '导出 JSON'),
-      h('button', {
-        class: 'btn btn-gho btn-sm', type: 'button',
-        'aria-label': '导出轨迹为 Markdown', onclick: exportTraceMd,
-      }, '导出 Markdown')),
-    h('p', { class: 'blurb' },
-      'schema 对齐 OpenDiscoveryTrace：phase / thought / action / observation / error / ' +
-      'revision_trigger / confidence / wall_time。成功轨迹人人都有 —— 失败并恢复的轨迹才是论文素材（§7.7）。'),
-    ...TRACE.map(traceCard),
-    h('p', { class: 'blurb' },
-      '导出的 JSON / Markdown 可直接作为 InSAR 任务评测集素材（§13）；' +
-      'revision_trigger + recovery_successful 可量化「断点续跑是否真的救回来了」。'));
-}
-
-function traceCard(e, i) {
-  const cls = e.error?.occurred ? ' err' : e.revision_trigger ? ' rev' : '';
-  const kv = (k, v, mono = false, tone = '') => h('div', { class: `tkv${tone ? ` ${tone}` : ''}` },
-    h('span', { class: 'k' }, k),
-    h('span', { class: `v${mono ? ' mono' : ''}` }, v));
-
-  return h('div', { class: `tcard${cls}` },
-    h('div', { class: 'hd' },
-      h('span', { class: 'no' }, `#${String(i + 1).padStart(2, '0')}`),
-      h('span', { class: 'tag' }, e.phase),
-      h('span', { class: 'mono' }, `step ${e.step}`),
-      e.error?.occurred ? h('span', { class: 'tag is-bad' }, icon('x'), e.error.type) : null,
-      e.revision_trigger ? h('span', { class: 'tag is-stale' }, icon('refresh'), 'revision') : null,
-      h('span', { class: 'sp' }),
-      h('span', { class: 'mono' }, `conf ${e.confidence.toFixed(2)}`),
-      h('span', { class: 'mono' }, fmtWall(e.wall_time))),
-    h('div', { class: 'bd' },
-      kv('thought', e.thought),
-      kv('action', `${e.action.tool} ${e.action.input}`, true),
-      kv('observation', e.observation),
-      e.error?.occurred ? kv('error', `[${e.error.type}] ${e.error.message}`, false, 'bad') : null,
-      e.revision_trigger ? kv('revision', e.revision_trigger, false, 'stale') : null,
-      e.recovery ? kv('recovery', `attempted=${e.recovery.attempted} · successful=${e.recovery.successful}`, true) : null));
-}
-
-function exportTraceJson() {
-  const payload = {
-    schema: 'OpenDiscoveryTrace/1.0',
-    session: S.sessionId,
-    generated_at: new Date().toISOString(),
-    demo: true,
-    note: '演示导出：轨迹为 mock 数据；真实实现从 SQLite 读取并做长字段硬截断（raw[:3000] / obs[:2000] / input[:1000]）。',
-    entries: TRACE,
-  };
-  download(`trace_${S.sessionId}.json`, JSON.stringify(payload, null, 2), 'application/json');
-  toast('已导出轨迹 JSON · OpenDiscoveryTrace schema');
-}
-
-function exportTraceMd() {
-  const md = [
-    `# Lab Notebook · ${S.sessionId}（OpenDiscoveryTrace 演示导出）`,
-    '',
-    `> 生成于 ${new Date().toISOString()} · mock 数据（后端未接入）`,
-    '> 字段：phase / thought / action / observation / error / revision_trigger / confidence / wall_time',
-    '',
-    ...TRACE.map((e, i) => [
-      `## #${i + 1} · ${e.phase}（step ${e.step}）· conf ${e.confidence.toFixed(2)} · ${fmtWall(e.wall_time)}`,
-      '',
-      `- **thought** ${e.thought}`,
-      `- **action** \`${e.action.tool}\` — \`${e.action.input}\``,
-      `- **observation** ${e.observation}`,
-      ...(e.error?.occurred ? [`- **error** \`${e.error.type}\` · ${e.error.message}`] : []),
-      ...(e.revision_trigger ? [`- **revision_trigger** ${e.revision_trigger}`] : []),
-      ...(e.recovery ? [`- **recovery** attempted=${e.recovery.attempted} · successful=${e.recovery.successful}`] : []),
-      '',
-    ].join('\n')),
-  ].join('\n');
-  download(`trace_${S.sessionId}.md`, md, 'text/markdown');
-  toast('已导出轨迹 Markdown · 含失败恢复记录');
 }
 
 /** 面板联动（§7.3 第 4 条）：跳到流水线面板并选中/滚动到该步，高亮一闪示意落点。 */
