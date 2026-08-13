@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import TIME_FACTOR
 from insar_agent.registry.model import Capability, Method
 from insar_agent.runtime import backend_select
 from insar_agent.runtime.backend_select import (
@@ -512,7 +513,7 @@ class _ReleasableLocal(LocalJobBackend):
     又能真正跑模拟作业(测试机不可依赖真 WSL)。"""
 
     def __init__(self):
-        super().__init__(hb_stale=3.0)
+        super().__init__(hb_stale=3.0 * TIME_FACTOR)
         self.released = 0
 
     def release_keepalive(self):
@@ -531,9 +532,11 @@ def _release_driver(store, workspace, monkeypatch, factory):
 
     monkeypatch.setattr(driver_mod, "backend_for_step", fake_backend_for_step)
     return driver_mod.Driver(store, workspace=workspace, probe=_empty_probe(),
-                             poll=0.05, startup_grace=15.0, brain=Brain(None))
+                             poll=0.05, startup_grace=15.0 * TIME_FACTOR,
+                             brain=Brain(None))
 
 
+@pytest.mark.timing
 def test_driver_releases_keepalive_at_run_end(store, workspace, monkeypatch):
     """run 正常收尾(done):本 run 用过的每个后端实例的 keepalive 恰好释放
     一次,登记表清空(WSL P2:此前 sleep infinity 无人释放,随 run 堆积)。"""
@@ -552,6 +555,7 @@ def test_driver_releases_keepalive_at_run_end(store, workspace, monkeypatch):
     assert not driver._run_backends                           # 登记表已清空
 
 
+@pytest.mark.timing
 def test_driver_releases_keepalive_on_interrupted_run(store, workspace, monkeypatch):
     """中途 KILL → run interrupted 提前返回:finally 收尾同样释放保活。"""
     created: list[_ReleasableLocal] = []
@@ -579,6 +583,7 @@ def test_driver_releases_keepalive_on_interrupted_run(store, workspace, monkeypa
     assert not driver._run_backends
 
 
+@pytest.mark.timing
 def test_driver_never_releases_injected_override(store, workspace, monkeypatch):
     """注入 override 后端可能跨 run 共享:生命周期归注入方,driver 绝不代释。"""
     from insar_agent.brain.facade import Brain
@@ -586,13 +591,15 @@ def test_driver_never_releases_injected_override(store, workspace, monkeypatch):
 
     injected = _ReleasableLocal()
     driver = Driver(store, workspace=workspace, probe=_empty_probe(), poll=0.05,
-                    startup_grace=15.0, brain=Brain(None), backend=injected)
+                    startup_grace=15.0 * TIME_FACTOR, brain=Brain(None),
+                    backend=injected)
     asyncio.run(_collect(driver.turn("s1", "Ridgecrest 地震同震形变分析")))
     events = asyncio.run(_collect(driver.execute("s1")))
     assert any(e["t"] == "result" for e in events)
     assert injected.released == 0
 
 
+@pytest.mark.timing
 def test_driver_survives_backend_launch_failure(store, workspace, monkeypatch):
     """launch 抛 RuntimeError(WSL 不可达类)→ 步骤 failed、分类 wsl_orphaned、
     分诊 note 正常发出,执行回合流完整走完不裸崩(WSL P2 分诊)。"""
@@ -641,6 +648,7 @@ def _real_distro_reachable(distro: str) -> bool:
     return cp.returncode == 0 and "__insar_backend_smoke__" in out
 
 
+@pytest.mark.timing
 @pytest.mark.skipif(sys.platform != "win32" or shutil.which("wsl.exe") is None,
                     reason="无 wsl.exe,跳过真实 WSL 冒烟")
 def test_real_wsl_echo_job_roundtrip():
@@ -661,7 +669,7 @@ def test_real_wsl_echo_job_roundtrip():
     try:
         backend.prepare(job_dir, plan)
         backend.launch(job_dir)
-        deadline = time.time() + 90
+        deadline = time.time() + 90 * TIME_FACTOR  # 等待上限;轮询节奏不变
         state = backend.state(job_dir)
         while state.kind != "finished" and time.time() < deadline:
             time.sleep(0.5)

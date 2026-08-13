@@ -34,6 +34,12 @@ insar_agent = ["core/schema.sql", "audit/contract.yaml", "runtime/wsl_wrapper.sh
 testpaths = ["tests"]
 # basetemp 指向项目内目录:本机 %TEMP% 的 pytest 根目录存在 ACL 损坏(WinError 5)
 addopts = "-q --basetemp=.pytest_tmp"
+markers = [
+    # 时序敏感用例:判定窗依赖真实时钟(心跳/双超时/宽限/租约老化/流式收尾),
+    # 高负载机器上设 INSAR_TEST_TIME_FACTOR=3 放宽判定窗(conftest.TIME_FACTOR);
+    # CI 中与常规用例分 job:常规 -m "not timing",timing 单独串行跑(ci.yml)
+    "timing: 时序敏感(真实时钟判定窗;负载下用 INSAR_TEST_TIME_FACTOR 放宽)",
+]
 
 [tool.ruff]
 # 行宽对齐仓库现状:绝大多数行 <= 100(全仓最长 112,超 100 的约 30 行按告警清单管理,

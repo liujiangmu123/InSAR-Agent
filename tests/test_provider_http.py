@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from conftest import TIME_FACTOR
 from insar_agent.brain.provider import BrainTruncated, BrainUnavailable, LLMProvider, LLMRoute
 
 
@@ -199,11 +200,16 @@ def test_primary_500_falls_back_single_hop(make_server):
     assert fallback.requests[0]["body"]["model"] == "m2"
 
 
+@pytest.mark.timing
 def test_primary_timeout_falls_back(make_server):
-    # 主路由睡 2s > provider timeout 0.5s → 读超时 → 切 fallback
-    primary = make_server([{"json": openai_body({"src": "primary"}), "delay": 2.0}])
+    # 主路由睡 2s×TF > provider timeout 0.5s×TF → 读超时 → 切 fallback。
+    # 双向判定窗:超时须小于主路由延迟(判超时),又须容下 fallback 正常应答
+    # (负载下 0.5s 可能不够)—— 两者同乘系数保持比例
+    primary = make_server([{"json": openai_body({"src": "primary"}),
+                            "delay": 2.0 * TIME_FACTOR}])
     fallback = make_server([{"json": openai_body({"src": "fallback"})}])
-    provider = LLMProvider(routes=[primary.route(), fallback.route()], timeout=0.5)
+    provider = LLMProvider(routes=[primary.route(), fallback.route()],
+                           timeout=0.5 * TIME_FACTOR)
 
     assert provider.complete_json(system="s", user="u") == {"src": "fallback"}
     assert len(primary.requests) == 1 and len(fallback.requests) == 1

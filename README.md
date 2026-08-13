@@ -46,6 +46,14 @@ python -m venv .venv
 .venv\Scripts\python -m pytest tests/ -q     # 215 项测试(2026-08-12 全绿)
 .venv\Scripts\python scripts\check_frontend.py  # 前端质量门一键:JS 单测 + *.check.mjs + CSS/a11y 质检
                                              # (零 npm 依赖;--only 名 可只跑单套件)
+
+# 机器高负载时(多代理并行开发/后台大任务):时序敏感用例(@pytest.mark.timing,
+# 心跳/双超时/宽限判定窗)可能被拖慢误判 —— 设系数放宽判定窗(断言语义不变):
+$env:INSAR_TEST_TIME_FACTOR = "3"
+.venv\Scripts\python -m pytest tests/ -q -m timing       # 只跑时序敏感组
+.venv\Scripts\python -m pytest tests/ -q -m "not timing" # 只跑常规组(CI 常规 job 同款)
+# 负载模拟验证(2 个忙循环进程占 ~50% 核 60s 自灭 × timing 组 3 遍):
+.venv\Scripts\python scripts\stress_test_timing.py
 .venv\Scripts\python -m insar_agent.api.app  # http://127.0.0.1:8873(UI + API)
 
 # 可选:装 pre-commit 提交钩子(ruff / 尾空格 / EOF / YAML / CSS 质检,配置见 .pre-commit-config.yaml)
@@ -75,6 +83,7 @@ python -m http.server 8000              # 浏览器开 http://127.0.0.1:8000
 | `INSAR_ALLOW_SIMULATED` | 引擎缺失时允许模拟执行 | `1` |
 | `INSAR_LLM_BASE_URL` / `INSAR_LLM_API_KEY` / `INSAR_LLM_MODEL` | LLM(OpenAI 兼容);不配 = brain 禁用,手动流水线 | 无 |
 | `INSAR_LLM_FALLBACK_*` | 单跳备用路由 | 无 |
+| `INSAR_TEST_TIME_FACTOR` | 仅测试:时序判定窗放宽系数(高负载并行开发用 3;产品超时语义不受影响) | `1` |
 
 ## 目录结构
 

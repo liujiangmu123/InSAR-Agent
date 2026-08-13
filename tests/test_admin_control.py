@@ -26,6 +26,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from conftest import TIME_FACTOR
 from insar_agent.api.admin_router import create_admin_router, terminate_run, terminate_step
 from insar_agent.brain.facade import Brain
 from insar_agent.core.db import Database, _load_schema
@@ -35,6 +36,10 @@ from insar_agent.runtime.jobs import CommandPlan, LocalJobBackend
 from insar_agent.runtime.probe import ProbeResult
 
 HASHES = {"task_hash": "t", "args_hash": "a", "local_hash": "l", "eval_hash": "e"}
+
+# 模块主体依赖真实时钟(心跳老化判死/活作业文件契约取消/simulated 执行回合):
+# 时序敏感 —— 判定窗乘 TIME_FACTOR;老化型 sleep(0.6) 方向安全,不乘
+pytestmark = pytest.mark.timing
 
 
 # ---------------- 工具 ----------------
@@ -48,7 +53,8 @@ def empty_probe():
 
 def make_driver(store, workspace, **kw) -> Driver:
     defaults = dict(workspace=workspace, probe=empty_probe(), poll=0.05,
-                    startup_grace=15.0, allow_simulated=True, brain=Brain(None))
+                    startup_grace=15.0 * TIME_FACTOR, allow_simulated=True,
+                    brain=Brain(None))
     defaults.update(kw)
     return Driver(store, **defaults)
 
@@ -216,17 +222,18 @@ def test_terminate_live_job_cancels_via_file_contract(store, workspace):
     script.write_text("import time\nfor i in range(200):\n"
                       "    print(f'line {i}', flush=True)\n    time.sleep(0.1)\n",
                       encoding="utf-8")
-    backend = LocalJobBackend(hb_stale=3.0)
+    backend = LocalJobBackend(hb_stale=3.0 * TIME_FACTOR)
     plan = CommandPlan(argv=[sys.executable, "-X", "utf8", str(script)],
                        cwd=str(workspace), env={"PYTHONIOENCODING": "utf-8"}, files={})
     backend.prepare(job_dir, plan)
     backend.launch(job_dir)
-    for _ in range(600):  # 等 wrapper 真正起来(负载下 python 启动可达秒级)
+    # 等 wrapper 真正起来(负载下 python 启动可达秒级);等待上限 30s×TF
+    for _ in range(int(600 * TIME_FACTOR)):
         if backend.state(job_dir).kind == "alive":
             break
         time.sleep(0.05)
     else:
-        pytest.fail("wrapper 未在 30s 内启动")
+        pytest.fail(f"wrapper 未在 {30 * TIME_FACTOR:g}s 内启动")
 
     report = terminate_run(store, "r1", backend=backend, reason="运维终止")
     assert (job_dir / "job.cancel").exists()  # 文件契约取消,不是宿主抢杀

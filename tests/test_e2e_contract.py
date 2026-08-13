@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import TIME_FACTOR
 from insar_agent.api.app import create_app
 from insar_agent.loop import events as ev
 
@@ -336,6 +337,7 @@ def test_e2e_ui_journey(client):
 #    由回合流承载;SSE 侧 onGlobalEvent 只认带外条目、busy 时跳过,不承担此职)。
 #    本测试双边固定:总线形状正确 + 回合流确实收到细节事件。
 # ---------------------------------------------------------------------------
+@pytest.mark.timing  # 执行回合驱动真实 simulated 子进程(startup_grace 判定窗)
 def test_executor_detail_events_bus_routing(store, workspace, monkeypatch):
     import asyncio
 
@@ -349,7 +351,8 @@ def test_executor_detail_events_bus_routing(store, workspace, monkeypatch):
         credentials={"earthdata": False, "cds": False, "gacos": False},
         disk_free_gb=100.0, cpu_count=8)
     driver = Driver(store, workspace=workspace, probe=probe, poll=0.05,
-                    startup_grace=15.0, allow_simulated=True, brain=Brain(None))
+                    startup_grace=15.0 * TIME_FACTOR, allow_simulated=True,
+                    brain=Brain(None))
 
     async def run() -> tuple[list[dict], list[dict], list[dict]]:
         turn_ev = [e async for e in driver.turn("s1", "Ridgecrest 地震同震形变")]
