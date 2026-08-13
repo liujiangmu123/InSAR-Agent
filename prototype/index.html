@@ -28,6 +28,7 @@
 <link rel="stylesheet" href="css/datasets.css">
 <link rel="stylesheet" href="css/notify.css">
 <link rel="stylesheet" href="css/presets.css">
+<link rel="stylesheet" href="css/advisor.css">
 <script type="module">
   // 桌面/首启增强:环境向导(后端就绪则静默)+ 窗口标题状态同步;均安全降级
   import('./js/setup.js').then((m) => m.maybeShowSetupWizard()).catch(() => {});
@@ -204,5 +205,6 @@
 <!-- 顶栏 LLM 用量芯片:实装 #budget(今日成本/调用次数,点击看 7 天明细;自初始化,可安全降级) -->
 <script type="module" src="js/usagechip.js"></script>
 <script type="module" src="js/visionqa.js"></script><!-- AI 识图质检:影像卡徽章+结果面板(事件委托注入,可安全降级) -->
+<script type="module" src="js/advisor.js"></script><!-- run 终态「下一步建议」卡(自初始化,可安全降级) -->
 </body>
 </html>

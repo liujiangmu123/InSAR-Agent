@@ -35,6 +35,7 @@ from pydantic import BaseModel
 from starlette.datastructures import MutableHeaders
 
 from insar_agent.api.admin_router import create_admin_router
+from insar_agent.api.advisor_router import create_advisor_router
 from insar_agent.api.artifacts_router import create_artifacts_router
 from insar_agent.api.diag_router import create_diag_router
 from insar_agent.api.doctor_router import create_doctor_router
@@ -394,6 +395,7 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_report_router(store, home))  # 方法章节草稿(/api/report/draft)
     from insar_agent.api.visionqa_router import create_visionqa_router
     app.include_router(create_visionqa_router(home, store))  # AI 识图质检(/api/vision-qa)
+    app.include_router(create_advisor_router(store, home))  # 下一步建议(/api/advise,run 终态建议卡)
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
