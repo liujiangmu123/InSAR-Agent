@@ -14,6 +14,7 @@
    ============================================================ */
 import { h, icon } from './dom.js';
 import { S } from './state.js';
+import * as ES from './emptystate.js';   // states 接入:骨架统一构造器
 
 /** 缓存 TTL：环境探测是秒级操作，30s 内复用同一结果；手动刷新走 invalidate()。 */
 const TTL_MS = 30_000;
@@ -161,26 +162,14 @@ export function demoBanner(text, { onRetry } = {}) {
     }, icon('refresh'), '重试') : null);
 }
 
-/** 骨架屏：实测数据到达前的占位（灰条示意布局，不闪不跳）。 */
+/** 骨架屏：实测数据到达前的占位。states 接入:委托统一构造器(微光 + reduced-motion 降级)。 */
 export function skeleton() {
-  const bar = (w) => h('div', {
-    'aria-hidden': 'true',
-    style: {
-      height: '11px', width: w, borderRadius: '4px',
-      background: 'var(--border-strong)', opacity: '.35',
-    },
-  });
-  const card = (...bars) => h('div', {
-    class: 'envcard',
-    style: { display: 'grid', gap: '11px', padding: '12px' },
-  }, ...bars);
-
   return h('div', { 'aria-busy': 'true', 'aria-label': '正在探测环境' },
     h('h3', { class: 'sect' }, '运行环境'),
-    card(bar('52%'), bar('84%'), bar('67%'), bar('90%'), bar('74%')),
+    ES.renderSkeleton(null, { kind: 'list', rows: 5, label: '正在探测运行环境' }),
     h('h3', { class: 'sect' }, '磁盘 / CPU / 内存'),
-    card(bar('88%'), bar('46%'), bar('61%')),
+    ES.renderSkeleton(null, { kind: 'list', rows: 3, label: '正在探测磁盘与算力' }),
     h('h3', { class: 'sect' }, '就绪检查'),
-    card(bar('70%'), bar('83%'), bar('57%')),
+    ES.renderSkeleton(null, { kind: 'list', rows: 3, label: '正在读取就绪检查' }),
     h('p', { class: 'blurb' }, '正在探测环境（GET /api/env + GET /api/setup/status）…'));
 }
