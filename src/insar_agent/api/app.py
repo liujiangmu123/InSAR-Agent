@@ -375,7 +375,12 @@ def create_app(home: Path | None = None) -> FastAPI:
         return JSONResponse(status_code=422, content=safe)
 
     app.include_router(create_setup_router(home))  # 环境向导(/api/setup/*,settings.json 与 DB 同目录)
-    from insar_agent.api.llm_router import create_llm_router; app.include_router(create_llm_router(home))  # LLM 密钥/模型配置
+    from insar_agent.brain.provider import set_usage_sink
+    from insar_agent.brain.usage import UsageLedger
+    usage_ledger = UsageLedger(db, home=home)  # LLM 用量账本:每次调用的 token/成本流水(计费中转站)
+    set_usage_sink(usage_ledger.record)        # provider 保持纯传输层,经模块级回调上报用量
+    from insar_agent.api.llm_router import create_llm_router
+    app.include_router(create_llm_router(home, usage_ledger))  # LLM 密钥/模型配置 + 用量账本
     app.include_router(version_router)             # 版本信息与更新检查(/api/version*)
     app.include_router(skills_router)              # 步骤技能文档(/api/skills*,规划/分诊知识源)
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
