@@ -15,26 +15,33 @@
    绝不抛错;调用方拿到 null 就回落 dock.js 的静态演示草稿。
    ============================================================ */
 import { S } from './state.js';
+import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
 
 /** 缓存 TTL:方法草稿由账本确定派生,30s 内复用;手动刷新走 invalidate()。 */
 const TTL_MS = 30_000;
 
-let cache = { at: 0, promise: null };
+let cache = { at: 0, runId: null, promise: null };
 
 /** 手动刷新入口:清缓存,下一次 fetchReportLive() 必然重新拉取。 */
 export function invalidate() {
-  cache = { at: 0, promise: null };
+  cache = { at: 0, runId: null, promise: null };
 }
 
 /** 拉取真实方法草稿(带 30s TTL 缓存;force=true 跳过缓存)。
-    404(本会话还没有 run)与网络失败统一返回 null —— 调用方回落演示草稿。 */
-export function fetchReportLive({ force = false } = {}) {
+    404(本会话还没有 run)与网络失败统一返回 null —— 调用方回落演示草稿。
+    runId 可选(run 历史切换器接线,runswitch.js):缺省取 activeRunId(),
+    非空 → /api/methods.md 带 run_id 生成历史 run 的方法草稿;缓存按 run
+    区分,null(最新)行为与接线前完全一致。 */
+export function fetchReportLive({ force = false, runId = activeRunId() } = {}) {
   if (location.protocol === 'file:') return Promise.resolve(null);  // 与 backend.sse.js 同判据
-  if (!force && cache.promise && Date.now() - cache.at < TTL_MS) return cache.promise;
+  if (!force && cache.promise && cache.runId === (runId || null)
+      && Date.now() - cache.at < TTL_MS) return cache.promise;
 
   const promise = (async () => {
     try {
-      const resp = await fetch(`/api/methods.md?session=${encodeURIComponent(S.sessionId)}`);
+      const qs = new URLSearchParams({ session: S.sessionId });
+      if (runId) qs.set('run_id', runId);
+      const resp = await fetch(`/api/methods.md?${qs}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const markdown = await resp.text();
       return {
@@ -43,11 +50,11 @@ export function fetchReportLive({ force = false } = {}) {
         fetchedAt: Date.now(),
       };
     } catch {
-      cache = { at: 0, promise: null };  // 失败不占缓存位:下次渲染立即重试
+      cache = { at: 0, runId: null, promise: null };  // 失败不占缓存位:下次渲染立即重试
       return null;
     }
   })();
-  cache = { at: Date.now(), promise };
+  cache = { at: Date.now(), runId: runId || null, promise };
   return promise;
 }
 

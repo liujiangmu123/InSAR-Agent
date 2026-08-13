@@ -12,6 +12,7 @@ import { figureNode, figureSvg, mapSvg, timeSeriesSvg, IMAGES, POINTS, DATES } f
 import { galleryView } from './gallery.js';
 import { ENV_NOTE, WSL, WORKSPACE, ENGINES, DISKS, TERM_LOGS, cmdSh, TRACE } from './envdata.js';
 import * as API from './backend.sse.js';   // 面板 7/8 实时数据；离线时各视图回落演示数据
+import * as RS from './runswitch.js';       // run 历史切换器(仅流水线面板顶部挂载)
 
 const TABS = [
   { id: 'pipeline', label: '流水线', ic: 'list' },
@@ -157,7 +158,9 @@ function pipelineView() {
 
   const sumHost = h('div', { class: 'plr-sumhost' });
   const wrap = h('div', { class: 'plr-wrap' }, list);
+  const runsHost = h('div');   // run 历史切换器挂载点(渲染与只读语义全在 runswitch.js)
   const root = h('div', null,
+    runsHost,
     h('h3', { class: 'sect' }, '处理流水线 · 11 步'),
     sumHost,
     wrap,
@@ -167,12 +170,15 @@ function pipelineView() {
       '改动任一步的方法或参数 → 重算 sha256 指纹 → 沿依赖图级联标记全部下游为 STALE。' +
       '断点续跑只重跑受影响段，指纹未变的步骤直接跳过。'));
 
+  RS.mountRunSwitch(runsHost, { root, onSwitch: refresh });   // 选中变化 → 整面板按新 run 重渲染
+
   // 异步增强(envView 的动态 import 先例,不新增模块级依赖):
   // 依赖轨道 rail / 摘要条 / 失效原因 popover / 重跑影响确认。
   (async () => {
     const [R, state] = await Promise.all([
       import('./pipelinerail.js'),
-      cachedFetch(`state:${S.sessionId}`, () => API.fetchState()),
+      cachedFetch(`state:${S.sessionId}:${RS.activeRunId() || ''}`,   // 缓存键带所选 run
+        () => API.fetchState({ runId: RS.activeRunId() })),
     ]);
     if (!root.isConnected) return;
     R.closeOverlay();   // 面板已重渲染,旧浮层的锚点失效
