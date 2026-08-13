@@ -42,6 +42,11 @@ def client(home, monkeypatch):
     monkeypatch.setattr(
         "insar_agent.runtime.wsl_probe.probe_wsl_engines",
         lambda **kw: {"ok": False, "error": "sealed", "engines": {}})
+    # 隐式引擎发现同样密封:宿主真装了 E:\miniforge3\envs\insar 会让
+    # engine_prefix 检查合法变绿,破坏"空环境"断言;发现语义由
+    # test_setup_discovery.py 专测
+    monkeypatch.setattr(
+        "insar_agent.api.setup_router._implicit_engine_prefix", lambda: None)
     app = FastAPI()
     app.include_router(setup_router)
     with TestClient(app) as c:

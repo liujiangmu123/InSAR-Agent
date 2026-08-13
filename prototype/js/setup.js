@@ -8,9 +8,12 @@
      maybeShowSetupWizard();
 
    后端契约（/api/setup/*，由集成分支实现）：
-     GET  /api/setup/status
-          → { ready, checks: [{key, ok, message, fix_hint}],
-              engines: {...}, data: {pairs}, disk_free_gb }
+     GET  /api/setup/status[?force=1]     force=1 穿透 WSL 引擎探测缓存
+          → { ready, checks: [{key, ok, message, fix_hint, required}],
+              engine: { engines: {mintpy,gdal,snaphu,pyaps},
+                        discovered_prefix, prefix_source: 'explicit'|'implicit'|null,
+                        prefix, prefix_configured, prefix_exists },
+              data: {...}, disk: {...} }
      POST /api/setup/engine-env
           → { detected_conda: str|null, commands: [{title, command, note}] }
      POST /api/setup/save   {engine_prefix, hyp3_source}
@@ -110,6 +113,25 @@ async function copyText(text) {
   } catch {
     return false;
   }
+}
+
+/* ============================================================
+   引擎来源徽标（纯函数，tests/js/setup_badge.test.mjs 锁定语义）
+   输入是 status.engine.engines 的探测值字符串，形状来自后端 probe：
+     "present"          → 启动 shell 的 PATH 命中；
+     "present(<env>)"   → conda 引擎环境命中（显式 engine_prefix 或隐式发现）；
+     "… (wsl)"          → WSL 兜底（setup_router 拼的空格 + "(wsl)" 后缀，
+                          先于 conda 形状判断——环境名恰为 wsl 时不误判）；
+     null / "" / 非串   → 引擎缺失，不出徽标。
+   ============================================================ */
+export function engineSourceBadge(value) {
+  if (typeof value !== 'string' || !value) return null;
+  if (/\s\(wsl\)\s*$/.test(value)) {
+    return { kind: 'wsl', label: 'WSL', title: '来源：WSL 发行版内探测到（isce2/snaphu 作业自动路由到 WSL 执行）' };
+  }
+  const m = /^present\((.+)\)$/.exec(value);
+  if (m) return { kind: 'conda', label: m[1], title: `来源：conda 引擎环境 ${m[1]}` };
+  return { kind: 'path', label: 'PATH', title: '来源：启动 shell 的 PATH 中探测到' };
 }
 
 /* ============================================================
@@ -230,8 +252,22 @@ function createWizard(initialStatus) {
   refs.saveLbl = h('span', null, '保存并重新检测');
   refs.save = h('button', { class: 'setup-btn is-pri', type: 'button', onclick: () => save() },
     refs.saveLbl);
+  /* 自动发现（prefix_source === 'implicit'）提示框：探测能用但配置未落盘，
+     一键把 discovered_prefix 保存为显式 engine_prefix（POST /save 现有端点） */
+  refs.adoptLbl = h('span', null, '使用自动发现的环境');
+  refs.adopt = h('button', { class: 'setup-btn', type: 'button', onclick: () => adoptDiscovered() },
+    icon('ok'), refs.adoptLbl);
+  refs.discoveredPath = h('code', { class: 'pth' });
+  refs.discovered = h('div', { class: 'setup-discovered' },
+    icon('info'),
+    h('div', { class: 'bd' },
+      h('div', { class: 'ln' }, '自动发现引擎环境（未固化）：', refs.discoveredPath),
+      h('div', { class: 'hint' }, '保存为显式配置后，重启或换终端启动也能稳定找到引擎。')),
+    refs.adopt);
+  refs.discovered.hidden = true;
   const pane3 = h('section', { class: 'setup-pane', 'aria-label': '第 3 步 路径配置' },
     h('p', { class: 'setup-blurb' }, '告诉桌面版引擎环境与数据在哪里，保存后自动重新检测。'),
+    refs.discovered,
     h('label', { class: 'setup-field' },
       h('span', { class: 'lb' }, '引擎环境路径'),
       refs.enginePrefix,
@@ -299,6 +335,15 @@ function createWizard(initialStatus) {
   });
 
   /* ---- 渲染：检测清单 ---- */
+  /* 检测项 key（engine_mintpy 等）→ status.engine.engines 里的探测值 */
+  function engineValueOf(key) {
+    const eng = status?.engine?.engines;
+    if (!eng || typeof eng !== 'object') return null;
+    if (typeof key !== 'string' || !key.startsWith('engine_')) return null;
+    const v = eng[key.slice('engine_'.length)];
+    return typeof v === 'string' ? v : null;
+  }
+
   function renderChecks() {
     const cs = checks();
     if (!cs.length) {
@@ -311,12 +356,16 @@ function createWizard(initialStatus) {
       // 可选项未配置是中性态(不算"未通过"):必需项才用红色失败视觉
       const tone = c.ok ? 'is-ok' : optional ? 'is-opt' : 'is-bad';
       const pill = c.ok ? '通过' : optional ? '可选 · 未配置' : '未通过';
+      // 引擎行来源徽标:PATH / conda 环境名 / WSL —— 回答"这个引擎是从哪找到的"
+      const badge = engineSourceBadge(engineValueOf(c.key));
       return h('li', { class: `setup-check ${tone}` },
         h('span', { class: 'st', 'aria-hidden': 'true' },
           icon(c.ok ? 'ok' : optional ? 'info' : 'fail')),
         h('div', { class: 'bd' },
           h('div', { class: 'msg' },
             c.message || c.key || '（未命名检测项）',
+            badge ? h('span', { class: `setup-src is-${badge.kind}`, title: badge.title },
+              badge.label) : null,
             c.key ? h('code', { class: 'key' }, c.key) : null),
           !c.ok && c.fix_hint
             ? h('div', { class: 'fix' }, h('b', null, optional ? '配置提示' : '修复提示'),
@@ -444,14 +493,15 @@ function createWizard(initialStatus) {
     }
   }
 
-  /* ---- 动作：重新检测 ---- */
+  /* ---- 动作：重新检测（force=1：用户显式要新鲜结果，穿透后端 WSL 探测缓存；
+          刚在 WSL 里装完引擎时，5 分钟 TTL 内的旧缓存会让复检纹丝不动） ---- */
   async function redetect() {
     if (refs.redetect.disabled) return;
     refs.redetect.disabled = true;
     refs.redetectLbl.textContent = '检测中…';
     setNote(refs.note1, null);
     try {
-      status = await apiGet('/api/setup/status');
+      status = await apiGet('/api/setup/status?force=1');
       paint();
       setNote(refs.note1, isReady() ? 'ok' : 'info', isReady()
         ? '全部检测通过！点击右下角「开始使用」进入工作区。'
@@ -461,6 +511,43 @@ function createWizard(initialStatus) {
     } finally {
       refs.redetect.disabled = false;
       refs.redetectLbl.textContent = '重新检测';
+    }
+  }
+
+  /* ---- 渲染：第 3 步自动发现提示 + 预填 ---- */
+  function renderDiscovered() {
+    const eng = status?.engine;
+    const discovered = typeof eng?.discovered_prefix === 'string' ? eng.discovered_prefix : '';
+    // 预填:输入框还空着时填入探测实际使用的 prefix(显式配置或隐式发现),
+    // 用户已经开始编辑就不打扰
+    if (discovered && !refs.enginePrefix.value) refs.enginePrefix.value = discovered;
+    const implicit = !!discovered && eng?.prefix_source === 'implicit';
+    refs.discovered.hidden = !implicit;
+    if (implicit) refs.discoveredPath.textContent = discovered;
+  }
+
+  /* ---- 动作：一键把自动发现的引擎环境固化为显式配置 ---- */
+  async function adoptDiscovered() {
+    const discovered = status?.engine?.discovered_prefix;
+    if (!discovered || refs.adopt.disabled) return;
+    refs.adopt.disabled = true;
+    refs.adoptLbl.textContent = '保存中…';
+    setNote(refs.note3, null);
+    try {
+      // 只提交 engine_prefix:hyp3_source 不传即不动(传空串是"清除"语义)
+      const res = await apiPost('/api/setup/save', { engine_prefix: discovered });
+      if (res && res.ok === false) {
+        throw new Error(res.message || res.error || '后端拒绝了本次保存');
+      }
+      refs.enginePrefix.value = discovered;
+      status = await apiGet('/api/setup/status');
+      paint();
+      setNote(refs.note3, 'ok', `已保存为显式配置：${discovered}`);
+    } catch (err) {
+      setNote(refs.note3, 'bad', `保存失败：${err.message}`);
+    } finally {
+      refs.adopt.disabled = false;
+      refs.adoptLbl.textContent = '使用自动发现的环境';
     }
   }
 
@@ -509,6 +596,7 @@ function createWizard(initialStatus) {
   function paint() {
     renderChecks();
     renderFacts();
+    renderDiscovered();
     const ready = isReady();
 
     refs.stepBtns.forEach((btn, i) => {
