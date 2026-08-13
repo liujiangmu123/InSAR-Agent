@@ -319,7 +319,10 @@ PIPELINE: tuple[Capability, ...] = (
         ),
         default_method="tropo_era5_pyaps",
         params={
-            "ramp": Param("linear", kind="science", type="str", enum=("no", "linear", "quadratic")),
+            # 默认 no 对齐 MintPy 上游(deramp=no):linear 会把 co-/post-/inter-seismic
+            # 的长波长形变梯度当轨道误差扣除(smallbaselineApp.cfg §9 官方注释;
+            # RESEARCH-insar-step-knowledge C1/P0)。局地形变(沉降/矿区/滑坡)再覆写 linear。
+            "ramp": Param("no", kind="science", type="str", enum=("no", "linear", "quadratic")),
             "dem_error": Param(True, kind="science", type="bool"),
             # 默认对齐实测基准配置 RidgecrestSenDT71.txt(未启用 SET);
             # 另:conda-forge pysolid 的 Fortran DLL 在 Windows 上加载失败,开启前须验证

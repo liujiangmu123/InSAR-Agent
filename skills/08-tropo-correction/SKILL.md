@@ -50,12 +50,13 @@ gacos`、`tropo_height_corr → height_correlation`,写入
 
 本步骤在 registry(capabilities.py id=8)声明的参数只有三个:
 
-- **`ramp`**(science,默认 `"linear"`,枚举 `no | linear | quadratic`,渲染为
-  `mintpy.deramp`):阶数选择原则 ——
-  - `linear`:局部形变(城市沉降、矿区)+ 明显轨道残差趋势面时的常规选择;
-  - `no`:**长波长形变场景必选** —— MintPy 官方注释明确 co-/post-/inter-seismic
-    等长波长信号不推荐 deramp(smallbaselineApp.cfg §9),同震阶跃属长波长信号,
-    `quake` 场景建议覆写为 `no`,避免把形变梯度当轨道误差扣除;
+- **`ramp`**(science,默认 `"no"`,枚举 `no | linear | quadratic`,渲染为
+  `mintpy.deramp`;默认对齐 MintPy 上游 deramp=no,2026-08-13 依 C1 修正):
+  阶数选择原则 ——
+  - `no`(默认):**长波长形变场景必选** —— MintPy 官方注释明确
+    co-/post-/inter-seismic 等长波长信号不推荐 deramp(smallbaselineApp.cfg §9),
+    同震阶跃属长波长信号,`linear` 会把形变梯度当轨道误差扣除;
+  - `linear`:局部形变(城市沉降、矿区、滑坡)+ 明显轨道残差趋势面时覆写启用;
   - `quadratic`:仅当残差趋势面明显二次且形变确属局地时,阶数越高吃掉真实信号
     的风险越大 —— 宁低勿高。
 - **`dem_error`**(science,默认 `True`,渲染为 `mintpy.topographicResidual`):
