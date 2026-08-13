@@ -394,6 +394,8 @@ def create_app(home: Path | None = None) -> FastAPI:
     from insar_agent.api.install_router import create_install_router; app.include_router(create_install_router())  # 安装助手(/api/install/*,只出方案,绝不代跑安装)
     from insar_agent.api.data_catalog_router import create_data_catalog_router  # 数据集清单
     app.include_router(create_data_catalog_router(home))  # /api/datasets*(文件面板「数据集」区)
+    from insar_agent.api.recommend_router import create_recommend_router  # 处理路线推荐
+    app.include_router(create_recommend_router(home))  # /api/recommend(数据集 → 路线优劣对比)
     from insar_agent.api.report_router import create_report_router
     app.include_router(create_report_router(store, home))  # 方法章节草稿(/api/report/draft)
     from insar_agent.api.visionqa_router import create_visionqa_router
