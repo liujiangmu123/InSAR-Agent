@@ -32,6 +32,7 @@ from insar_agent.core.fsio import atomic_write_text
 from insar_agent.core.ledger import export_provenance
 from insar_agent.core.store import Store
 from insar_agent.report.draft import build_facts, draft_methods
+from insar_agent.report.results import RESULTS_FILENAME, build_result_facts, draft_results
 
 #: 落盘文件名(run 工作目录下;文件面板按目录可见)
 DRAFT_FILENAME = "report_draft.md"
@@ -91,6 +92,30 @@ def create_report_router(store: Store, home: Path, *,
             "llm_polish": result["llm_polish"],
             "facts_used": result["facts_used"],
             "saved": _save_draft(workspace, result["draft"]),
+        }
+
+    # ---- 结果章节(append 块:与方法草稿同纪律;路由 /api/report/results 不重名) ----
+    @router.post("/api/report/results")
+    def report_results(body: DraftBody):
+        """结果章节草稿:QA 指标 + 速度场统计 → 中文结果段,落盘 report_results.md。"""
+        run = _resolve_run(store, body.session, body.run_id)
+        facts = build_result_facts(store, run["run_id"], contract=contract)
+        result = draft_results(factory(), facts)
+        saved = False
+        if run["workspace"]:  # 落盘失败不阻塞响应(_save_draft 同语义,文件名不同)
+            try:
+                ws = Path(run["workspace"])
+                ws.mkdir(parents=True, exist_ok=True)
+                atomic_write_text(ws / RESULTS_FILENAME, result["draft"])
+                saved = True
+            except OSError:
+                saved = False
+        return {
+            "run_id": run["run_id"],
+            "draft": result["draft"],
+            "llm_polish": result["llm_polish"],
+            "facts_used": result["facts_used"],
+            "saved": saved,
         }
 
     return router
