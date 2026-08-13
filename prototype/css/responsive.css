@@ -1,0 +1,197 @@
+/* ============================================================
+   窄屏 / 分屏响应式适配(纯新增层,不改既有文件的任何规则)
+
+   场景:讲师常把浏览器与 GIS / 文献软件左右分屏,视口宽度落在
+   700–1280px 之间;既有三栏(rail+会话侧栏 / 聊天 / dock)在这些
+   宽度下要么挤坏要么留给聊天的空间过窄。
+
+   档位(与 base.css 断点清单对齐,唯一事实源在 base.css :root):
+     >1280            宽屏:本文件零生效(所有规则都包在 @media 内,
+                      且状态类 body.rsp-* 只由 responsive.js 在窄档添加)
+     1241–1280        挤压档(--bp-sider-squeeze):会话侧栏可折叠为
+                      贴边细条,悬停 / 键盘聚焦临时展开为覆层,
+                      点固定钮持久展开;偏好記在 localStorage
+     769–1240         抽屉档(--bp-dock-drawer,既有实现,本文件不插手):
+                      base.css/dock.css/app.js 已把侧栏与 dock 做成
+                      fixed 覆层抽屉 + 右缘把手 + 遮罩 + 滑动关闭,
+                      即任务里「dock 覆层抽屉、聊天占满」的既有满足
+     ≤768             单栏档(--bp-single-col):rail 让位给顶部
+                      会话/聊天/面板 三段导航,侧栏与 dock 全宽覆层,
+                      触控目标 ≥44px,输入区贴底(安全区)
+     ≤480             紧凑档(--bp-compact,既有实现,不插手)
+
+   无 JS 降级:所有改变「壳布局」的规则都以 body.rsp-*(responsive.js
+   维护)为前提;responsive.js 不可用时本文件只剩纯观感增强(触控目标、
+   表格滚动、安全区),dock 沿既有规则保持可见面板,布局仍可用。
+
+   既有能力核对(无需新规则,防止重复实现):
+   - 长会话名省略号:base.css `.sess .nm` 已有 ellipsis 三件套;
+   - 图件网格列数随宽度降:gallery.css `.glx-grid` 已是
+     repeat(auto-fill, minmax(150px, 1fr));
+   - 代码块/终端输出不撑破:stream.css `.tool .out`/`.logs .out`
+     已 overflow:auto,行内容 pre-wrap + break-all。
+   ============================================================ */
+
+/* ============================================================
+   挤压档 1241–1280:侧栏折叠为细条
+   min-width:1241 是 --bp-dock-drawer(1240) 的互补写法(bp+1)
+   ============================================================ */
+@media (min-width: 1241px) and (max-width: 1280px) {
+  body.rsp-squeeze { --rsp-strip: 20px; }
+
+  /* 折叠/固定切换钮(responsive.js 注入 .sider-hd,类含 icon-btn,
+     基础观感沿用 base.css `.icon-btn`;其余档位由 JS 置 hidden) */
+  .rsp-pin svg { transition: transform .16s ease; }
+  body.rsp-sider-collapsed .rsp-pin svg { transform: rotate(180deg); }
+
+  /* 覆盖 base.css `.sider { width: var(--sider); flex-shrink: 0 }`:
+     折叠态把侧栏抽出常流,变成贴左细条;悬停或键盘聚焦(focus-within)
+     临时展开为覆层,鼠标移走 / 焦点离开自动收回。
+     z-index 与 base.css 抽屉档的 .sider(70) 取齐:高于 dock(60)/scrim(55)。 */
+  body.rsp-sider-collapsed .sider:not([hidden]) {
+    position: fixed; left: var(--rail); top: 0; bottom: 0; z-index: 70;
+    width: var(--rsp-strip);
+    overflow: hidden;
+    box-shadow: none;
+    transition: width .16s ease, box-shadow .16s ease;
+  }
+  body.rsp-sider-collapsed .sider:not([hidden]):hover,
+  body.rsp-sider-collapsed .sider:not([hidden]):focus-within {
+    width: var(--sider);
+    box-shadow: var(--sh-3);
+  }
+
+  /* 栏内容固定按展开宽度排版:细条态只是「裁切」而非重排,
+     悬停展开时文字不会经历难看的逐字回流 */
+  body.rsp-sider-collapsed .sider:not([hidden]) > * {
+    width: calc(var(--sider) - 1px);
+    flex-shrink: 0;
+  }
+
+  /* 细条态的可视外衣:盖在被裁切内容之上的竖排「会话」标签,
+     悬停/聚焦展开时淡出让位给真实内容 */
+  body.rsp-sider-collapsed .sider:not([hidden])::after {
+    content: '会话';
+    position: absolute; inset: 0; z-index: 1;
+    display: flex; align-items: center; justify-content: center;
+    writing-mode: vertical-rl; letter-spacing: .2em;
+    font-size: var(--fs-xs); font-weight: 700; color: var(--text-3);
+    background: var(--bg-sub);
+    pointer-events: none;
+    opacity: 1; transition: opacity .12s ease;
+  }
+  body.rsp-sider-collapsed .sider:not([hidden]):hover::after,
+  body.rsp-sider-collapsed .sider:not([hidden]):focus-within::after {
+    opacity: 0;
+  }
+
+  /* 覆盖 base.css `.main { flex: 1 }` 的起点:侧栏抽出常流后,
+     用外边距补回细条占位,聊天内容不被细条压住;
+     侧栏被 rail 开关整个藏起([hidden])时不补,避免留一条空缝 */
+  body.rsp-sider-collapsed .sider:not([hidden]) + .main {
+    margin-left: var(--rsp-strip);
+  }
+}
+
+/* ============================================================
+   单栏档 ≤768:顶部三段导航 + 全宽覆层 + 触控目标
+   ============================================================ */
+@media (max-width: 768px) {
+
+  /* ---------- 以下依赖 responsive.js(body.rsp-phone) ---------- */
+
+  body.rsp-phone { --rsp-nav-h: 48px; }
+
+  /* 覆盖 base.css `.rail { width: var(--rail); ... }`:
+     单栏下最左图标条让位给顶部导航(其 对话/会话/面板 职能由
+     .rsp-nav 接管;JS 不可用时本规则不生效,rail 原样保留) */
+  body.rsp-phone .rail { display: none; }
+
+  /* 顶部 会话/聊天/面板 三段导航(responsive.js 注入 body,
+     其余档位由 JS 置 hidden)。z-index 75:压过侧栏覆层(70)与
+     dock(60),覆层打开时仍能一键切走 —— 这是单栏档唯一的退路 */
+  body.rsp-phone .rsp-nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 75;
+    height: calc(var(--rsp-nav-h) + env(safe-area-inset-top, 0px));
+    padding: calc(4px + env(safe-area-inset-top, 0px))
+             max(8px, env(safe-area-inset-right, 0px))
+             4px
+             max(8px, env(safe-area-inset-left, 0px));
+    display: flex; gap: 6px;
+    background: var(--bg-sub);
+    border-bottom: 1px solid var(--border);
+  }
+  body.rsp-phone .rsp-nav button {
+    flex: 1; min-height: 40px;   /* 含上下 padding 后整条 ≥44px 触控高度 */
+    border-radius: var(--r);
+    font-size: var(--fs); font-weight: 600; color: var(--text-2);
+    transition: background .12s, color .12s;
+  }
+  body.rsp-phone .rsp-nav button:hover { background: var(--bg-hover); color: var(--text); }
+  body.rsp-phone .rsp-nav button[aria-pressed='true'] {
+    background: var(--accent-weak); color: var(--accent-text);
+  }
+
+  /* 覆盖 base.css `.app { display:flex; height:100vh }` 的可用高度:
+     100dvh 让移动端地址栏收起/展开时输入区始终贴底(不支持 dvh 的
+     引擎落回既有 100vh);padding-top 给顶部导航让位(border-box) */
+  body.rsp-phone .app {
+    height: 100dvh;
+    padding-top: calc(var(--rsp-nav-h) + env(safe-area-inset-top, 0px));
+  }
+
+  /* 覆盖 base.css 抽屉档 `.sider { position:fixed; left:var(--rail);
+     top:0; bottom:0 }`:单栏下会话页全宽,并让开顶部导航 */
+  body.rsp-phone .sider:not([hidden]) {
+    left: 0; width: 100vw;
+    top: calc(var(--rsp-nav-h) + env(safe-area-inset-top, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* 覆盖 dock.css `.dock { width: var(--dock) }`、抽屉档
+     `max-width: calc(100vw - var(--rail))` 与紧凑档
+     `width: calc(100vw - var(--rail))`:单栏下面板页全宽覆层 */
+  body.rsp-phone .dock:not([hidden]) {
+    left: 0; right: 0; width: auto; max-width: none;
+    top: calc(var(--rsp-nav-h) + env(safe-area-inset-top, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* 全宽面板没有「拖宽」概念,dock.css `.grip` 让位;
+     app.js 的右缘纵向把手(dock.css `.dock-handle`)与三段导航的
+     「面板」按钮重复,一并让位 —— 触发入口收敛到导航一处 */
+  body.rsp-phone .grip { display: none; }
+  body.rsp-phone .dock-handle { display: none; }
+
+  /* 覆盖 stream.css `.composer { padding: 11px 20px 13px }`:
+     单栏下收紧左右留白,底部叠加 iOS 刘海屏安全区(输入框贴底) */
+  body.rsp-phone .composer {
+    padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* ---------- 以下纯 CSS,JS 不可用时同样生效 ---------- */
+
+  /* 触控目标 ≥44px(WCAG 2.5.5):
+     - stream.css `.cbtn { width:31px; height:31px }` 与
+       `.cbtn.send/.stop { width:33px; height:33px }`;
+     - dock.css `.dock-tabs button { padding: 7px 9px }`;
+     - base.css `.icon-btn { width:28px; height:28px }`、
+       `.rail-btn { width:36px; height:36px }`(rail 仅无 JS 时可见)、
+       `.seg button { padding: 5px 0 }` */
+  .cbtn, .cbtn.send, .cbtn.stop { width: 44px; height: 44px; }
+  .dock-tabs button { min-height: 44px; }
+  .icon-btn { width: 44px; height: 44px; }
+  .rail-btn { width: 44px; height: 44px; }
+  .seg button { min-height: 44px; }
+
+  /* 覆盖 stream.css `table.grid { width: 100% }`(display:table):
+     数据表改为块级横向滚动容器,宽表(基线对比等)在窄屏里
+     容器内滚动而不是撑破消息流/面板;代价是窄表不再自动
+     铺满容器宽(行分隔线只到内容宽),窄屏下可接受 */
+  table.grid { display: block; overflow-x: auto; }
+
+  /* 覆盖 stream.css `.stream-inner { padding: 20px 24px ... }` 的
+     左右留白:窄屏把水平空间还给正文(底部 padding 是 composer
+     高度联动的 calc,不能动,故只覆写左右两侧) */
+  .stream-inner { padding-left: 12px; padding-right: 12px; }
+}
