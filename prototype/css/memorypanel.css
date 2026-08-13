@@ -1,0 +1,98 @@
+/* 记忆面板 + 侧栏「记忆」入口(memorypanel.js)
+   全部取 tokens.css 语义变量,深浅主题自适应;fallback 为浅色主题取值。 */
+
+/* ---- 侧栏入口按钮(.sider-ft 内,账号行上方) ---- */
+.memp-entry {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; margin: 0 0 8px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  background: var(--bg-sub, #f7f7f8);
+  color: var(--text-2, #4b5563);
+  font: inherit; font-size: var(--fs-sm, 12px);
+  padding: 6px 10px; cursor: pointer;
+}
+.memp-entry:hover {
+  background: var(--bg-hover, #eceef1);
+  border-color: var(--border-strong, #d3d7dd);
+}
+.memp-entry:focus-visible { outline: 2px solid var(--border-focus, #3b82f6); outline-offset: 1px; }
+.memp-entry svg { width: 14px; height: 14px; flex: none; }
+
+/* ---- 浮层面板(llmset 同款骨架) ---- */
+.memp-overlay {
+  position: fixed; inset: 0; z-index: 240;
+  background: color-mix(in srgb, var(--bg, #0b0e14) 55%, transparent);
+  display: flex; align-items: center; justify-content: center;
+}
+
+.memp {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 48px));
+  display: flex; flex-direction: column;
+  background: var(--surface, #fff);
+  color: var(--text, #111827);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  box-shadow: var(--sh-3, 0 18px 48px rgba(0, 0, 0, .28));
+}
+
+.memp header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border, #e5e7eb);
+}
+.memp h3 { margin: 0; font-size: 14px; }
+.memp-x {
+  border: 0; background: none; color: inherit; font-size: 18px;
+  cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 6px;
+}
+.memp-x:hover { background: var(--bg-hover, #eceef1); }
+
+.memp-body { padding: 12px 16px; overflow: auto; display: grid; gap: 10px; }
+
+.memp-add { display: flex; gap: 8px; }
+.memp-add input[name="content"] { flex: 1; min-width: 0; }
+.memp-search input { width: 100%; }
+.memp input, .memp select {
+  font: inherit; color: var(--text, #111827);
+  background: var(--bg, #fff); border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px; padding: 7px 9px;
+}
+.memp input:focus-visible, .memp select:focus-visible,
+.memp button:focus-visible { outline: 2px solid var(--border-focus, #3b82f6); outline-offset: 1px; }
+
+.memp-hint { margin: 0; font-size: 11px; color: var(--text-2, #4b5563); }
+
+.memp-note { font-size: 12px; color: var(--text-2, #4b5563); }
+.memp-note[data-tone="ok"] { color: var(--ok-text, #15803d); }
+.memp-note[data-tone="warn"] { color: var(--stale-text, #9a3412); }
+.memp-note[data-tone="bad"] { color: var(--bad-text, #b91c1c); }
+
+/* ---- 记忆列表 ---- */
+.memp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.memp-item {
+  display: flex; align-items: flex-start; gap: 8px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px; padding: 8px 10px;
+  background: var(--bg-sub, #f7f7f8);
+}
+.memp-main { flex: 1; min-width: 0; }
+.memp-content { font-size: 12.5px; line-height: 1.5; word-break: break-word; }
+.memp-meta { font-size: 11px; color: var(--text-2, #4b5563); margin-top: 2px; }
+
+/* 类型徽章:偏好/事实/结论三色 + 未知回退中性(*-weak 底 + *-text 字,AA 达标) */
+.memp-badge {
+  flex: none; font-size: 11px; line-height: 1.6; font-weight: 600;
+  border-radius: var(--r-pill, 999px); padding: 0 8px; margin-top: 1px;
+  background: var(--bg-hover, #eceef1); color: var(--text-2, #4b5563);
+}
+.memp-badge.is-pref { background: var(--accent-weak, #eff6ff); color: var(--accent-text, #1d4ed8); }
+.memp-badge.is-fact { background: var(--ok-weak, #f0fdf4); color: var(--ok-text, #15803d); }
+.memp-badge.is-outcome { background: var(--stale-weak, #fff7ed); color: var(--stale-text, #9a3412); }
+
+.memp-del {
+  flex: none; border: 0; background: none; cursor: pointer;
+  color: var(--text-2, #4b5563); font-size: 15px; line-height: 1;
+  padding: 2px 5px; border-radius: 6px;
+}
+.memp-del:hover { background: var(--bad-weak, #fef2f2); color: var(--bad-text, #b91c1c); }

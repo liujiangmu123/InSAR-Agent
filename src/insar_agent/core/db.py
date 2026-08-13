@@ -59,6 +59,12 @@ _STATEMENT_MIGRATIONS: tuple[str, ...] = (
     " kind TEXT NOT NULL, prompt_tokens INTEGER, completion_tokens INTEGER,"
     " latency_ms INTEGER, session_id TEXT, run_id TEXT, cost_est REAL)",  # kind: chat|vision
     "CREATE INDEX IF NOT EXISTS idx_llm_calls_ts ON llm_calls(ts)",
+    # 跨会话记忆(brain/memory.py):kind=preference|fact|outcome,source=user|auto;
+    # session_id NULL=全局记忆;archived 非 NULL=软删时刻(同 sessions.archived 语义)
+    "CREATE TABLE IF NOT EXISTS memories ("
+    " id INTEGER PRIMARY KEY, ts REAL NOT NULL, kind TEXT NOT NULL,"
+    " content TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'user',"
+    " session_id TEXT, weight REAL NOT NULL DEFAULT 1.0, archived REAL)",
 )
 
 

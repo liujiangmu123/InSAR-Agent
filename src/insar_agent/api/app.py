@@ -396,6 +396,8 @@ def create_app(home: Path | None = None) -> FastAPI:
     from insar_agent.api.visionqa_router import create_visionqa_router
     app.include_router(create_visionqa_router(home, store))  # AI 识图质检(/api/vision-qa)
     app.include_router(create_advisor_router(store, home))  # 下一步建议(/api/advise,run 终态建议卡)
+    from insar_agent.api.memory_router import create_memory_router
+    app.include_router(create_memory_router(store))  # 跨会话记忆(/api/memory*,记忆面板数据源)
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
