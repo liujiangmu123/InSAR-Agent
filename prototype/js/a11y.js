@@ -62,9 +62,12 @@ export function dedupeShortcuts(list) {
 
 /* ---------------- DOM 侧:清单采集 ---------------- */
 
-/** 从当前文档提取快捷键清单(提示行优先,其次 aria-keyshortcuts 声明)。 */
+/** 静态补登清单:界面提示行 / aria-keyshortcuts 覆盖不到的全局快捷键统一在此登记(防散落)。 */
+export const STATIC_SHORTCUTS = [{ keys: ['Ctrl', 'Shift', 'K'], label: '打开 / 关闭命令面板' }];
+
+/** 从当前文档提取快捷键清单(静态补登 + 提示行 + aria-keyshortcuts 声明)。 */
 export function collectShortcuts(root = document) {
-  const list = [];
+  const list = [...STATIC_SHORTCUTS];
   for (const span of root.querySelectorAll('.cmeta span')) {
     list.push(...parseHintText(span.textContent));
   }
