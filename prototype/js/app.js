@@ -818,6 +818,7 @@ async function consume(iter) {
 
       case 'plan':
         currentPlan = Stream.planPanel(ev.items);
+        window.PlanDiff?.onPlan?.(ev);   // plandiff 接线:计划概览/变更 diff 卡(js/plandiff.js,未挂载安全跳过)
         break;
 
       case 'candidates':
