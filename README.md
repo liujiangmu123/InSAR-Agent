@@ -64,6 +64,8 @@ python -m venv .venv
 .venv\Scripts\python -m pytest tests/ -q     # 215 项测试(2026-08-12 全绿)
 .venv\Scripts\python scripts\check_frontend.py  # 前端质量门一键:JS 单测 + *.check.mjs + CSS/a11y 质检
                                              # (零 npm 依赖;--only 名 可只跑单套件)
+.venv\Scripts\python scripts\check_desktop.py   # 桌面冻结包完整性矩阵一键:dist 缺失先构建,再 pytest -m desktop
+                                             # (功能矩阵与手工核验清单见 docs/DESKTOP-PARITY.md;--rebuild 强制重建)
 
 # 机器高负载时(多代理并行开发/后台大任务):时序敏感用例(@pytest.mark.timing,
 # 心跳/双超时/宽限判定窗)可能被拖慢误判 —— 设系数放宽判定窗(断言语义不变):
