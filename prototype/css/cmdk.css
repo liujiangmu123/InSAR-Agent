@@ -1,0 +1,62 @@
+/* ============================================================
+   命令面板（cmdk.js 自行注入本文件；设计令牌全部来自 tokens.css）
+   z-index 450：高于帮助浮层（400），打开前 cmdk.js 会先关掉帮助
+   ============================================================ */
+.cmdk {
+  position: fixed; inset: 0; z-index: 450;
+  display: flex; justify-content: center; align-items: flex-start;
+  padding: min(13vh, 120px) 16px 16px;
+}
+.cmdk[hidden] { display: none; }
+.cmdk-mask { position: absolute; inset: 0; background: rgba(10, 15, 28, .45); }
+
+.cmdk-panel {
+  position: relative; width: min(560px, 100%);
+  max-height: min(64vh, 520px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-lg); box-shadow: var(--sh-3);
+}
+
+.cmdk-inrow { padding: 10px 13px; border-bottom: 1px solid var(--border); }
+.cmdk-input {
+  width: 100%; border: none; outline: none; background: transparent;
+  color: var(--text); font: 500 var(--fs-md)/1.45 var(--font);
+}
+.cmdk-input::placeholder { color: var(--text-3); }
+
+.cmdk-list {
+  list-style: none; margin: 0; padding: 6px;
+  overflow-y: auto; flex: 1; min-height: 0;
+}
+.cmdk-group {
+  padding: 8px 8px 3px; font-size: var(--fs-xs); font-weight: 600;
+  color: var(--text-3); letter-spacing: .02em;
+}
+.cmdk-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px; border-radius: var(--r-sm);
+  font-size: var(--fs-sm); color: var(--text); cursor: pointer;
+}
+.cmdk-item .ttl {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cmdk-item .why {
+  flex-shrink: 0; font-size: var(--fs-xs); color: var(--text-3);
+  border: 1px solid var(--border); border-radius: var(--r-pill); padding: 0 6px;
+}
+.cmdk-item:hover { background: var(--bg-hover); }
+.cmdk-item.active {
+  background: var(--accent-weak); color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+/* 禁用态：目标控件当前不在页面上（如空态示例已被会话替换、报告面板未渲染） */
+.cmdk-item[aria-disabled='true'] { opacity: .55; cursor: not-allowed; }
+.cmdk-item[aria-disabled='true']:hover { background: transparent; }
+
+.cmdk-empty { padding: 20px 12px; text-align: center; color: var(--text-3); font-size: var(--fs-sm); }
+.cmdk-ft {
+  padding: 7px 13px; border-top: 1px solid var(--border);
+  font-size: var(--fs-xs); color: var(--text-3);
+}
