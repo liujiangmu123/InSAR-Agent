@@ -389,6 +389,7 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_doctor_router(home))  # 一键体检(/api/doctor,面向排障的秒级只读深检)
     from insar_agent.api.data_router import create_data_router; app.include_router(create_data_router(store))  # 点位时序数据
     app.include_router(create_diag_router(home))  # 诊断包一键导出(/api/diagnostics*)
+    from insar_agent.api.install_router import create_install_router; app.include_router(create_install_router())  # 安装助手(/api/install/*,只出方案,绝不代跑安装)
     from insar_agent.api.data_catalog_router import create_data_catalog_router  # 数据集清单
     app.include_router(create_data_catalog_router(home))  # /api/datasets*(文件面板「数据集」区)
     from insar_agent.api.report_router import create_report_router
