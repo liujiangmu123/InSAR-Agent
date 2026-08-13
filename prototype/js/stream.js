@@ -126,12 +126,12 @@ export function clear() {
 export function renderHero(onPick, onDemoEvents = null) {
   lastFailure = null;   // 回到空态即换会话/重置，旧失败上下文不再有效
   probeRun = null;
-  // 第一条是唯一有真实数据的场景，标 ready；另两条明确标注数据待获取，
-  // 避免演示时让人误以为所有场景都能跑（诚实性要求，见 AGENT-DESIGN §0.5.5）
+  // 纯示例文案（只作输入引导，不声称任何数据/会话真实存在——
+  // 数据是否就绪由服务端探测与规划回合如实回答）
   const prompts = [
-    { text: 'Ridgecrest 2019 同震形变时序分析', ready: true },
-    { text: '分析青海玉树冻土 2020–2023 的 SBAS 时序形变', ready: false },
-    { text: '雅鲁藏布江滑坡区做 PS 点监测并与 GNSS 对比', ready: false },
+    { text: 'Ridgecrest 2019 同震形变时序分析' },
+    { text: '分析青海玉树冻土 2020–2023 的 SBAS 时序形变' },
+    { text: '雅鲁藏布江滑坡区做 PS 点监测并与 GNSS 对比' },
   ];
   host.replaceChildren(h('div', { class: 'stream-inner' },
     h('div', { class: 'hero rise' },
@@ -151,17 +151,9 @@ export function renderHero(onPick, onDemoEvents = null) {
             inp.dispatchEvent(new Event('input', { bubbles: true }));   // 让发送键启用/高度自适应
             inp.focus();
           },
-          title: p.ready ? '有真实数据（11 个 HyP3 干涉对）' : '数据待获取，仅演示决策流程',
-        }, p.text,
-           h('span', { class: `dot-tag ${p.ready ? 'ok' : 'wait'}` },
-             p.ready ? '真实数据' : '数据待获取')))),
+          title: '示例任务：点击填入输入框，可改写后再发送',
+        }, p.text))),
       h('p', { class: 'hint' }, '选一个示例，或直接描述你的研究任务'),
-      // 诚实性：本原型未接后端，耗时/体积/像元数为示意值（见 docs/AGENT-DESIGN.md §0.5.5）
-      h('div', { class: 'demo-note' }, icon('warn'),
-        h('span', null, h('b', null, '演示模式'),
-          '：后端未接入。真实数据为 Ridgecrest 11 个 HyP3 干涉对；',
-          '耗时（含每步完成后的「· NN min」标注）、体积、像元数等为',
-          h('b', null, '示意值'), '，不可引用。时长预估仅在有本机运行历史时给出区间，否则如实显示「时长未知」。')),
       onDemoEvents ? h('button', {
         class: 'hero-demo', type: 'button', onclick: onDemoEvents,
         'aria-label': '在轨迹流中插入 reattach、intervention、gate_stop 三种长任务事件的静态演示',

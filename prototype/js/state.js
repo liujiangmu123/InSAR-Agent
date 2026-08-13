@@ -40,138 +40,46 @@ function flush() {
 }
 
 /* ============================================================
-   流水线定义：11 步 × 依赖关系 × 候选方法
+   步骤目录：来自 GET /api/registry 的服务端能力声明
+   —— 不再内置任何演示流水线。目录只描述「有哪些步骤/方法/参数」，
+   不代表任何会话的执行状态；数组保持引用不变（就地填充），
+   全部消费方（dock/slash/plandiff/pipelinerail/envdata…）无需换接口。
    deps 是真正的依赖边，STALE 沿它传播。
    ============================================================ */
-export const STEP_DEFS = [
-  {
-    id: 1, name: '数据获取', deps: [], dur: 360,
-    methods: [
-      { id: 'asf_search_slc', label: 'asf_search_slc', engine: 'ASF API', why: '下载原始 SLC，可控性最强', ok: true },
-      { id: 'hyp3_submit', label: 'hyp3_submit', engine: '云端', why: '跳过 2–6 步，但失去中间产物控制权', ok: true, cost: '需 ASF 配额' },
-      { id: 'local_import', label: 'local_import', engine: '—', why: '已有本地数据', ok: true },
-    ],
-    method: 'asf_search_slc',
-    params: { scenes: 7, platform: 'sentinel-1', dates: '2019-06-10..2019-08-15' },
-    outputs: [{ path: 'data/slc', kind: 'SLC', layout: 'isce2' }],
-  },
-  {
-    id: 2, name: '辅助数据', deps: [1], dur: 120,
-    methods: [
-      { id: 'dem_copernicus', label: 'dem_copernicus', engine: 'AWS', why: 'Copernicus 30 m，覆盖全球且质量稳定', ok: true },
-      { id: 'dem_srtm', label: 'dem_srtm', engine: 'NASA', why: 'SRTM 30 m，高纬度覆盖缺口', ok: true },
-      { id: 'dem_local', label: 'dem_local', engine: '—', why: '使用本地 DEM 瓦片', ok: true },
-    ],
-    method: 'dem_copernicus',
-    params: { dem: 'copernicus-30m', orbit: 'poeorb' },
-    outputs: [{ path: 'data/dem', kind: 'DEM', layout: 'isce2' }],
-  },
-  {
-    id: 3, name: '配准', deps: [1, 2], dur: 1080,
-    methods: [
-      { id: 'isce2_tops_geom_esd', label: 'isce2_tops_geom_esd', engine: 'ISCE2', why: 'S1 IW 标准路径：几何配准 + ESD 精化', ok: true },
-      { id: 'isce2_stripmap_xcorr', label: 'isce2_stripmap_xcorr', engine: 'ISCE2', why: '条带模式（ALOS-2/TSX），当前数据非条带', ok: false, blocked: '数据为 S1 IW' },
-      { id: 'snap_backgeocoding', label: 'snap_backgeocoding', engine: 'SNAP', why: '走 SNAP 链，需换 layout', ok: true },
-    ],
-    method: 'isce2_tops_geom_esd',
-    params: { esd_coherence_threshold: 0.85 },
-    outputs: [{ path: 'data/coreg', kind: 'RSLC', layout: 'isce2' }],
-  },
-  {
-    id: 4, name: '干涉', deps: [3], dur: 3120,
-    methods: [
-      { id: 'isce2_ifg_multilook', label: 'isce2_ifg_multilook', engine: 'ISCE2', why: '可调多视比。小基线网络按时空基线剪枝，非全组合', ok: true },
-      { id: 'snap_interferogram', label: 'snap_interferogram', engine: 'SNAP', why: 'SNAP 链对应步骤', ok: true },
-    ],
-    method: 'isce2_ifg_multilook',
-    params: { range_looks: 10, azimuth_looks: 2, pairs: 11 },
-    outputs: [{ path: 'data/ifg', kind: 'IFG_WRAPPED', layout: 'isce2' }],
-  },
-  {
-    id: 5, name: '滤波', deps: [4], dur: 1860,
-    methods: [
-      { id: 'goldstein', label: 'goldstein', engine: 'ISCE2', why: '低相干区推荐，本组干涉对 γ 均值仅 0.62', ok: true },
-      { id: 'boxcar', label: 'boxcar', engine: 'ISCE2', why: '简单快速，但边缘模糊', ok: true },
-      { id: 'none', label: 'none', engine: '—', why: '不滤波，保留全部细节', ok: true },
-    ],
-    method: 'goldstein',
-    params: { alpha: 0.4, filter_strength: 0.5 },
-    outputs: [{ path: 'data/ifg_filt', kind: 'IFG_WRAPPED', layout: 'isce2' }],
-  },
-  {
-    id: 6, name: '解缠', deps: [5], dur: 1440, decision: true,
-    methods: [
-      { id: 'snaphu_mcf', label: 'snaphu_mcf', engine: 'SNAPHU', why: 'Minimum Cost Flow。大梯度形变区稳健，MintPy 原生兼容，输出可直接进入 SBAS 反演。', ok: true, recommend: true, extra: '~24 min · 8 GB' },
-      { id: 'snaphu_smooth', label: 'snaphu_smooth', engine: 'SNAPHU', why: '精度更高但需人工调 cost function，同震大梯度区难以全自动。', ok: true, extra: '~40 min · 需交互配置' },
-      { id: 'icu', label: 'icu', engine: 'ISCE2', why: '区域增长法，大范围低相干区容易产生解缠孤岛。', ok: true, extra: '~18 min' },
-      { id: '3D_FULL', label: '3D_FULL', engine: 'MintPy', why: '本机无 3D 相位解缠工具链，且输出格式与下游时序反演不兼容。', ok: false, blocked: '工具链缺失' },
-    ],
-    method: '3D_FULL',
-    params: { min_coherence: 0.25, threads: 8 },
-    outputs: [{ path: 'data/unw', kind: 'IFG_UNWRAPPED', layout: 'isce2' }, { path: 'params/unwrap.yaml', kind: 'CONFIG' }],
-  },
-  {
-    id: 7, name: '时序反演', deps: [6], dur: 2280,
-    methods: [
-      { id: 'mintpy_sbas', label: 'mintpy_sbas', engine: 'MintPy', why: '小基线集，面状形变像元覆盖广，HyP3 干涉对可直接入网', ok: true, recommend: true },
-      { id: 'pystamps_ps', label: 'pystamps_ps', engine: 'PyStamps', why: '永久散射体，适合高相干点状目标（建筑/公路）', ok: true },
-    ],
-    method: 'mintpy_sbas',
-    params: { network: 'small_baseline', max_temporal_baseline: 120 },
-    outputs: [{ path: 'products/timeseries.h5', kind: 'TIMESERIES', layout: 'mintpy_h5' }],
-  },
-  {
-    id: 8, name: '误差校正', deps: [7], dur: 540,
-    methods: [
-      { id: 'tropo_era5_pyaps', label: 'tropo_era5_pyaps', engine: 'PyAPS', why: 'ERA5 已下载到本地，std 可降 32%', ok: true, recommend: true },
-      { id: 'tropo_gacos', label: 'tropo_gacos', engine: 'GACOS', why: '需在线申请，当前无凭据', ok: false, blocked: '缺 GACOS 凭据' },
-      { id: 'tropo_height_corr', label: 'tropo_height_corr', engine: '经验', why: '无气象数据时的降级方案', ok: true },
-    ],
-    method: 'tropo_era5_pyaps',
-    params: { ramp: 'linear', dem_error: true, solid_earth_tides: true },
-    outputs: [{ path: 'products/timeseries_corrected.h5', kind: 'TIMESERIES', layout: 'mintpy_h5' }],
-  },
-  {
-    id: 9, name: '形变模型', deps: [8], dur: 420,
-    methods: [
-      { id: 'step', label: 'step(20190706)', engine: 'MintPy', why: '同震阶跃模型，参考日期取自实测配置（2019-07-06 Mw 7.1 主震）', ok: true, recommend: true },
-      { id: 'linear', label: 'linear', engine: 'MintPy', why: '仅线性趋势，会把同震阶跃当趋势吸收', ok: true },
-      { id: 'poly_periodic', label: 'poly_periodic(1,[1,0.5])', engine: 'MintPy', why: '线性 + 年周期 + 半年周期，适合冻融等季节形变；同震场景无季节机理', ok: true },
-      { id: 'exponential', label: 'exponential', engine: 'MintPy', why: '震后弛豫衰减，观测窗口仅 2 个月暂不适用', ok: true },
-    ],
-    method: 'step',
-    params: { step_date: '20190706' },
-    outputs: [{ path: 'products/velocity.h5', kind: 'VELOCITY', layout: 'mintpy_h5' }],
-  },
-  {
-    id: 10, name: '出图导出', deps: [9], dur: 240,
-    methods: [
-      { id: 'figure_journal', label: 'figure_journal', engine: '自建', why: '期刊级排版：600 dpi、色盲安全色带、比例尺', ok: true, recommend: true },
-      { id: 'mintpy_geocode', label: 'mintpy_geocode', engine: 'MintPy', why: '仅地理编码，不做排版', ok: true },
-      { id: 'gdal_warp', label: 'gdal_warp', engine: 'GDAL', why: '导出 GeoTIFF 供 GIS 使用', ok: true },
-    ],
-    method: 'figure_journal',
-    params: { dpi: 600, cmap: 'roma', format: 'png+pdf' },
-    outputs: [
-      { path: 'products/velocities/vel_ridgecrest_2019.png', kind: 'FIGURE' },
-      { path: 'products/timeseries/ts_ridgecrest.png', kind: 'FIGURE' },
-    ],
-  },
-  {
-    id: 11, name: '质检', deps: [10, 7], dur: 660,
-    methods: [
-      { id: 'crossval_ps_sbas', label: 'crossval_ps_sbas', engine: '自建', why: 'PS/SBAS 双链交叉验证——本项目独有质量门', ok: true, recommend: true },
-      { id: 'loop_closure', label: 'loop_closure', engine: 'MintPy', why: '闭合回路残差检查，只验解缠不验反演', ok: true },
-      { id: 'coherence_mask', label: 'coherence_mask', engine: 'MintPy', why: '相干性掩膜，最弱的质检', ok: true },
-    ],
-    method: 'crossval_ps_sbas',
-    params: { corr_threshold: 0.85 },
-    outputs: [
-      { path: 'products/report/methods_draft.md', kind: 'REPORT' },
-      { path: 'provenance.json', kind: 'PROVENANCE' },
-    ],
-  },
-];
+export const STEP_DEFS = [];
+
+/** /api/registry 的 params 是 schema 对象（{default,kind,type,…}）→ 默认值表。 */
+function paramDefaults(params) {
+  const out = {};
+  for (const [k, p] of Object.entries(params || {})) {
+    out[k] = p && typeof p === 'object' && 'default' in p ? p.default : p;
+  }
+  return out;
+}
+
+/**
+ * 用注册表载荷就地填充步骤目录，并重建反向依赖图。
+ * dur 恒为 0：注册表不声明演示工期，时长只来自本机运行历史（§7.5）。
+ */
+export function setRegistry(caps) {
+  STEP_DEFS.length = 0;
+  for (const c of caps || []) {
+    if (!c || typeof c.id !== 'number') continue;
+    STEP_DEFS.push({
+      id: c.id,
+      name: c.name || `步骤 ${c.id}`,
+      deps: [...(c.deps || [])],
+      dur: 0,
+      methods: (c.methods || []).map((m) => ({ ...m })),
+      method: c.method || '',
+      params: paramDefaults(c.params),
+      outputs: (c.outputs || []).map((o) => ({ ...o })),
+    });
+  }
+  STEP_DEFS.sort((a, b) => a.id - b.id);
+  rebuildRevDeps();
+  emit('registry', 'steps', 'files');
+}
 
 /* ============================================================
    运行时状态
@@ -180,23 +88,24 @@ export const S = {
   theme: localStorage.getItem('ia-theme') || 'light',
   mode: 'expert',                 // expert | guide
   phase: 'idle',                  // idle | planning | running | paused | done
-  sessionId: 'ridgecrest-2019',
+  sessionId: null,                // 当前会话 id；null=尚无会话（由 /api/sessions 水合或新建）
   siderOpen: true,
   dockOpen: true,
   dockTab: 'pipeline',
   dockWidth: Number(localStorage.getItem('ia-dock-w')) || 400,
-  selectedStep: 6,
+  selectedStep: null,             // 流水线面板选中步；null=未选（无计划时面板显示空态）
   selectedFile: null,
   selectedPoint: 'A',
   webSite: 'asf',
   busy: false,                    // agent 是否正在产出
   steps: new Map(),               // id → { state, method, params, stale, fingerprint, startedAt, elapsed }
                                   //   state: pending|running|done|failed|stale|interrupted|orphaned（§7.8 四态）
+                                  //   启动为空：只有服务端 /api/state 下发计划后才有条目
   plan: [],                       // agent 生成的待办
   evidenceLevel: 2,               // 六级证据阶梯当前级别（0-5），受 THRESHOLDS 与降级记录封顶
   degraded: [],                   // 本会话降级记录 { stepId, from, to, failClass, reason }（§4.12）
   autoApprove: new Set(),         // 「本会话内同类操作不再询问」的审批指纹族（absorb-F）
-  diskFreeGB: 16,                 // 磁盘预算（演示初值 16G：落在 8–20G 灰字提示区，§7.5）
+  diskFreeGB: null,               // 磁盘预算；null=未知（只信 budget 事件，不再预置演示值）
 };
 
 /* 磁盘预算三级闸门（§7.5 / §4.10）：UI 与后端用同一组常量，不各写一套 */
@@ -238,11 +147,34 @@ export function evidenceCeiling() {
   return { level, pending, degraded: S.degraded };
 }
 
-export const SESSIONS = [
-  { id: 'ridgecrest-2019', name: 'Ridgecrest 同震形变', sub: 'HyP3 + MintPy · 11 对 · 真实数据', tone: 'run', real: true },
-  { id: 'yushu-permafrost', name: '玉树冻土 · SBAS 时序', sub: '数据待获取 · 场景 B', tone: 'idle' },
-  { id: 'yarlung-ps', name: '雅鲁藏布江滑坡', sub: 'PyStamps PS 链 · 数据待获取', tone: 'idle' },
-];
+/* ============================================================
+   会话列表镜像 —— 唯一数据源是 GET /api/sessions，不再内置演示会话。
+   数组保持引用不变（就地填充）：sessionops.js 的乐观更新（改名/归档/还原）
+   与 app.js 的渲染都拿同一个数组。
+   ============================================================ */
+export const SESSIONS = [];
+
+function sessionSub(row) {
+  const mode = row.mode === 'guide' ? '向导模式' : '专家模式';
+  const t = Number(row.created_at);
+  if (!Number.isFinite(t) || t <= 0) return mode;
+  const d = new Date(t * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${mode} · 建于 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** /api/sessions 行（{session_id,name,mode,created_at,archived,…}）→ 侧栏条目。 */
+export function setSessions(rows) {
+  SESSIONS.length = 0;
+  for (const r of rows || []) {
+    const id = r && (r.session_id || r.id);
+    if (!id) continue;
+    const entry = { id, name: r.name || id, sub: sessionSub(r), tone: 'idle' };
+    if (r.archived) entry.archived = r.archived;   // 软删除时间戳（splitArchived 依据）
+    SESSIONS.push(entry);
+  }
+  emit('sessions');
+}
 
 /* ---------------- 指纹与初始化 ---------------- */
 
@@ -270,12 +202,16 @@ function sortKeys(o) {
 export const def_ = (id) => STEP_DEFS.find((d) => d.id === id);
 export const st_ = (id) => S.steps.get(id);
 
-/** 反向依赖：谁依赖我。用于失效传播。 */
-const revDeps = new Map();
-for (const d of STEP_DEFS) {
-  for (const dep of d.deps) {
-    if (!revDeps.has(dep)) revDeps.set(dep, []);
-    revDeps.get(dep).push(d.id);
+/** 反向依赖：谁依赖我。用于失效传播；随 setRegistry 重建。 */
+let revDeps = new Map();
+
+function rebuildRevDeps() {
+  revDeps = new Map();
+  for (const d of STEP_DEFS) {
+    for (const dep of d.deps) {
+      if (!revDeps.has(dep)) revDeps.set(dep, []);
+      revDeps.get(dep).push(d.id);
+    }
   }
 }
 
@@ -292,23 +228,22 @@ export function downstreamOf(id) {
   return [...out].sort((a, b) => a - b);
 }
 
-/** 初始化：前 n 步标记完成，第 n+1 步待决策。 */
-export function initSteps(doneThrough = 5) {
+/** 步骤镜像的拓扑序 id（步骤 id 约定单调即拓扑序，指纹重算按此序）。 */
+function mirrorIds() {
+  return [...S.steps.keys()].sort((a, b) => a - b);
+}
+
+/** 按拓扑序重算全部镜像指纹（下游指纹含上游指纹，必须全量）。 */
+function refingerprintAll() {
+  for (const id of mirrorIds()) S.steps.get(id).fingerprint = fingerprint(id);
+}
+
+/**
+ * 清空步骤镜像。不再预置任何「前 N 步已完成」的演示状态 ——
+ * 镜像条目只能来自服务端 /api/state（syncServerSteps 创建）。
+ */
+export function initSteps() {
   S.steps.clear();
-  for (const d of STEP_DEFS) {
-    S.steps.set(d.id, {
-      id: d.id,
-      state: d.id <= doneThrough ? 'done' : 'pending',
-      method: d.method,
-      params: { ...d.params },
-      stale: false,
-      elapsed: d.id <= doneThrough ? d.dur : 0,
-      startedAt: null,
-      fingerprint: '',
-      logs: [],
-    });
-  }
-  for (const d of STEP_DEFS) S.steps.get(d.id).fingerprint = fingerprint(d.id);
   S.plan = [];
   S.phase = 'idle';
   emit('steps', 'plan');
@@ -350,10 +285,9 @@ export function invalidate(stepId) {
       // 只有「曾经完成」的步骤才谈得上失效；pending 的保持 pending
       if (st.state === 'done') { st.stale = true; st.state = 'stale'; }
       else if (st.state === 'stale') st.stale = true;
-      st.fingerprint = fingerprint(id);
     }
     // 下游指纹依赖上游指纹，需按拓扑序全量重算
-    for (const d of STEP_DEFS) S.steps.get(d.id).fingerprint = fingerprint(d.id);
+    refingerprintAll();
     emit('steps', 'files');
   });
   return affected;
@@ -388,12 +322,11 @@ export function setStepState(stepId, state, extra = {}) {
  */
 export function workSummary() {
   const stale = [], pending = [], resume = [];
-  for (const d of STEP_DEFS) {
-    const st = st_(d.id);
-    if (!st) continue;
-    if (st.state === 'failed' || st.state === 'interrupted' || st.state === 'orphaned') resume.push(d.id);
-    else if (st.stale || st.state === 'stale') stale.push(d.id);
-    else if (st.state === 'pending') pending.push(d.id);
+  for (const id of mirrorIds()) {
+    const st = S.steps.get(id);
+    if (st.state === 'failed' || st.state === 'interrupted' || st.state === 'orphaned') resume.push(id);
+    else if (st.stale || st.state === 'stale') stale.push(id);
+    else if (st.state === 'pending') pending.push(id);
   }
   return { stale, pending, resume, all: [...stale, ...pending, ...resume].sort((a, b) => a - b) };
 }
@@ -403,6 +336,8 @@ export function staleSteps() {
   return workSummary().all;
 }
 
+/** 示意工期已随演示目录删除（dur 恒 0）：本函数恒返回 0，仅为消费方接口兼容保留。
+ *  时长预估的唯一合法来源是 estimateRerunHonest 的本机运行历史（§7.5）。 */
 export function estimateRerun(ids) {
   return ids.reduce((sum, id) => sum + (def_(id)?.dur || 0), 0);
 }
@@ -411,20 +346,29 @@ export function estimateRerun(ids) {
 
 /**
  * 本机运行历史。键 = `${stepId}:${fingerprint}`（同配置才算同历史），
- * 值 = 该配置历次运行秒数。演示预置为空 —— Ridgecrest 本机从未真实跑过，
- * 诚实答案是「时长未知」而非编一个 93 分钟。样本随会话内完成的运行累积。
+ * 值 = 该配置历次运行秒数。启动为空 —— 没跑过就是「时长未知」，不编数。
+ * 样本随会话内完成的运行累积。
  */
 const RUN_HISTORY = new Map();
 
 const histKey = (id) => `${id}:${st_(id)?.fingerprint || ''}`;
 
-/** 步骤成功完成后记一笔历史（mock：以示意工期 ±20% 抖动模拟真实波动）。 */
-export function recordRunSample(stepId) {
-  const def = def_(stepId);
-  if (!def) return;
+/**
+ * 步骤成功完成后记一笔历史。秒数取真实耗时：显式传入 secs，
+ * 或由镜像的 startedAt 推算；两者都没有（无起点）则不记 —— 绝不用假样本。
+ */
+export function recordRunSample(stepId, secs = null) {
+  const st = st_(stepId);
+  if (!st) return;
+  let v = secs;
+  if (v == null) {
+    if (!st.startedAt) return;
+    v = Math.round((Date.now() - st.startedAt) / 1000);
+  }
+  if (!Number.isFinite(v) || v <= 0) return;
   const key = histKey(stepId);
   if (!RUN_HISTORY.has(key)) RUN_HISTORY.set(key, []);
-  RUN_HISTORY.get(key).push(Math.round(def.dur * (0.85 + Math.random() * 0.4)));
+  RUN_HISTORY.get(key).push(v);
 }
 
 /**
@@ -470,7 +414,7 @@ export function restoreSteps(snap) {
       st.params = { ...s.params };
       st.stale = s.stale;
     }
-    for (const d of STEP_DEFS) S.steps.get(d.id).fingerprint = fingerprint(d.id);
+    refingerprintAll();
     emit('steps', 'files');
   });
 }
@@ -478,8 +422,8 @@ export function restoreSteps(snap) {
 /* ---------------- 服务端状态镜像（GET /api/state） ---------------- */
 
 /**
- * 把服务端 run 的步骤状态同步进本地镜像。镜像纪律：
- *   - 本地没有的步骤 id 跳过；
+ * 把服务端 run 的步骤状态同步进本地镜像。服务端是镜像条目的唯一创建者：
+ *   - 本地没有的步骤 id 就地创建（S.steps 启动为空，计划来自 /api/state）；
  *   - 服务端没给的字段不动——method / state / params / stale 一律按字段存在与否
  *     判断，防部分载荷（如只回 id/state/method 的端点）把本地脏标记静默抹掉；
  *   - params 若下发则整体替换（/api/state 每步都带权威 params，
@@ -497,8 +441,22 @@ export function syncServerSteps(serverSteps) {
   const MAP = { skipped: 'done' };
   batch(() => {
     for (const s of serverSteps) {
-      const st = st_(s.id);
-      if (!st) continue;
+      if (!s || s.id == null) continue;
+      let st = st_(s.id);
+      if (!st) {
+        st = {
+          id: s.id,
+          state: 'pending',
+          method: def_(s.id)?.method || '',
+          params: {},
+          stale: false,
+          elapsed: 0,
+          startedAt: null,
+          fingerprint: '',
+          logs: [],
+        };
+        S.steps.set(s.id, st);
+      }
       if (s.method) st.method = s.method;
       if (s.params && typeof s.params === 'object' && !Array.isArray(s.params)) {
         st.params = { ...s.params };
@@ -512,7 +470,7 @@ export function syncServerSteps(serverSteps) {
         else st.stale = true;
       }
     }
-    for (const d of STEP_DEFS) S.steps.get(d.id).fingerprint = fingerprint(d.id);
+    refingerprintAll();
     emit('steps', 'files');
   });
 }

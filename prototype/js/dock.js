@@ -93,9 +93,12 @@ function paintBadges() {
   const { stale, all } = workSummary();
   const badge = refs.buttons.pipeline.querySelector('.n');
   if (!badge) return;
-  badge.textContent = stale.length ? `${stale.length} 失效`
-                    : all.length ? `${STEP_DEFS.length - all.length}/${STEP_DEFS.length}`
-                    : '11 ✓';
+  // STEP_DEFS 适配:S.steps 为空=尚无执行计划,徽标不再假装「11 ✓」(2 行)
+  const total = S.steps.size;
+  badge.textContent = !total ? '—'
+                    : stale.length ? `${stale.length} 失效`
+                    : all.length ? `${total - all.length}/${total}`
+                    : `${total} ✓`;
   badge.classList.toggle('alert', stale.length > 0);
 }
 
@@ -129,11 +132,19 @@ const STATE_TXT = {
 };
 
 function pipelineView() {
+  // STEP_DEFS 适配:无执行计划(镜像为空)→ 空态,不再渲染 11 步演示占位(4 行)
+  if (!S.steps.size) {
+    return ES.renderEmpty(null, {
+      icon: 'trace', title: '还没有执行计划',
+      hint: '对话或运行流水线后，这里显示执行计划。',
+    });
+  }
   const list = h('div', { class: 'pipe', role: 'list' });
   // 行级视图模型:本地状态先渲染;服务端字段(staleReason / skipped 三态)异步并入
   const vms = new Map();
   for (const d of STEP_DEFS) {
     const st = st_(d.id);
+    if (!st) continue;   // STEP_DEFS 适配:目录步骤不在本次计划内则不渲染(1 行)
     vms.set(d.id, {
       id: d.id, name: d.name, state: st.state, stale: !!st.stale,
       staleReason: null, fingerprint: st.fingerprint,
@@ -162,7 +173,8 @@ function pipelineView() {
   const runsHost = h('div');   // run 历史切换器挂载点(渲染与只读语义全在 runswitch.js)
   const root = h('div', null,
     runsHost,
-    h('h3', { class: 'sect' }, '处理流水线 · 11 步'),
+    // STEP_DEFS 适配:步数取实际计划规模,不再写死「11 步」(1 行)
+    h('h3', { class: 'sect' }, `处理流水线 · ${vms.size} 步`),
     sumHost,
     wrap,
     stepDetail(S.selectedStep),
@@ -250,7 +262,7 @@ function pipelineView() {
 
 function stepDetail(stepId) {
   const d = def_(stepId), st = st_(stepId);
-  if (!d) return txt('');
+  if (!d || !st) return txt('');   // STEP_DEFS 适配:未选中/无镜像时不渲染详情(1 行)
   const mth = d.methods.find((m) => m.id === st.method);
 
   const methodSel = h('select', {
@@ -329,11 +341,10 @@ function stepDetail(stepId) {
       h('div', { class: 'field' }, h('label', null, '方法'), methodSel),
       mth ? h('p', { style: { fontSize: '11.5px', color: 'var(--text-2)' } }, `${mth.engine} · ${mth.why}`) : null,
       h('div', { class: 'pform' }, ...fields),
-      h('p', { class: 'fnote' }, '参数当前值为演示占位数据（示意），非真实运行配置。'),
+      // STEP_DEFS 适配:参数值来自服务端计划,删去「演示占位(示意)」提示与示意工期行(2 行删除)
       h('dl', { class: 'kv' },
         h('dt', null, '指纹'), h('dd', null, st.fingerprint),
         h('dt', null, '依赖'), h('dd', null, d.deps.length ? d.deps.map((x) => `#${x}`).join(' ') : '—'),
-        h('dt', null, '预估'), h('dd', null, `${Math.round(d.dur / 60)} min（示意）`),
         h('dt', null, '产物'), h('dd', null, (d.outputs || []).map((o) => o.path).join('\n') || '—')),
       h('div', { class: 'shell' }, buildCmd(stepId))));
 }
@@ -341,6 +352,7 @@ function stepDetail(stepId) {
 /** 由 method + params 渲染等价裸命令行 —— 对应 DESIGN §12 第 3 条要求。 */
 export function buildCmd(stepId) {
   const d = def_(stepId), st = st_(stepId);
+  if (!st) return '$ —';   // STEP_DEFS 适配:该步不在当前计划内(1 行)
   const flags = Object.entries(st.params)
     .map(([k, v]) => `--${k.replace(/_/g, '-')} ${Array.isArray(v) ? v.join(',') : v}`)
     .join(' ');
@@ -562,6 +574,13 @@ function auditView() {
 
   // ---- 演示回落:state.js 本地演示逻辑(仅离线/无 run 时展示) ----
   const demoBody = (AUD) => {
+    // STEP_DEFS 适配:本地回落引用第 5-9 步镜像,缺任一(尚无计划)→ 空态(5 行)
+    if (![5, 6, 7, 8, 9].every((i) => st_(i))) {
+      return [ES.renderEmpty(null, {
+        icon: 'shield', title: '还没有审计数据',
+        hint: '完成一次运行后，这里显示服务端证据链与质量门台账。',
+      })];
+    }
     const ladder = h('div', { class: 'ladder', role: 'list' },
       ...LADDER.map((lv, i) => h('div', {
         class: `lv${i <= S.evidenceLevel ? ' on' : ''}${i === S.evidenceLevel ? ' cur' : ''}`,
@@ -595,7 +614,7 @@ function auditView() {
       metricRow('seasonal_amplitude', 'forbidden', '12 天采样不足以解析', 'bad', '硬 gate'),
       metricRow('ps_count', 'forbidden', 'log 文件（叙述非数据）', 'bad', '硬 gate'));
 
-    const partial = STEP_DEFS.some((d) => st_(d.id).state === 'failed');
+    const partial = STEP_DEFS.some((d) => st_(d.id)?.state === 'failed');   // STEP_DEFS 适配:镜像可缺(1 行)
 
     const { pending } = evidenceCeiling();
 
@@ -669,7 +688,13 @@ function reportView() {
     ES.renderSkeleton(null, { kind: 'text', rows: 7, label: '正在获取方法草稿（GET /api/methods.md）' }));
 
   // ---- 演示回落：原静态草稿（数字为示意值），顶部醒目标注 ----
-  const demoBody = (RPT) => [
+  const demoBody = (RPT) => (![5, 6, 7, 9].every((i) => st_(i))
+    // STEP_DEFS 适配:草稿引用第 5-9 步镜像,缺任一(尚无计划)→ 空态(5 行)
+    ? [ES.renderEmpty(null, {
+        icon: 'doc', title: '还没有方法草稿',
+        hint: '完成一次运行后，这里显示服务端生成的论文方法草稿。',
+      })]
+    : [
     h('div', {
       class: 'note is-stale', role: 'status',
       style: { display: 'flex', alignItems: 'center', gap: '7px',
@@ -705,8 +730,9 @@ function reportView() {
     h('p', { class: 'blurb' }, '论文可复现性要求：系统必须能导出与 Agent 执行等价的命令行脚本。'),
     h('div', { class: 'shell' },
       '#!/usr/bin/env bash\nset -euo pipefail\n\n' +
-      STEP_DEFS.map((d) => buildCmd(d.id).replace(/^\$ /, '')).join('\n')),
-  ];
+      // STEP_DEFS 适配:只列有镜像的步骤(计划内),避免读缺失镜像(1 行)
+      STEP_DEFS.filter((d) => st_(d.id)).map((d) => buildCmd(d.id).replace(/^\$ /, '')).join('\n')),
+  ]);
 
   // ---- 实测渲染：服务端真实草稿 + 来源标注 + 「下载 .md」 ----
   const liveBody = (RPT, data) => {
