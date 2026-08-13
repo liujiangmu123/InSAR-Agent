@@ -1,0 +1,80 @@
+/* ============================================================
+   参数预设与校验层样式(presets.js 专用,类名统一 pz- 前缀)
+   颜色只引用 tokens.css 语义变量:明暗主题自动继承;
+   所用「前景 × 背景」组合均为 check_a11y_contrast.py 已审计的
+   达标搭配(--text-2/--bg-sub、--accent-text/--accent-weak、
+   --bad-text/--bad-weak、--stale-text/--stale-weak 等)。
+   不新增 @media 宽度断点(check_css_syntax.py 清单纪律)。
+   ============================================================ */
+
+/* ---------- 预设条 ---------- */
+.pz-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 7px 9px; margin-bottom: 4px;
+  border: 1px dashed var(--border-strong); border-radius: var(--r-sm);
+  background: var(--bg-sub);
+}
+.pz-cap { font-size: var(--fs-xs); color: var(--text-3); flex-shrink: 0 }
+
+.pz-btn {
+  font-size: var(--fs-xs); font-family: var(--font);
+  padding: 3px 10px; cursor: pointer;
+  border: 1px solid var(--border-strong); border-radius: var(--r-pill);
+  background: var(--surface); color: var(--text-2);
+  transition: background .12s, border-color .12s, color .12s;
+}
+.pz-btn:hover { background: var(--bg-hover); color: var(--text) }
+.pz-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px }
+/* 命中档高亮:当前值与该档完全一致 */
+.pz-btn[aria-pressed='true'] {
+  background: var(--accent-weak); border-color: var(--accent-border);
+  color: var(--accent-text); font-weight: 600;
+}
+.pz-btn[disabled] { opacity: .55; cursor: not-allowed }
+
+/* 无档位步骤的原因说明(如形变模型与场景强绑定) */
+.pz-none { font-size: var(--fs-xs); color: var(--text-3); flex: 1; min-width: 120px }
+
+/* ---------- 填充确认区(不自动提交的关键 UI) ---------- */
+.pz-confirm {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  flex-basis: 100%; padding-top: 5px;
+  border-top: 1px dashed var(--border);
+}
+.pz-confirm[hidden] { display: none }
+.pz-note { font-size: var(--fs-xs); color: var(--stale-text); flex: 1; min-width: 140px }
+.pz-apply[aria-disabled='true'] { opacity: .55; cursor: not-allowed }
+
+/* 已填充未提交的输入框:失效橙描边,提示「这是待确认状态」 */
+.pform input.pz-pending {
+  border-color: var(--stale);
+  background: var(--stale-weak);
+}
+
+/* ---------- ⓘ 帮助图标(挂在参数 label 内) ---------- */
+.pz-info {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; margin-left: 4px; padding: 0;
+  font-size: 11px; line-height: 1; cursor: help;
+  border: none; border-radius: var(--r-pill);
+  background: transparent; color: var(--text-3);
+}
+.pz-info:hover { color: var(--accent) }
+.pz-info:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; color: var(--accent) }
+
+/* ---------- 帮助气泡(fixed 定位单例,hover/focus 触发,Esc 关) ---------- */
+.pz-tip {
+  position: fixed; z-index: 480; max-width: 300px;
+  padding: 9px 11px;
+  background: var(--surface-raised); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: var(--r);
+  box-shadow: var(--sh-3);
+  font-size: var(--fs-sm); line-height: 1.55;
+}
+.pz-tip[hidden] { display: none }
+.pz-tip-title { font-weight: 600; font-family: var(--mono); font-size: var(--fs-sm) }
+.pz-tip-range {
+  font-family: var(--mono); font-size: var(--fs-xs);
+  color: var(--text-2); margin-top: 3px;
+}
+.pz-tip-help { margin: 5px 0 0; color: var(--text-2) }
