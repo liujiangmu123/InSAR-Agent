@@ -1,0 +1,55 @@
+/* ============================================================
+   下一步建议卡(advisor.js 的视觉层)
+   —— run 终态后插入聊天流的建议列表:标题 + why + 动作按钮。
+   只消费 tokens.css 既有语义变量(--c-*,组合均在 a11y 审计清单内),
+   不引入新颜色、不新增 @media 断点;按钮复用 base.css 的 .btn 族。
+   ============================================================ */
+
+.advisor {
+  border: 1px solid var(--c-info-bd);
+  border-left: 3px solid var(--c-info-solid);
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+  box-shadow: var(--sh-1);
+  padding: 10px 12px;
+}
+
+/* ---- 头部:图标 + 标题 + 终态徽标 + 来源标注 ---- */
+.advisor .hd {
+  display: flex; align-items: center; gap: 7px;
+  font-size: var(--fs-ui); color: var(--c-info-fg);
+}
+.advisor .hd svg { width: 15px; height: 15px; flex-shrink: 0; }
+.advisor .hd .st {
+  font-size: var(--fs-xs); font-weight: 600;
+  padding: var(--sp-05) var(--sp-2); border-radius: var(--r-pill);
+  background: var(--c-info-bg); border: 1px solid var(--c-info-bd);
+  color: var(--c-info-fg);
+}
+.advisor .hd .grow { flex: 1; }
+.advisor .hd .src { font-size: var(--fs-2xs); color: var(--c-text-3); }
+
+/* ---- 上下文一句话(run 完成度 / 证据级 / 失败位置) ---- */
+.advisor .ctx {
+  margin: 6px 0 2px; font-size: var(--fs-sm);
+  color: var(--c-text-2); line-height: 1.55;
+}
+
+/* ---- 建议条目:标题 + why + 右侧动作按钮 ---- */
+.advisor .items { display: flex; flex-direction: column; margin-top: var(--sp-2); }
+.advisor .item {
+  display: flex; align-items: flex-start; gap: var(--sp-25);
+  padding: var(--sp-2) var(--sp-05);
+  border-top: 1px solid var(--c-border);
+}
+.advisor .item .main { flex: 1; min-width: 0; }
+.advisor .item .t {
+  font-size: var(--fs-sm); font-weight: 600; color: var(--c-text);
+  line-height: 1.45;
+}
+.advisor .item .why {
+  margin-top: 2px; font-size: var(--fs-xs); color: var(--c-text-2);
+  line-height: 1.55;
+}
+.advisor .item .act { flex-shrink: 0; padding-top: 1px; }
+.advisor .item .act .btn { white-space: nowrap; }
