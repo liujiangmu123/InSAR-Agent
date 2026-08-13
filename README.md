@@ -85,6 +85,20 @@ python -m http.server 8000              # 浏览器开 http://127.0.0.1:8000
 | `INSAR_LLM_FALLBACK_*` | 单跳备用路由 | 无 |
 | `INSAR_TEST_TIME_FACTOR` | 仅测试:时序判定窗放宽系数(高负载并行开发用 3;产品超时语义不受影响) | `1` |
 
+## MCP server(Claude Desktop / Cursor 接入)
+
+把本代理暴露为 MCP 工具集(会话/规划/执行/轮询/干预/溯源/图件),宿主 LLM 可直接驱动 InSAR 处理:
+
+```powershell
+.venv\Scripts\pip install -e ".[mcp]"        # 官方 mcp SDK(>=2.0)+ httpx
+.venv\Scripts\python -m insar_agent.api.app  # 先起后端(MCP server 是它的 HTTP 薄包装)
+.venv\Scripts\python -m insar_agent.mcp     # stdio transport(宿主通常以子进程拉起,无需手动跑)
+```
+
+工具清单、Claude Desktop / Cursor 的 mcpServers 配置示例与典型对话流程见
+[src/insar_agent/mcp/README.md](src/insar_agent/mcp/README.md);后端基址用环境变量
+`INSAR_API_BASE` 覆盖(默认 `http://127.0.0.1:8873`),验收测试见 `tests/test_mcp_server.py`。
+
 ## 目录结构
 
 ```

@@ -18,6 +18,7 @@
 import { h, icon } from './dom.js';
 import { S } from './state.js';
 import { activeRunId } from './runswitch.js';   // run 历史切换器:选中历史 run 时透传 run_id
+import * as ES from './emptystate.js';          // states 接入:空态/骨架统一构造器
 
 // 演示回落横幅与 envlive 共用同一款（文案由调用方给），避免两套样式漂移
 export { demoBanner } from './envlive.js';
@@ -183,23 +184,11 @@ export function highlightStep(stepId) {
 // 展开的详情卡（"stepId:artId"）：模块级保存，重渲染/切面板后仍保持展开态
 const filesUI = { openKey: null };
 
-/** 骨架屏：产物树到达前的占位（灰条示意行布局，不闪不跳）。 */
+/** 骨架屏：产物树到达前的占位。states 接入:委托统一构造器(微光 + reduced-motion 降级)。 */
 export function skeleton() {
-  const bar = (w) => h('div', {
-    'aria-hidden': 'true',
-    style: {
-      height: '11px', width: w, borderRadius: '4px',
-      background: 'var(--border-strong)', opacity: '.35',
-    },
-  });
-  const card = (...bars) => h('div', {
-    class: 'envcard',
-    style: { display: 'grid', gap: '10px', padding: '12px' },
-  }, ...bars);
   return h('div', { 'aria-busy': 'true', 'aria-label': '正在读取产物清单' },
     h('h3', { class: 'sect' }, '数据与产物'),
-    card(bar('42%'), bar('88%'), bar('76%'), bar('83%')),
-    card(bar('37%'), bar('81%'), bar('69%')),
+    ES.renderSkeleton(null, { kind: 'tree', rows: 7, label: '正在读取产物清单（GET /api/artifacts）' }),
     h('p', { class: 'blurb' }, '正在读取产物清单（GET /api/artifacts）…'));
 }
 
@@ -226,8 +215,9 @@ export function liveBody(data, { onRefresh, openImages } = {}) {
     return [
       h('h3', { class: 'sect' }, '数据与产物 · 真实 run 记录'),
       head,
-      h('div', { class: 'fview' }, h('div', { class: 'empty' },
-        '该 run 尚无产物记录 —— 步骤完成产物发现（COLLECTED）后，路径与指纹在此可查。')),
+      // states 接入:无数据分支 → 空态卡(run 存在但还没有产物记录)
+      ES.renderEmpty(null, { icon: 'folder', title: '还没有产物记录',
+        hint: '步骤完成产物发现（COLLECTED）即可生成——路径、大小与三段指纹在此可查。' }),
     ];
   }
 

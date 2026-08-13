@@ -13,12 +13,19 @@ dependencies = [
 # 栅格校验与真实 qa/出图(run_ok 的 NaN 检查、engines/qa.py、engines/figures.py 宿主回退)。
 # matplotlib 默认由引擎 conda 环境提供,故不在此声明;需宿主直接出图时另行安装。
 raster = ["numpy>=1.26", "h5py>=3.10"]
+# MCP server 薄包装(src/insar_agent/mcp):官方 python SDK + HTTP 客户端。
+# mcp>=2.0:高层 API 为 MCPServer(1.x FastMCP 的更名后继,导入路径不同,不兼容)。
+mcp = ["mcp>=2.0", "httpx>=0.27"]
 dev = [
     "pytest>=8.0", "httpx>=0.27", "hypothesis>=6.100",
     # 质检工具链:ruff 静态检查门禁 / pip-audit 依赖漏洞审计
     "ruff>=0.16",
     "pip-audit>=2.10",
 ]
+
+[project.scripts]
+# MCP server 入口(等价 python -m insar_agent.mcp;需安装可选组 [mcp])
+insar-agent-mcp = "insar_agent.mcp.server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -60,3 +67,5 @@ known-first-party = ["insar_agent"]
 # conftest 先插 sys.path 再 import 一方包是刻意设计(支持不安装直接跑测试),
 # 其后的模块级 import 允许不在文件顶部
 "tests/conftest.py" = ["E402"]
+# mcp 是可选依赖组:pytest.importorskip 必须先于 mcp 相关 import(未装则整文件跳过)
+"tests/test_mcp_server.py" = ["E402"]

@@ -83,6 +83,7 @@ function boot() {
   });
 
   renderSessions();
+  window.__slashRun = (ids) => run(ids);   // slash 接线:/run 命令借用既有执行链路(js/slash.js)
   Notify.init({ onAdminRuns: (runs) => { adminRuns = runs; renderSessions(); } });   // 通知接线：标题角标复原 + 30s 运维视图轮询
   renderHero();
   wireChrome();
@@ -187,6 +188,7 @@ function wireChrome() {
   el.stop.addEventListener('click', abort);
 
   el.input.addEventListener('keydown', (e) => {
+    if (window.__slash?.beforeKey(e)) return;   // slash 接线:命令面板拦截按键(js/slash.js)
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
   });
   el.input.addEventListener('input', () => {
@@ -818,6 +820,7 @@ async function consume(iter) {
 
       case 'plan':
         currentPlan = Stream.planPanel(ev.items);
+        window.PlanDiff?.onPlan?.(ev);   // plandiff 接线:计划概览/变更 diff 卡(js/plandiff.js,未挂载安全跳过)
         break;
 
       case 'candidates':
@@ -1027,6 +1030,7 @@ function renderAttachments() {
 async function submit() {
   let text = el.input.value.trim();
   if (!text) return;
+  if (window.__slash?.beforeSubmit(text)) return;   // slash 接线:斜杠命令不进对话流(js/slash.js)
   if (S.busy) { Queue.enqueue(text); return; }   // 排队而非丢弃：chip 可撤销，回合结束自动发出
   if (attachments.length) {
     text += `\n〔附件 · 演示未上传〕${attachments.map((a) => a.name).join('、')}`;
@@ -1112,6 +1116,8 @@ function applyMethod(stepId, methodId) {
   const affected = St.setMethod(stepId, methodId);
   if (!affected.length) return;
   lastChange = { stepId, method: methodId };
+  // bridge 接线：方法变更 → 聊天流干预回执卡（bridge.js，未挂载时静默跳过）
+  window.Bridge?.noteIntervention({ kind: 'method', stepId, value: methodId });
   if (interventionDuringRun(`将第 ${stepId} 步方法改为 ${methodId}`)) return;
   explainInvalidation(stepId, before, methodId, affected, 'method', snap);
 }
@@ -1122,6 +1128,8 @@ function applyParams(stepId, patch) {
   const affected = St.setParams(stepId, patch);
   if (!affected.length) return;
   lastChange = { stepId, params: { ...patch } };
+  // bridge 接线：参数变更 → 聊天流干预回执卡（bridge.js，未挂载时静默跳过）
+  window.Bridge?.noteIntervention({ kind: 'params', stepId, patch });
   const k = Object.keys(patch)[0];
   if (interventionDuringRun(`将第 ${stepId} 步参数改为 ${k}=${patch[k]}`)) return;
   explainInvalidation(stepId, `${k}=${before[k]}`, `${k}=${patch[k]}`, affected, 'param', snap);
@@ -1308,6 +1316,8 @@ function askRerun() {
 }
 
 async function run(ids) {
+  // bridge 接线：执行/重跑流水线 → 聊天流干预回执卡（bridge.js，未挂载时静默跳过）
+  window.Bridge?.noteIntervention({ kind: 'run', ids });
   expireUndos();   // 开始执行后旧参数不可再撤销（撤销窗口只在静止态有效）
   Notify.ensurePermission();   // 通知权限惰性申请：首次执行流水线时才问，拒绝后不再骚扰
   setBusy(true);

@@ -1,7 +1,7 @@
 // 系统托盘模块(tauri "tray-icon" feature)。
 //
 // 职责:
-//   1. 托盘图标 + 菜单:显示主窗口 / 隐藏 / 打开数据目录 / 退出;
+//   1. 托盘图标 + 菜单:显示主窗口 / 隐藏 / 打开数据目录 / 导出诊断包 / 退出;
 //   2. 左键单击托盘图标 → 显示并聚焦主窗口;
 //   3. 「关闭窗口 → 最小化到托盘而非退出」(可配置,默认开启,仅对 label
 //      为 "main" 的主窗口生效;诊断窗口 "diagnostics" 关闭仍走正常退出)。
@@ -20,6 +20,7 @@ use tauri::image::Image;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime, WebviewWindow, WindowEvent};
+use tauri_plugin_opener::OpenerExt;
 
 /// 托盘图标 ID(如需后续查找:`app.tray_by_id(TRAY_ID)`)。
 pub const TRAY_ID: &str = "insar-agent-tray";
@@ -34,6 +35,7 @@ pub const CLOSE_TO_TRAY_ENV: &str = "INSAR_DESKTOP_CLOSE_TO_TRAY";
 const MENU_SHOW: &str = "tray-show";
 const MENU_HIDE: &str = "tray-hide";
 const MENU_OPEN_DATA: &str = "tray-open-data";
+const MENU_EXPORT_DIAG: &str = "tray-export-diag";
 const MENU_QUIT: &str = "tray-quit";
 
 /// 「关闭窗口时最小化到托盘」运行时开关(默认开启)。
@@ -60,9 +62,13 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, MENU_SHOW, "显示主窗口", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, MENU_HIDE, "隐藏", true, None::<&str>)?;
     let open_data = MenuItem::with_id(app, MENU_OPEN_DATA, "打开数据目录", true, None::<&str>)?;
+    let export_diag = MenuItem::with_id(app, MENU_EXPORT_DIAG, "导出诊断包", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &hide, &open_data, &separator, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&show, &hide, &open_data, &export_diag, &separator, &quit],
+    )?;
 
     let tooltip = app
         .config()
@@ -103,6 +109,7 @@ fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         MENU_SHOW => show_main_window(app),
         MENU_HIDE => hide_main_window(app),
         MENU_OPEN_DATA => open_data_dir(app),
+        MENU_EXPORT_DIAG => export_diagnostics(app),
         MENU_QUIT => app.exit(0), // 触发 RunEvent::Exit → main.rs 里统一 kill sidecar
         _ => {}
     }
@@ -169,26 +176,30 @@ fn install_close_to_tray_hook<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<(
     )
 }
 
-// ---------------- 数据目录 ----------------
+// ---------------- 数据目录(后端 INSAR_HOME,即 workspace) ----------------
 
-/// 数据目录,优先级与后端的数据落点保持一致:
-/// ① 环境变量 INSAR_HOME(显式指定,后端同样最优先认它);
-/// ② dev 构建:desktop/ 的父目录即仓库根(runs/、workspace/、data/ 所在地);
-/// ③ 打包分发:%LOCALAPPDATA%\insar-agent-data —— 冻结后端(entry.py)的缺省
-///    数据根,菜单打开的必须是 insar.db 真实所在地,不能用 Tauri app_data_dir
-///    (%APPDATA%\dev.insar.agent,后端从不写那里);
-/// ④ 兜底:Tauri 应用数据目录 → 当前工作目录。
-fn data_dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
-    if let Some(home) = std::env::var_os("INSAR_HOME") {
-        return PathBuf::from(home);
-    }
-    if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
-        if root.join("src").join("insar_agent").is_dir() {
-            return root.to_path_buf();
-        }
-    }
-    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(base).join("insar-agent-data");
+/// 后端数据目录(INSAR_HOME)的实际路径,与后端落点逐条对齐 —— insar.db /
+/// settings.json / logs/ 都直接住在这个目录里(api/app.py create_app:
+/// home = INSAR_HOME,缺省 "workspace",按后端进程 cwd 解析):
+/// ① 环境变量 INSAR_HOME:后端最优先认它,壳与 sidecar 共享同一份进程环境;
+///    相对路径按后端「以 cwd 解析」的语义锚定到 dev 仓库根(壳 spawn
+///    sidecar 时 cwd = 仓库根,见 sidecar.rs);
+/// ② dev 构建:{仓库根}\workspace —— 后端缺省 home="workspace" + cwd=仓库根;
+/// ③ 打包分发:%LOCALAPPDATA%\insar-agent-data\workspace —— 冻结入口的缺省
+///    (desktop/backend-bundle/entry.py _resolve_env),不能用 Tauri
+///    app_data_dir(%APPDATA%\dev.insar.agent,后端从不写那里);
+/// ④ 兜底:Tauri 应用数据目录 → 当前工作目录(防呆,理论不可达)。
+fn workspace_dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
+    let dev_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .filter(|root| root.join("src").join("insar_agent").is_dir())
+        .map(Path::to_path_buf);
+    if let Some(dir) = resolve_workspace_dir(
+        std::env::var_os("INSAR_HOME").map(PathBuf::from),
+        dev_root,
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+    ) {
+        return dir;
     }
     if let Ok(dir) = app.path().app_data_dir() {
         return dir;
@@ -196,35 +207,72 @@ fn data_dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// workspace_dir 的纯逻辑核(三个来源注入便于单测),优先级见其文档注释。
+fn resolve_workspace_dir(
+    insar_home: Option<PathBuf>,
+    dev_repo_root: Option<PathBuf>,
+    local_app_data: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(home) = insar_home {
+        if home.is_absolute() {
+            return Some(home);
+        }
+        // 相对 INSAR_HOME:后端按自身 cwd 解析;dev 下 sidecar cwd = 仓库根
+        return Some(match dev_repo_root {
+            Some(root) => root.join(home),
+            None => home,
+        });
+    }
+    if let Some(root) = dev_repo_root {
+        return Some(root.join("workspace"));
+    }
+    local_app_data.map(|base| base.join("insar-agent-data").join("workspace"))
+}
+
 fn open_data_dir<R: Runtime>(app: &AppHandle<R>) {
-    let dir = data_dir(app);
+    let dir = workspace_dir(app);
+    // 首启后端还没建出 workspace 时先补齐(与后端 home.mkdir(parents=True) 同语义)
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("[tray] 创建数据目录失败 {}:{e}", dir.display());
         return;
     }
-    reveal_in_file_manager(&dir);
+    // opener 插件:按系统关联方式打开目录(Windows = 资源管理器)
+    if let Err(e) = app.opener().open_path(dir.to_string_lossy(), None::<&str>) {
+        eprintln!("[tray] 打开数据目录失败 {}:{e}", dir.display());
+    }
 }
 
-/// 用系统文件管理器打开目录(不引 opener 插件,保持零额外依赖)。
-fn reveal_in_file_manager(path: &Path) {
-    #[cfg(target_os = "windows")]
-    let result = {
-        // 与 commands.rs / sidecar.rs 同款约定:壳 spawn 的任何子进程统一带
-        // CREATE_NO_WINDOW(explorer 本是 GUI 程序,此处为风格统一与防呆)
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        std::process::Command::new("explorer")
-            .arg(path)
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-    };
-    #[cfg(target_os = "macos")]
-    let result = std::process::Command::new("open").arg(path).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let result = std::process::Command::new("xdg-open").arg(path).spawn();
+// ---------------- 导出诊断包(入口跳转) ----------------
 
-    if let Err(e) = result {
-        eprintln!("[tray] 打开数据目录失败 {}:{e}", path.display());
+/// 把 Web UI 切到「环境」面板的脚本,复刻命令面板 gotoPane('env') 的既有
+/// 入口(prototype/js/cmdk.js:dock 收起时先点 #railDock 展开,再点
+/// #tab-env 标签按钮 —— id 约定见 prototype/js/dock.js);location.hash
+/// 置为 #env 只是留导航痕迹,UI 当前不做 hash 路由。
+/// 诊断信息的收集与打包由后端在环境面板内承接,壳侧只负责送到入口。
+/// 经 WebviewWindow::eval(WebView2 宿主通道)执行,不受页面 CSP 约束。
+const OPEN_ENV_TAB_JS: &str = "(() => {\
+     try { location.hash = '#env'; } catch (e) {}\
+     var dock = document.getElementById('dock');\
+     if (dock && dock.hidden) {\
+       var rail = document.getElementById('railDock');\
+       if (rail) rail.click();\
+     }\
+     var tab = document.getElementById('tab-env');\
+     if (tab) tab.click();\
+   })();";
+
+/// 「导出诊断包」:显示并聚焦主窗口,跳到 Web UI 的「环境」面板。
+/// 主窗口尚未创建(后端启动中/启动失败)时不做事,只留日志。
+fn export_diagnostics<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        eprintln!("[tray] 主窗口尚未创建(后端未就绪),暂无法打开「环境」面板");
+        return;
+    };
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    if let Err(e) = window.eval(OPEN_ENV_TAB_JS) {
+        eprintln!("[tray] 切换「环境」面板失败:{e}");
     }
 }
 
@@ -286,5 +334,67 @@ mod tests {
         for v in ["", "1", "true", "on", "yes", "任意值"] {
             assert!(close_to_tray_flag(v), "{v:?} 应保持「关闭到托盘」开启");
         }
+    }
+
+    // ---------------- 数据目录解析(对齐后端 INSAR_HOME 语义) ----------------
+
+    #[test]
+    fn workspace_absolute_insar_home_wins() {
+        // temp_dir 在各平台都是绝对路径,借它构造跨平台的绝对 INSAR_HOME
+        let home = std::env::temp_dir().join("insar-home-abs");
+        let got = resolve_workspace_dir(
+            Some(home.clone()),
+            Some(PathBuf::from("repo")),
+            Some(PathBuf::from("lad")),
+        );
+        assert_eq!(got, Some(home));
+    }
+
+    #[test]
+    fn workspace_relative_insar_home_resolves_against_repo_root() {
+        // 后端把相对 INSAR_HOME 按 cwd 解析;壳 spawn sidecar 时 cwd = 仓库根
+        let got = resolve_workspace_dir(
+            Some(PathBuf::from("workspace")),
+            Some(PathBuf::from("repo")),
+            None,
+        );
+        assert_eq!(got, Some(PathBuf::from("repo").join("workspace")));
+    }
+
+    #[test]
+    fn workspace_dev_defaults_to_repo_workspace_subdir() {
+        // dev 缺省 = {仓库根}\workspace(insar.db 真实所在地),不是仓库根本身
+        let got = resolve_workspace_dir(None, Some(PathBuf::from("repo")), None);
+        assert_eq!(got, Some(PathBuf::from("repo").join("workspace")));
+    }
+
+    #[test]
+    fn workspace_frozen_defaults_to_localappdata_workspace() {
+        // 对齐 backend-bundle/entry.py:%LOCALAPPDATA%\insar-agent-data\workspace
+        let got = resolve_workspace_dir(None, None, Some(PathBuf::from("lad")));
+        assert_eq!(
+            got,
+            Some(
+                PathBuf::from("lad")
+                    .join("insar-agent-data")
+                    .join("workspace")
+            )
+        );
+    }
+
+    #[test]
+    fn workspace_none_when_no_source_available() {
+        assert_eq!(resolve_workspace_dir(None, None, None), None);
+    }
+
+    // ---------------- 「导出诊断包」入口脚本 ----------------
+
+    #[test]
+    fn env_tab_script_matches_ui_anchor_contract() {
+        // 锚点契约:prototype/js/dock.js 的 id=tab-env、cmdk.js 的 #railDock
+        // 展开开关、/#env 导航痕迹 —— UI 侧改 id 时靠本测试提醒同步壳侧
+        assert!(OPEN_ENV_TAB_JS.contains("tab-env"));
+        assert!(OPEN_ENV_TAB_JS.contains("railDock"));
+        assert!(OPEN_ENV_TAB_JS.contains("#env"));
     }
 }

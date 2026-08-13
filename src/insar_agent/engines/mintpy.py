@@ -125,7 +125,7 @@ def render_cfg(run: dict, *, this_step: int, this_method: str, this_params: dict
         reference_lalo=os.environ.get("INSAR_REFERENCE_LALO", "391.5e4,45e4"),
         temp_base_max=p7.get("max_temporal_baseline", 120),
         tropo_method=tropo,
-        ramp=p8.get("ramp", "linear"),
+        ramp=p8.get("ramp", "no"),  # 兜底与注册表默认一致(C1:上游 deramp=no)
         dem_error="yes" if p8.get("dem_error", True) else "no",
         # stepFuncDate 跟随第 9 步 step 方法的阶跃日期(DEM 误差校正共用拐点);
         # 第 8 步并未声明 step_func_date 参数,不再读它(REVIEW-r2 P2-10 连带清理)

@@ -602,7 +602,9 @@ fn main() {
     let update_endpoint = update_endpoint();
 
     // 单实例包装必须在其他插件之前(见 INTEGRATION-tray.md)
-    let mut builder = singleton::ensure_single_instance(tauri::Builder::default());
+    let mut builder = singleton::ensure_single_instance(tauri::Builder::default())
+        // opener:托盘「打开数据目录」以系统文件管理器打开数据目录(tray.rs)
+        .plugin(tauri_plugin_opener::init());
     if update_endpoint.is_some() {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }

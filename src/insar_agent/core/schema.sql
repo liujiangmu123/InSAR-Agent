@@ -184,3 +184,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_steps_cap_method ON steps(capability, method);
 -- 按会话取 run 列表/最新 run(list_runs/latest_run):消 SCAN runs + 临时排序。
 CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, created_at);
+-- 会话列表及其键集分页(list_sessions/list_sessions_page):此前 ORDER BY created_at
+-- 是 SCAN sessions + 全量临时 B 树排序;(created_at, session_id) 的索引序即分页序
+-- (session_id 作同 ts 行的 tie-break),LIMIT 提前停。
+CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at, session_id);
+-- 事件回放分页(events_page):idx_trace_run 只给 (run_id, rowid) 序,ORDER BY ts,id
+-- 每页都要全量临时排序;(run_id, ts) 隐含 rowid 作 tie-break,索引序即回放序。
+CREATE INDEX IF NOT EXISTS idx_trace_run_ts ON trace(run_id, ts);

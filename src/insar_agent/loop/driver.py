@@ -355,6 +355,7 @@ class Driver:
         if not store.acquire_lease(lease, holder, ttl=60.0, stale_after=60.0):
             yield self._emit(ev.note(
                 "bad", "该 run 已有执行回合在进行(运行锁被占用);并发执行被拒绝。"
+                       "可用 POST /api/queue 排队,空闲后自动执行;"
                        "若上一回合已崩溃,约 60 秒后重试即可接管。"))
             return
         try:

@@ -1,0 +1,185 @@
+/* ============================================================
+   provenance 账本浏览器(provview.js)专用样式段。
+   仅新增 .prov* 类,不覆写既有类;颜色一律走 tokens.css 语义变量,
+   深浅主题自动生效;文本组合(--text/--text-2/--text-3 × 表面色、
+   .tag 四色变体)均为对比度审计表内已过 AA 的组合,不引入新配色。
+   不使用 @media(无断点需求,断点清单一致性由 base.css 统一管理)。
+   ============================================================ */
+
+.provview { display: block; margin-top: 14px; padding-top: 4px; border-top: 1px dashed var(--border-strong); }
+
+/* ---- run 头卡:证据级/QA/模拟徽章 + id/场景/意图/agent/生成时间 ---- */
+.prov-head {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 9px 11px; font-size: var(--fs-sm);
+}
+.prov-head-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 7px; }
+.prov-head .hrow { display: flex; gap: 8px; padding: 2px 0; min-width: 0; }
+.prov-head .hrow .k { flex-shrink: 0; width: 44px; color: var(--text-3); font-size: var(--fs-xs); line-height: 18px; }
+.prov-head .hrow .v {
+  flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere;
+}
+.prov-head .hrow .v.mono { font-size: 11px; line-height: 18px; }
+
+/* ---- 操作行:复制引用块 / 导出 JSON / 对比下拉 / 刷新 ---- */
+.prov-acts { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 8px; }
+.prov-acts .prov-cmp-lb {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--fs-xs); color: var(--text-3);
+}
+.prov-acts select {
+  max-width: 190px; font-size: var(--fs-xs); padding: 3px 6px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--text);
+}
+
+/* ---- 干预时间线:每行 = 何时 / 谁 / 做了什么 / 投递语义 / payload ---- */
+.prov-iv {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); overflow: hidden;
+}
+.prov-iv .ivrow {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 6px 11px; border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--stale); font-size: var(--fs-sm);
+}
+.prov-iv .ivrow:last-child { border-bottom: none; }
+.prov-iv .when { color: var(--text-3); font-size: 10.5px; flex-shrink: 0; }
+.prov-iv .who { color: var(--text-2); font-size: var(--fs-xs); flex-shrink: 0; }
+.prov-iv .what { color: var(--text); font-size: var(--fs-xs); font-weight: 600; }
+.prov-iv .pl {
+  color: var(--text-3); font-size: 10px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.prov-iv-empty { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 2px 0; }
+
+/* ---- 证据树:步骤节点(头行按钮 + 惰性详情) ---- */
+.prov-tree {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); overflow: hidden;
+}
+.prov-step { border-bottom: 1px solid var(--border); }
+.prov-step:last-child { border-bottom: none; }
+.prov-step-hd {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 7px 11px; font: inherit; font-size: var(--fs-sm);
+  color: inherit; text-align: left; background: none; border: none;
+  cursor: pointer; transition: background .12s;
+}
+.prov-step-hd:hover { background: var(--bg-hover); }
+.prov-step-hd:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.prov-step-hd[aria-expanded='true'] { background: var(--bg-sub); }
+.prov-step-hd .no { color: var(--text-3); font-size: 10.5px; min-width: 26px; flex-shrink: 0; }
+.prov-step-hd .nm { font-weight: 600; flex-shrink: 0; }
+.prov-step-hd .mth {
+  flex: 1; min-width: 0; font-size: 10.5px; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.prov-step-hd .st { font-size: var(--fs-xs); color: var(--text-2); flex-shrink: 0; }
+.prov-step-hd .tag { flex-shrink: 0; }
+
+/* 状态色点:颜色 + title 文字双通道(非 done 状态另有文字标注) */
+.prov-step-hd .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot.d-done { background: var(--ok); }
+.dot.d-run { background: var(--accent); }
+.dot.d-fail { background: var(--bad); }
+.dot.d-skip { background: var(--think); }
+.dot.d-stale { background: var(--stale); }
+.dot.d-pend { background: var(--border-strong); }
+
+.prov-step-bd { padding: 4px 11px 11px 44px; background: var(--bg-sub); }
+.prov-sub {
+  font-size: var(--fs-xs); font-weight: 700; color: var(--text-3);
+  letter-spacing: .04em; margin: 10px 0 5px;
+}
+
+/* ---- 参数表:非默认值行高亮 ---- */
+.prov-params {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); overflow: hidden;
+}
+.prov-params .prow {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 9px; border-bottom: 1px solid var(--border); font-size: var(--fs-xs);
+}
+.prov-params .prow:last-child { border-bottom: none; }
+.prov-params .prow .k { color: var(--text-2); min-width: 120px; flex-shrink: 0; }
+.prov-params .prow .v { color: var(--text); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.prov-params .prow.diff { background: var(--stale-weak); border-left: 3px solid var(--stale); }
+
+/* ---- 指纹三段:inputs / params / env 前 8 位(title 全量) ---- */
+.prov-fps { display: flex; gap: 6px; flex-wrap: wrap; }
+.prov-fp {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; font-size: 10.5px; color: var(--text-2);
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+}
+.prov-fp b { color: var(--text-3); font-weight: 600; }
+
+/* ---- 命令行:折叠行 + 复制 ---- */
+.prov-cmd {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); margin-bottom: 6px; overflow: hidden;
+}
+.prov-cmd-hd { display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 3px; }
+.prov-cmd-tog {
+  display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0;
+  padding: 4px 6px; font-size: 10.5px; color: var(--text-2);
+  background: none; border: none; cursor: pointer; text-align: left;
+  border-radius: var(--r-sm);
+}
+.prov-cmd-tog:hover { background: var(--bg-hover); color: var(--text); }
+.prov-cmd-tog:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.prov-cmd-tog svg { width: 11px; height: 11px; flex-shrink: 0; transition: transform .15s; }
+.prov-cmd-tog[aria-expanded='true'] svg { transform: rotate(90deg); }
+.prov-cmd-body { padding: 0 9px 8px; }
+.prov-cmd-meta { font-size: 10px; color: var(--text-3); margin-top: 4px; }
+
+/* ---- JSON / 命令原文:截断展示 ---- */
+.prov-json {
+  margin: 0; padding: 7px 9px; font-family: var(--mono); font-size: 10.5px;
+  line-height: 1.55; color: var(--text-2); background: var(--bg-mute);
+  border-radius: var(--r-sm); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.prov-json-more { color: var(--text-3); font-style: italic; }
+
+/* ---- QA 判定表 ---- */
+.prov-qa {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); overflow: hidden;
+}
+.prov-qa .qrow {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 4px 9px; border-bottom: 1px solid var(--border); font-size: var(--fs-xs);
+}
+.prov-qa .qrow:last-child { border-bottom: none; }
+.prov-qa .qrow .k { color: var(--text-2); min-width: 110px; flex-shrink: 0; }
+.prov-qa .qrow .v { color: var(--text-3); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+/* ---- run 对比:并排两列,差异高亮 ---- */
+.prov-cmp {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); overflow: hidden; font-size: var(--fs-xs);
+}
+.prov-cmp .chd {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  padding: 6px 11px; font-weight: 700; color: var(--text-2);
+  border-bottom: 1px solid var(--border); background: var(--bg-sub);
+}
+.prov-cmp .chd.sub { font-weight: 400; color: var(--text-3); background: var(--surface); }
+.prov-cmp .crow {
+  display: grid; grid-template-columns: 128px 1fr 1fr; gap: 8px;
+  padding: 5px 11px; border-bottom: 1px solid var(--border); align-items: baseline;
+}
+.prov-cmp .crow:last-of-type { border-bottom: none; }
+.prov-cmp .crow.changed { background: var(--accent-weak); border-left: 3px solid var(--accent); }
+.prov-cmp .cno { color: var(--text-2); font-size: 10.5px; overflow-wrap: anywhere; }
+.prov-cmp .ccell { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.prov-cmp .ccell > .mono { font-size: 10.5px; color: var(--text-2); overflow-wrap: anywhere; }
+.prov-cmp .ccell .hl {
+  color: var(--stale-text); background: var(--stale-weak);
+  padding: 0 4px; border-radius: var(--r-sm); font-weight: 600;
+}
+.prov-cmp .ccell .hlring { outline: 2px solid var(--stale); outline-offset: 1px; }
+.prov-cmp .ccell.miss { color: var(--text-3); font-style: italic; }
