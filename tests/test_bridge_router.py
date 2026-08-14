@@ -1,0 +1,128 @@
+"""pi 桥接端点契约(src/insar_agent/api/bridge_router.py)。
+
+覆盖:
+  - GET /api/monitor 数据面:步骤矩阵(state/stage/stage_letter)、进度百分比、
+    脏标(taint)计数、当前步识别、证据键存在、模式回显;
+  - GET/POST /api/mode:free|strict 切换与非法值 400、持久化;
+  - 端到端:/api/turn(规划)+ /api/pipeline(模拟执行)后,/api/monitor 如实
+    反映 run 终态(status=done、进度 100、证据级为 runnable 家族)。
+
+这些是无 LLM 密钥即可跑的路径(模拟引擎 engines/simulate.py 诚实跑全 11 步)。
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from insar_agent.api.app import create_app
+from insar_agent.core.db import Database
+from insar_agent.core.store import Store
+
+_HASHES = {"task_hash": "t0", "args_hash": "a0",
+           "local_hash": "l0", "eval_hash": "e0" * 6}
+
+
+@pytest.fixture()
+def client(tmp_path):
+    home = tmp_path / "home"
+    app = create_app(home=home)
+    with TestClient(app) as c:
+        c._home = home  # type: ignore[attr-defined]
+        yield c
+
+
+def _seed_run(home):
+    """sess-m 名下一个 run,5 步覆盖 done/skipped/running/pending + 一个脏标。"""
+    store = Store(Database(home / "insar.db"))
+    ws = home / "sessions" / "sess-m"
+    rid = "20260814T120000-monitor0"
+    store.create_run(rid, "sess-m", workspace=str(ws), scenario="quake")
+    for sid in range(1, 6):
+        store.upsert_step(rid, sid, capability=f"cap{sid}", name=f"步骤{sid}",
+                          method="m_x", params={}, hashes=_HASHES)
+    # 显式设定 stage/state/stale(确定性,不依赖真实执行)
+    seed = [
+        (1, "VERIFIED", "done", 0),
+        (2, "PREPARED", "skipped", 0),
+        (3, "RUNNING", "running", 0),
+        (4, "PREPARED", "pending", 0),
+        (5, "VERIFIED", "done", 1),   # 脏标:外部改动/级联标脏
+    ]
+    with store.db.tx() as cur:
+        for sid, stage, state, stale in seed:
+            cur.execute("UPDATE steps SET stage=?, state=?, stale=? "
+                        "WHERE run_id=? AND step_id=?", (stage, state, stale, rid, sid))
+    return rid
+
+
+def test_monitor_contract(client):
+    client.post("/api/sessions", json={"id": "sess-m"})
+    rid = _seed_run(client._home)
+
+    data = client.get("/api/monitor", params={"session": "sess-m"}).json()
+    assert data["session"] == "sess-m"
+    assert data["run"]["run_id"] == rid
+    assert data["run"]["scenario"] == "quake"
+    assert len(data["steps"]) == 5
+
+    # 进度:done+skipped = 3/5 = 60%
+    assert data["progress"] == {"total": 5, "done": 3, "pct": 60}
+    # 脏标计数(step5 stale)
+    assert data["taints"] == 1
+    # 当前步 = 第一个 running
+    assert data["current"]["step"] == 3
+    # 五阶段单字母映射
+    letters = {s["step"]: s["stage_letter"] for s in data["steps"]}
+    assert letters[1] == "V" and letters[3] == "R" and letters[4] == "P"
+    # 证据键存在(值可能为 None,取决于工作区)
+    assert "evidence" in data
+    # 默认模式 free
+    assert data["mode"] == "free"
+
+
+def test_monitor_empty_session(client):
+    client.post("/api/sessions", json={"id": "sess-empty"})
+    data = client.get("/api/monitor", params={"session": "sess-empty"}).json()
+    assert data["run"] is None
+    assert data["steps"] == []
+    assert data["progress"]["pct"] == 0
+    assert data["mode"] == "free"
+
+
+def test_mode_toggle_and_persist(client):
+    client.post("/api/sessions", json={"id": "sess-mode"})
+    # 默认 free
+    assert client.get("/api/mode", params={"session": "sess-mode"}).json()["mode"] == "free"
+    # 切 strict
+    r = client.post("/api/mode", json={"session": "sess-mode", "mode": "strict"})
+    assert r.status_code == 200 and r.json()["mode"] == "strict"
+    assert client.get("/api/mode", params={"session": "sess-mode"}).json()["mode"] == "strict"
+    # 非法值 400
+    bad = client.post("/api/mode", json={"session": "sess-mode", "mode": "wild"})
+    assert bad.status_code == 400
+    # 切回 free
+    client.post("/api/mode", json={"session": "sess-mode", "mode": "free"})
+    assert client.get("/api/mode", params={"session": "sess-mode"}).json()["mode"] == "free"
+
+
+def test_monitor_reflects_simulated_run(client):
+    """端到端:规划 + 模拟执行后,/api/monitor 反映终态(无 LLM 密钥)。"""
+    sess = "sess-e2e"
+    client.post("/api/sessions", json={"id": sess})
+    # 规划一回合(引擎缺失 → 模拟执行,规则路径,不需 LLM)
+    client.post("/api/turn", json={"session": sess, "text": "Ridgecrest 地震同震形变"})
+    runs = client.get("/api/runs", params={"session": sess}).json()["runs"]
+    assert runs, "规划应产生一个 run"
+    rid = runs[0]["run_id"]
+    # 执行整条模拟流水线
+    client.post("/api/pipeline", json={"session": sess, "run_id": rid})
+
+    data = client.get("/api/monitor", params={"session": sess, "run_id": rid}).json()
+    assert data["run"]["run_id"] == rid
+    assert data["run"]["simulated"] is True
+    assert data["run"]["status"] == "done"
+    assert data["progress"]["pct"] == 100
+    # 模拟执行证据级封顶 runnable(证据阶梯诚实性)
+    assert data["evidence"] is not None
+    assert data["evidence"]["level"] == "runnable"
