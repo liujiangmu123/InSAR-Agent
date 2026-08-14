@@ -4,7 +4,8 @@
    ============================================================ */
 import { h, txt, icon, $, $$, toast } from './dom.js';
 import * as St from './state.js';
-import { S, STEP_DEFS, def_, st_, LADDER, SESSIONS, DISK_TIERS } from './state.js';
+import { S, STEP_DEFS, def_, st_, LADDER, SESSIONS, PROJECTS, DISK_TIERS } from './state.js';
+import * as PTree from './projecttree.js';
 import * as Stream from './stream.js';
 import * as Queue from './queue.js';   // 排队消息（busy 期间输入 → chip，回合结束逐条发出）
 import * as Dock from './dock.js';
@@ -23,6 +24,7 @@ let currentPlan = null;
    回合结束（consume 尾部 / submit finally）兜底关闭。
    note 等其他事件不经状态机 —— 穿行不打断进行中的流式气泡。 */
 const liveSay = Stream.createLiveSay();
+const liveThink = Stream.createLiveThink();
 
 /** say.abort 的 reason 闭集（loop/events.py say_abort 工厂）→ 中文标注。
     未知 reason 走 agentMsgStream 的缺省标注,不编理由。 */
@@ -94,7 +96,7 @@ function boot() {
     },
   });
 
-  renderSessions();
+  try { renderSessions(); } catch (err) { console.error('renderSessions', err); }
   window.__slashRun = (ids) => run(ids);   // slash 接线:/run 命令借用既有执行链路(js/slash.js)
   Notify.init({ onAdminRuns: (runs) => { adminRuns = runs; renderSessions(); } });   // 通知接线：标题角标复原 + 30s 运维视图轮询
   renderHero();
@@ -139,6 +141,41 @@ async function fetchSessionsList() {
   }
 }
 
+async function fetchProjectsList() {
+  if (location.protocol === 'file:') return [];
+  try {
+    const resp = await fetch('/api/projects');
+    if (!resp.ok) return [];
+    const rows = await resp.json();
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+function openNewProjectDialog() {
+  if (typeof window.__openProjectDialog === 'function') {
+    window.__openProjectDialog();
+    return;
+  }
+  import('./projects.js').then((m) => m.openProjectDialog()).catch((err) => {
+    console.error(err);
+    toast('无法打开新建项目对话框', 3200);
+  });
+}
+
+function rememberProject(pid) {
+  S.projectId = pid || null;
+  PTree.saveCurrentProject(S.projectId);
+}
+
+function projectIdForNewChat() {
+  if (S.projectId && PROJECTS.some((p) => p.project_id === S.projectId)) return S.projectId;
+  const cur = SESSIONS.find((s) => s.id === S.sessionId);
+  if (cur && cur.project_id) return cur.project_id;
+  return PTree.inferCurrentProject(S.sessionId, SESSIONS, PROJECTS);
+}
+
 /** 步骤目录:全局能力声明,不带 session 参数（避免服务端为其建会话目录）。 */
 async function ensureRegistry() {
   if (STEP_DEFS.length || location.protocol === 'file:') return;
@@ -175,7 +212,14 @@ function paintOffline(on) {
 /** 副标题 = 当前会话名;没有会话时显示应用工作区名。 */
 function paintSubtitle() {
   const cur = SESSIONS.find((s) => s.id === S.sessionId);
-  el.subtitle.textContent = cur ? cur.name : '工作区';
+  const proj = PROJECTS.find((p) => p.project_id === (cur?.project_id || S.projectId));
+  if (!cur && !proj) { el.subtitle.textContent = '工作区'; return; }
+  if (proj && cur) {
+    el.subtitle.textContent = `${proj.name} / ${cur.name}`;
+    return;
+  }
+  if (proj) { el.subtitle.textContent = proj.name; return; }
+  el.subtitle.textContent = cur.name;
 }
 
 async function hydrateFromServer() {
@@ -183,14 +227,20 @@ async function hydrateFromServer() {
   paintOffline(rows === null);
   if (rows === null) {   // 后端不可达:清空会话镜像,空态卡 + 离线徽章如实呈现
     St.setSessions([]);
+    St.setProjects([]);
     renderSessions();
     paintSubtitle();
     return;
   }
   St.setSessions(rows);
+  St.setProjects(await fetchProjectsList());
   // 当前会话失效（首次启动/被归档/被删）→ 自动落到列表首个活跃会话;全无则保持空
   if (!SESSIONS.some((s) => s.id === S.sessionId && !s.archived)) {
     S.sessionId = SESSIONS.find((s) => !s.archived)?.id ?? null;
+  }
+  if (!S.projectId) {
+    rememberProject(PTree.loadCurrentProject()
+      || PTree.inferCurrentProject(S.sessionId, SESSIONS, PROJECTS));
   }
   renderSessions();
   paintSubtitle();
@@ -287,7 +337,24 @@ function wireChrome() {
     el.input.style.height = `${Math.min(132, el.input.scrollHeight)}px`;
   });
 
-  $('#btnNew').addEventListener('click', createSession);   // 新建会话走真实 API（POST /api/sessions）
+  $('#btnNew')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    createSession();
+  });
+  $('#btnNewProject')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openNewProjectDialog();
+  });
+  document.addEventListener('insar:project-opened', async (ev) => {
+    const pid = ev.detail && ev.detail.project_id;
+    if (pid) rememberProject(pid);
+    renderSessions();
+    paintSubtitle();
+    reset();
+    await ensureRegistry();
+    connectGlobalEvents();
+    hydrateFromServer();
+  });
   $('#railChat').addEventListener('click', () => { closeOverlays(); el.input.focus(); });
   $('#railSessions').addEventListener('click', toggleSider);
   $('#railDock').addEventListener('click', toggleDock);
@@ -583,6 +650,7 @@ async function errDetail(resp) {
 function switchSession(s) {
   if (s.id === S.sessionId) return;
   S.sessionId = s.id;
+  if (s.project_id) rememberProject(s.project_id);
   renderSessions();
   paintSubtitle();
   reset();
@@ -595,8 +663,14 @@ function switchSession(s) {
  * 后端不可达时如实拒绝 —— 不再造纯本地假会话。
  */
 let creatingSession = false;
-async function createSession() {
+async function createSession(projectId) {
   if (creatingSession) return null;
+  const pid = PTree.asProjectId(projectId) || projectIdForNewChat();
+  if (!pid && !PROJECTS.length) {
+    toast('请先新建一个项目文件夹,对话会挂在项目下面', 3600);
+    openNewProjectDialog();
+    return null;
+  }
   creatingSession = true;
   try {
     const now = new Date();
@@ -604,15 +678,20 @@ async function createSession() {
     const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
       + `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
     const id = `s-${stamp}-${Math.random().toString(36).slice(2, 6)}`;
-    const name = `新会话 ${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    const name = `新对话 ${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
     let row = null;
     try {
       const resp = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, name, mode: S.mode }),
+        body: JSON.stringify({ id, name, mode: S.mode, project_id: pid || null }),
       });
       if (resp.ok) row = await resp.json();
+      else {
+        const detail = await resp.text();
+        toast(`无法新建对话:${detail.slice(0, 180)}`, 4200);
+        return null;
+      }
     } catch { /* 网络失败:按后端不可达处理 */ }
     if (!row) {
       paintOffline(true);
@@ -623,12 +702,13 @@ async function createSession() {
     // 服务端列表按 created_at 倒序,重拉一次让新会话与既有会话同源同序
     St.setSessions((await fetchSessionsList()) || [row]);
     S.sessionId = row.session_id || row.id;
+    if (row.project_id) rememberProject(row.project_id);
     renderSessions();
     paintSubtitle();
     reset();
     await ensureRegistry();
     connectGlobalEvents();
-    toast(`已新建会话：${row.name || S.sessionId}`);
+    toast(`已新建对话：${row.name || S.sessionId}`);
     return S.sessionId;
   } finally {
     creatingSession = false;
@@ -810,16 +890,68 @@ function ensureSessOpsStyle() {
   `));
 }
 
+let projectCollapsed = PTree.loadCollapsed();
+
+function toggleProjectOpen(key) {
+  const open = PTree.isOpen(projectCollapsed, key,
+    { hasCurrent: key === S.projectId });
+  projectCollapsed = { ...projectCollapsed, [key]: open };
+  PTree.saveCollapsed(projectCollapsed);
+  renderSessions();
+}
+
+function projectBlock(block) {
+  const current = block.key === S.projectId;
+  const open = PTree.isOpen(projectCollapsed, block.key, { hasCurrent: current });
+  const live = { currentId: S.sessionId, busy: S.busy, phase: S.phase };
+  const hd = h('div', {
+    class: 'proj-hd',
+    'aria-expanded': String(open),
+    'aria-current': String(current),
+  },
+    h('button', {
+      class: 'proj-toggle', type: 'button',
+      'aria-label': open ? `折叠 ${block.name}` : `展开 ${block.name}`,
+      onclick: () => toggleProjectOpen(block.key),
+    }, open ? '▾' : '▸'),
+    h('button', {
+      class: 'proj-main', type: 'button',
+      title: block.root || block.name,
+      onclick: () => {
+        if (block.project) rememberProject(block.key);
+        if (!open) toggleProjectOpen(block.key);
+        else renderSessions();
+        paintSubtitle();
+      },
+    },
+      h('span', { class: 'proj-ic', 'aria-hidden': 'true' }, block.project ? '📁' : '💬'),
+      h('span', { class: 'proj-nm' }, block.name),
+      h('span', { class: 'proj-cnt' }, String(block.sessions.length))),
+    block.project ? h('button', {
+      class: 'proj-add', type: 'button',
+      'aria-label': `在 ${block.name} 下新建对话`,
+      title: '在此项目新建对话',
+      onclick: (e) => { e.stopPropagation(); createSession(block.key); },
+    }, '+') : null);
+  const chats = open
+    ? h('div', { class: 'proj-chats' },
+        ...block.sessions.map((s) => {
+          const st = Notify.classifySession(s, live, adminRuns ? adminRuns[s.id] : undefined);
+          return sessionRow(s, st);
+        }))
+    : null;
+  return h('div', {
+    class: 'proj-block',
+    dataset: { pid: block.key, open: open ? '1' : '0', current: current ? '1' : '0' },
+  }, hd, chats);
+}
+
 function renderSessions() {
   ensureSessOpsStyle();
-  const { active, archived } = Ops.splitArchived(SESSIONS);
-  const groups = Notify.groupSessions(
-    active, { currentId: S.sessionId, busy: S.busy, phase: S.phase }, adminRuns);
-  const nodes = groups.flatMap((g) => [
-    groupHeader(g.key, g.label, g.items.length),
-    ...g.items.map((s) => sessionRow(s, g.key)),
-  ]);
-  if (archived.length) {   // 折叠组:点标题展开,行内可还原
+  const { archived } = Ops.splitArchived(SESSIONS);
+  const tree = PTree.buildProjectTree(SESSIONS, PROJECTS);
+  const nodes = tree.map(projectBlock);
+  if (archived.length) {
     nodes.push(groupHeader('archived', `${archivedOpen ? '▾' : '▸'} 已归档`,
       archived.length, {
         expanded: archivedOpen,
@@ -827,7 +959,7 @@ function renderSessions() {
       }));
     if (archivedOpen) nodes.push(...archived.map(archivedRow));
   } else {
-    archivedOpen = false;   // 组清空(全部还原)后复位,下次归档从收起态开始
+    archivedOpen = false;
   }
   el.sessions.replaceChildren(...nodes);
 }
@@ -901,11 +1033,21 @@ async function consume(iter) {
     if (API.isMockActive()) globalThis.__insarAgentLoop?.handleEvent?.(ev);
     switch (ev.t) {
       case 'thinking':
+        liveThink.collapse();
         Stream.thinking(ev.title, h('div', { style: { whiteSpace: 'pre-line' } }, ev.body));
+        break;
+
+      case 'think.delta':
+        liveThink.delta(ev.text);
+        break;
+
+      case 'think.end':
+        liveThink.end();
         break;
 
       /* ---- 流式回复（0814B §1.4）：say.delta × N → 终帧 say / say.abort ---- */
       case 'say.delta':
+        liveThink.collapse();
         liveSay.delta(ev.text);
         break;
 
@@ -934,6 +1076,7 @@ async function consume(iter) {
       }
 
       case 'tool.start':
+        liveThink.collapse();
         tools.set(ev.id, Stream.toolCall({
           cmd: ev.cmd, verb: ev.verb, label: ev.label, open: ev.open,
         }));
@@ -1044,6 +1187,7 @@ async function consume(iter) {
   // 回合结束兜底：流没等到终帧（say/say.abort）就正常收尾 → 半截标废，
   // 绝不把未定稿文本冒充完整回复（异常/停止路径的兜底在 submit 的 finally）。
   liveSay.abort();
+  liveThink.abort();
 }
 
 /* ============================================================
@@ -1207,6 +1351,7 @@ async function submit() {
     stopTyping();   // 兜底:空流/建流失败/异常路径,指示器绝不残留(remove 幂等)
     // 停止/异常中断时半截回复如实标废;正常路径状态机已被终帧关闭,此处空操作
     liveSay.abort('(已停止,回复未完成)');
+    liveThink.abort('(已停止)');
     setBusy(false);
   }
 }

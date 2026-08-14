@@ -45,7 +45,7 @@ class LLMConfigBody(BaseModel):
     # 自主循环(LOOP-CONTRACT §8)。None = 不改;越界由 pydantic 挡成 422,
     # 与本路由 /usage 的 Query(ge/le) 及 POST /config 既有的 pydantic 类型校验同风格。
     agent_loop: bool | None = None
-    agent_max_cycles: int | None = Field(default=None, ge=1, le=12)
+    agent_max_cycles: int | None = Field(default=None, ge=1, le=48)
 
 
 class ModelsBody(BaseModel):

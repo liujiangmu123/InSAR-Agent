@@ -65,7 +65,8 @@ def _atomic_write_json(path: Path, data: object) -> None:
 
 
 def create_data_catalog_router(home: Path | str,
-                               *, ttl_seconds: float = CACHE_TTL_S) -> APIRouter:
+                               *, ttl_seconds: float = CACHE_TTL_S,
+                               store=None) -> APIRouter:
     """构造数据集路由。home 由 create_app 注入(工作区根,INSAR_HOME)。
 
     ttl_seconds 是测试缝:默认 60s;测试注入 0 验证「过期即重扫」。
@@ -97,6 +98,14 @@ def create_data_catalog_router(home: Path | str,
             candidates.append(Path(env_dir))
         candidates.append(home / "datasets")
         candidates.extend(Path(s) for s in custom_roots())
+        if store is not None:
+            try:
+                for proj in store.list_projects():
+                    root = Path(proj["root"])
+                    candidates.append(root)
+                    candidates.append(root / "data")
+            except Exception:  # noqa: BLE001 —— 项目表缺席时清单仍可用
+                pass
         roots: list[Path] = []
         seen: set[str] = set()
         for p in candidates:

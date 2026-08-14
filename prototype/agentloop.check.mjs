@@ -183,10 +183,11 @@ const St = await import('./js/state.js');
 console.log('== A. 纯逻辑(动作字典/文案/时长/mock 开关) ==');
 
 const CONTRACT_ACTIONS = ['search_data', 'inspect_file', 'check_env', 'list_data',
-  'status', 'plan', 'execute', 'set_params', 'set_method', 'thinking'];
-check('A1 契约动作闭集 10 项齐全,均有中文名与图标',
+  'status', 'plan', 'execute', 'set_params', 'set_method', 'thinking',
+  'install_engine', 'list_files', 'learn_tool', 'search_docs', 'probe_scratch'];
+check('A1 契约动作闭集齐全,均有中文名与图标',
   CONTRACT_ACTIONS.every((a) => AL.ACTION_META[a]?.zh && AL.ACTION_META[a]?.ic)
-  && Object.keys(AL.ACTION_META).length === 10);
+  && Object.keys(AL.ACTION_META).length === CONTRACT_ACTIONS.length);
 
 check('A2 契约外动作兜底:保留原始动作名,不抛错',
   AL.actionMeta('frobnicate').zh === 'frobnicate' && AL.actionMeta('').zh === '未知动作');
@@ -258,6 +259,10 @@ check('B5 工具事件挂到当前周期:耗时与退出态入账',
   i1.loop.cycles[1].tools.length === 1 && i1.loop.cycles[1].tools[0].exit === 0
   && i1.loop.cycles[1].tools[0].t1 !== null
   && i1.loop.cycles[1].tools[0].summary === '11 步计划就绪');
+check('B5b 运行中即展开步骤清单(不等收卡)',
+  strip.querySelectorAll('.alp-live .alp-row').length === 2
+  && strip.querySelector('.alp-row.is-live') !== null
+  && [...strip.querySelectorAll('.alp-summ')].some((n) => n.textContent.includes('11 步计划就绪')));
 
 i1.handleEvent({ t: 'agent.cycle', n: 3, max: 6, action: 'frobnicate' });
 check('B6 契约外动作不致渲染中断:兜底文案保留动作名',

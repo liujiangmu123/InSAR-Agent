@@ -46,15 +46,48 @@ async function safeInvoke(command, args, fallback) {
   }
 }
 
+/** 预热 Tauri IPC:首个 fetch(ipc.localhost) 若被 CSP 拦下会回退 postMessage,
+ *  把这次降级提前做完,浏览按钮就不会卡在「第一次 invoke 静默失败」。 */
+let ipcReady = null;
+export function warmIpc() {
+  if (!isDesktop()) return Promise.resolve(false);
+  if (!ipcReady) {
+    ipcReady = appInfo().then((info) => !!info).catch(() => false);
+  }
+  return ipcReady;
+}
+
 /**
  * 弹出原生「选择目录」对话框。
  * @param {string} [title] 对话框标题
  * @returns {Promise<string|null>} 选中目录的绝对路径;
- *   用户取消、浏览器环境或调用失败均返回 null(调用方回退为手输框)
+ *   用户取消、浏览器环境返回 null;invoke 失败抛错(调用方改走备用选择器)
  */
 export async function pickDirectory(title = '选择目录') {
-  const result = await safeInvoke('pick_directory', { title }, null);
-  return typeof result === 'string' && result.length > 0 ? result : null;
+  const invoke = getInvoke();
+  if (!invoke) return null;
+  await warmIpc();
+  const tryOnce = async () => {
+    const result = await invoke('pick_directory', { title });
+    return typeof result === 'string' && result.length > 0 ? result : null;
+  };
+  try {
+    return await tryOnce();
+  } catch (err) {
+    console.warn('[desktop] invoke(pick_directory) 首次失败,重试:', err);
+    ipcReady = null;
+    await warmIpc();
+    try {
+      return await tryOnce();
+    } catch (err2) {
+      console.warn('[desktop] invoke(pick_directory) 重试仍失败:', err2);
+      throw err2;
+    }
+  }
+}
+
+if (typeof window !== 'undefined') {
+  queueMicrotask(() => { warmIpc(); });
 }
 
 /**

@@ -135,7 +135,24 @@ const stOr = (id) => st_(id) || {
   params: {}, fingerprint: '········',
 };
 
+function focusComposer() {
+  const inp = document.getElementById('prompt');
+  if (!inp) return;
+  inp.focus();
+  try { inp.scrollIntoView({ block: 'nearest' }); } catch { /* ignore */ }
+}
+
+function pipelineEmptyCta() {
+  return ES.renderEmpty(null, {
+    icon: 'chat',
+    title: '还没有规划任务',
+    hint: '在左侧输入研究任务并发送，例如「处理 Ridgecrest 2019 地震同震形变」。Agent 规划完成后，这里会出现 11 步执行流。默认工作区已就绪，不必先新建项目。',
+    action: { label: '去输入任务', icon: 'chat', onClick: focusComposer },
+  });
+}
+
 function pipelineView() {
+  if (!STEP_DEFS.length) return pipelineEmptyCta();
   const list = h('div', { class: 'pipe', role: 'list' });
   // 行级视图模型:本地状态先渲染;服务端字段(staleReason / skipped 三态)异步并入
   const vms = new Map();
@@ -169,7 +186,8 @@ function pipelineView() {
   const runsHost = h('div');   // run 历史切换器挂载点(渲染与只读语义全在 runswitch.js)
   const root = h('div', null,
     runsHost,
-    h('h3', { class: 'sect' }, '处理流水线 · 11 步'),
+    S.steps.size ? null : pipelineEmptyCta(),
+    h('h3', { class: 'sect' }, S.steps.size ? '处理流水线 · 11 步' : '处理流水线 · 规划后出现 11 步'),
     sumHost,
     wrap,
     stepDetail(S.selectedStep),
@@ -421,8 +439,8 @@ function filesView() {
         h('h3', { class: 'sect' }, '数据与产物'),
         ES.renderEmpty(null, {
           icon: 'folder', title: '还没有 run 记录',
-          hint: '运行一次流水线即可生成——每个产物的路径、大小与三段指纹在此可查。',
-          action: { label: '运行流水线', event: 'states:run-pipeline' },
+          hint: '先在左侧发送研究任务，Agent 规划并执行后，产物路径、大小与三段指纹会显示在这里。',
+          action: { label: '去输入任务', icon: 'chat', event: 'states:focus-prompt' },
         }));
       return;
     }
@@ -467,8 +485,8 @@ function auditView() {
         h('h3', { class: 'sect' }, '六级证据阶梯'),
         ES.renderEmpty(null, {
           icon: 'shield', title: '还没有证据链记录',
-          hint: '运行一次流水线即可生成——每步证据来源、六级评定与阈值台账在此可审。',
-          action: { label: '运行流水线', event: 'states:run-pipeline' },
+          hint: '先在左侧发送研究任务。规划执行后，每步证据来源、六级评定与阈值台账会显示在这里。',
+          action: { label: '去输入任务', icon: 'chat', event: 'states:focus-prompt' },
         }));
       return;
     }
@@ -548,8 +566,8 @@ function reportView() {
         h('h3', { class: 'sect' }, '论文方法草稿'),
         ES.renderEmpty(null, {
           icon: 'doc', title: '还没有方法草稿',
-          hint: '完成一次流水线运行即可生成——草稿由 provenance 账本确定派生，〔prov-N〕逐条可溯。',
-          action: { label: '运行流水线', event: 'states:run-pipeline' },
+          hint: '先在左侧发送研究任务。完成一次规划执行后，方法草稿会由 provenance 账本派生。',
+          action: { label: '去输入任务', icon: 'chat', event: 'states:focus-prompt' },
         }));
       return;
     }
@@ -878,8 +896,8 @@ async function loadTermView(body) {
     body.replaceChildren(h('div', null,   // states 接入:无数据分支 → 空态卡 + 既有运行入口(自定义事件解耦)
       h('h3', { class: 'sect' }, '终端 · 步骤日志（服务端）'),
       ES.renderEmpty(null, { icon: 'terminal', title: '还没有运行记录',
-        hint: '运行一次流水线即可生成——每步日志（log_path 尾部）在此可读、可过滤。',
-        action: { label: '运行流水线', event: 'states:run-pipeline' } })));
+        hint: '先在左侧发送研究任务。规划执行后，每步日志会显示在这里。',
+        action: { label: '去输入任务', icon: 'chat', event: 'states:focus-prompt' } })));
     return;
   }
   body.replaceChildren(termLiveView(state));
@@ -1079,8 +1097,8 @@ function traceLiveView(rows) {
       }, icon('refresh'), '刷新')),
     // states 接入:无数据分支 → 空态卡 + 既有运行入口(自定义事件解耦)
     rows.length ? table : ES.renderEmpty(null, { icon: 'trace', title: '还没有轨迹记录',
-      hint: '发起一次规划或执行即可生成——每一步的 phase / action / error 在此可审。',
-      action: { label: '运行流水线', event: 'states:run-pipeline' } }),
+      hint: '先在左侧发送研究任务。规划或执行后，每一步的 phase / action / error 会显示在这里。',
+      action: { label: '去输入任务', icon: 'chat', event: 'states:focus-prompt' } }),
     h('p', { class: 'blurb' },
       'schema 对齐 OpenDiscoveryTrace：step_no / phase / action / error / revision_trigger。' +
       '悬停行可见 thought 与 observation；导出 JSON 含全部字段。'));

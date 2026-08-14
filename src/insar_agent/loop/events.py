@@ -72,6 +72,20 @@ def say_delta(text: str) -> dict:
     return {"t": "say.delta", "text": text}
 
 
+def think_delta(text: str) -> dict:
+    """循环决策的思考增量(Cursor 式:等待时可见、可折叠)。
+
+    通道与 say.delta 同款:只走回合 NDJSON,不经 _emit。生命周期:
+    think.delta × N → think.end。正文是 cycle 输出里的 say 字段。
+    """
+    return {"t": "think.delta", "text": text}
+
+
+def think_end() -> dict:
+    """思考流收束:前端去掉打字态,块保留可摺叠。"""
+    return {"t": "think.end"}
+
+
 def say_abort(reason: str) -> dict:
     """流式回复标废(终帧之一):半截回复不是回复,前端保留已见文本并如实标注。
 
@@ -119,8 +133,7 @@ def step_stage(step_id: int, stage: str) -> dict:
 def agent_cycle(n: int, max_cycles: int, action: str) -> dict:
     """自主循环周期账(LOOP-CONTRACT §1,driver.converse_loop 每周期恰好一条)。
 
-    n 从 1 递增;action 是循环动作闭集(search_data/inspect_file/check_env/
-    list_data/status/plan/execute/set_params/set_method/thinking)成员。
+    n 从 1 递增;action 是循环动作闭集(含 install_engine/list_files)成员。
     app.js 的 consume() 对该类型静默丢弃,由 prototype/js/agentloop.js
     自建 SSE 订阅渲染「自主工作中」进度条与工作记录卡。
     """

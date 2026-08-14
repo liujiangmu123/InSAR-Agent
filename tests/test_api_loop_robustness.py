@@ -408,11 +408,11 @@ def test_converse_happy_path_contract_shape(rob_ctx):
 
 
 def test_max_cycles_boundary_matrix(rob_ctx):
-    """契约 §7:1<=max_cycles<=12。越界/非整数(含布尔、可解析数字串、整值浮点)
+    """契约 §7:1<=max_cycles<=48。越界/非整数(含布尔、可解析数字串、整值浮点)
     一律 400/422 且挡在开流前;缺省与显式 null 走配置缺省(本模块从不写
-    agent_max_cycles → 契约默认 6);合法边界 1/12 原样透传。"""
+    agent_max_cycles → 契约默认 24);合法边界 1/48 原样透传。"""
     client, _ = rob_ctx
-    for ok in (1, 12):
+    for ok in (1, 12, 48):
         marker = f"mc-ok-{next(_SEQ)}"
         res = _post_converse(client, {"session": "rob-bounds", "text": marker,
                                       "max_cycles": ok})
@@ -423,9 +423,9 @@ def test_max_cycles_boundary_matrix(rob_ctx):
         marker = f"mc-default-{next(_SEQ)}"
         res = _post_converse(client, {"session": "rob-bounds", "text": marker, **extra})
         assert res.status == 200, (extra, res.status, res.text[:200])
-        assert _single_call(marker)["max_cycles"] == 6
+        assert _single_call(marker)["max_cycles"] == 24
 
-    for bad in (0, 13, -1, 10 ** 18, -(10 ** 18), 10 ** 100, 6.5, 6.0, "6", "abc",
+    for bad in (0, 49, -1, 10 ** 18, -(10 ** 18), 10 ** 100, 6.5, 6.0, "6", "abc",
                 True, False, [6], {"n": 6}):
         marker = f"mc-bad-{next(_SEQ)}"
         res = _post_converse(client, {"session": "rob-bounds", "text": marker,
@@ -443,7 +443,7 @@ def test_fuzz_max_cycles_integer_domain(rob_ctx, mc):
     marker = f"mc-int-{next(_SEQ)}"
     res = _post_converse(client, {"session": "rob-fuzz-mc", "text": marker,
                                   "max_cycles": mc})
-    if 1 <= mc <= 12:
+    if 1 <= mc <= 48:
         assert res.status == 200 and res.broke is None, (mc, res.status, res.text[:200])
         assert _single_call(marker)["max_cycles"] == mc
     else:

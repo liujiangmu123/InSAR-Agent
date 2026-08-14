@@ -197,6 +197,7 @@ export function renderError(container, { message = '读取失败——后端不�
 const ACTION_BRIDGE = {
   'states:run-pipeline': 'btnRun',   // 顶栏「运行流水线/重跑失效步骤」
   'states:new-session': 'btnNew',    // 侧栏「新建会话」
+  'states:new-project': 'btnNewProject',
 };
 
 /* node 测试的最小 DOM stub 未必实现 document.addEventListener:
@@ -208,6 +209,10 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
       if (btn && typeof btn.click === 'function') btn.click();
     });
   }
+  document.addEventListener('states:focus-prompt', () => {
+    const inp = document.getElementById('prompt');
+    if (inp && typeof inp.focus === 'function') inp.focus();
+  });
 }
 
 /* ============================================================
@@ -220,13 +225,13 @@ export function watchSessionsEmpty() {
   if (!host || typeof MutationObserver === 'undefined') return;
 
   const paint = () => {
-    if (host.querySelector('.sess, .sess-group')) return;   // 有真实内容:不干预
+    if (host.querySelector('.sess, .sess-group, .proj-block')) return;   // 有真实内容:不干预
     if (host.querySelector('.es-empty')) return;            // 已画过:防观察器自触发循环
     renderEmpty(host, {
-      icon: 'chat',
-      title: '还没有会话',
-      hint: '点击「新建会话」即可开始——也可以直接在下方输入框描述研究任务。',
-      action: { label: '新建会话', event: 'states:new-session', icon: 'chat' },
+      icon: 'folder',
+      title: '还没有项目',
+      hint: '先新建一个项目文件夹。之后对话都挂在这个项目下面,数据也从该文件夹读取。',
+      action: { label: '新建项目', event: 'states:new-project', icon: 'folder' },
     });
   };
   new MutationObserver(paint).observe(host, { childList: true });

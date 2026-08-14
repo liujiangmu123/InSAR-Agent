@@ -244,9 +244,17 @@ DOC.body.appendChild(btnRun);
 DOC.dispatchEvent(new CustomEvent('states:run-pipeline'));
 check('states:run-pipeline → 桥接点击既有入口 #btnRun', runClicks === 1);
 
+const prompt = new Element('textarea');
+prompt.setAttribute('id', 'prompt');
+let focused = false;
+prompt.focus = () => { focused = true; };
+DOC.body.appendChild(prompt);
+document.dispatchEvent(new CustomEvent('states:focus-prompt'));
+check('states:focus-prompt → 聚焦 #prompt', focused === true);
+
 let newClicks = 0;
 const btnNew = new Element('button');
-btnNew.setAttribute('id', 'btnNew');
+btnNew.setAttribute('id', 'btnNewProject');
 btnNew.addEventListener('click', () => { newClicks += 1; });
 DOC.body.appendChild(btnNew);
 
@@ -255,9 +263,9 @@ sessions.setAttribute('id', 'sessions');
 DOC.body.appendChild(sessions);
 ES.watchSessionsEmpty();
 check('会话列表真空 → 注入空态卡', !!sessions.querySelector('.es-empty')
-  && sessions.textContent.includes('还没有会话'));
+  && sessions.textContent.includes('还没有项目'));
 sessions.querySelector('.es-empty-act').click();
-check('空态「新建会话」→ 桥接点击 #btnNew', newClicks === 1);
+check('空态「新建项目」→ 桥接点击 #btnNewProject', newClicks === 1);
 
 // 有真实会话行时不得干预
 const sessions2 = new Element('div');

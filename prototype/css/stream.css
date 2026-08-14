@@ -110,7 +110,13 @@
 .think > summary .cv { display: flex; transition: transform .18s }
 .think > summary .cv svg { width: 13px; height: 13px }
 .think[open] > summary .cv { transform: rotate(90deg) }
-.think .inner { margin-top: 5px; }
+.think .inner { margin-top: 5px; white-space: pre-wrap; }
+.think.is-streaming > summary { color: var(--think); }
+.think.is-streaming .inner::after {
+  content: '▍';
+  display: inline;
+  animation: alp-pulse 1s step-end infinite;
+}
 
 /* ===================== 工具调用条目（核心） ===================== */
 /* details 展开/收起平滑过渡：仅在支持 interpolate-size 的引擎生效，

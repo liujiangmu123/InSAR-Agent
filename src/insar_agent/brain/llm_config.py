@@ -25,11 +25,12 @@ DEFAULT_BASE_URL = "https://tokenrhythm.studio/v1"
 
 _ALLOWED_KEYS = ("base_url", "api_key", "chat_model", "vision_model")
 
-#: 自主循环缺省值(LOOP-CONTRACT §8):开关默认开,单回合周期上限默认 6(闭区间 1..12)
+#: 自主循环缺省值:开关默认开;软上限默认 24(闭区间 1..48)。
+#: 分析任务在软上限用尽后仍可由驱动器按完成度再延长,硬顶就是 MAX。
 AGENT_LOOP_DEFAULT = True
-AGENT_MAX_CYCLES_DEFAULT = 6
+AGENT_MAX_CYCLES_DEFAULT = 24
 AGENT_MAX_CYCLES_MIN = 1
-AGENT_MAX_CYCLES_MAX = 12
+AGENT_MAX_CYCLES_MAX = 48
 
 
 def config_path(home: Path) -> Path:

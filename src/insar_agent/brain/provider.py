@@ -25,7 +25,26 @@ from typing import Callable, Iterable, Iterator
 
 
 class BrainUnavailable(RuntimeError):
-    """LLM 不可用/失败 —— 调用方必须走降级路径。"""
+    """LLM 调用失败。消息就是给用户看的错误原文,调用方不要再包一层。"""
+
+
+def describe_call_error(exc: BaseException | None) -> str:
+    """把供应商调用失败收成一条可直接展示的错误(HTTP 状态 + 响应体)。"""
+    if exc is None:
+        return "LLM 调用失败(无错误详情)"
+    if isinstance(exc, urllib.error.HTTPError):
+        detail = ""
+        try:
+            raw = exc.read()
+            if raw:
+                detail = raw.decode("utf-8", "replace").strip()[:500]
+        except Exception:  # noqa: BLE001 —— 读响应体失败仍报状态码
+            detail = ""
+        reason = (getattr(exc, "reason", None) or "").strip()
+        head = f"HTTP {exc.code}" + (f" {reason}" if reason else "")
+        return f"{head}: {detail}" if detail else head
+    text = str(exc).strip()
+    return text or type(exc).__name__
 
 
 class BrainTruncated(BrainUnavailable):
@@ -126,7 +145,7 @@ class LLMProvider:
                 raise  # 截断不换路由:换供应商也解决不了 prompt 过长
             except Exception as exc:  # noqa: BLE001 —— 网络/解析失败换路由
                 last_error = exc
-        raise BrainUnavailable(f"全部路由失败:{last_error}")
+        raise BrainUnavailable(describe_call_error(last_error))
 
     def _call(self, route: LLMRoute, system: str, user: str, max_tokens: int) -> dict:
         payload = {
@@ -194,8 +213,8 @@ class LLMProvider:
                 raise  # 截断不换路由:换供应商也解决不了 prompt 过长
             except Exception as exc:  # noqa: BLE001 —— 网络/HTTP/超时按路由失败归一化
                 last_error = exc
-        pin_note = "" if route_pin is None else f"(钉死路由 {route_pin},失败不切换)"
-        raise BrainUnavailable(f"chat 路由失败{pin_note}:{last_error}")
+        pin_note = "" if route_pin is None else f" (钉死路由 {route_pin})"
+        raise BrainUnavailable(describe_call_error(last_error) + pin_note)
 
     def _chat_call(self, route: LLMRoute, route_index: int, messages: list[dict],
                    tools: list[dict] | None, max_tokens: int, json_only: bool) -> ChatOutcome:
@@ -295,8 +314,8 @@ class LLMProvider:
             except Exception as exc:  # noqa: BLE001 —— 建流前网络失败换路由
                 last_error = exc
                 continue
-        pin_note = "" if route_pin is None else f"(钉死路由 {route_pin},失败不切换)"
-        raise BrainUnavailable(f"chat_stream 路由失败{pin_note}:{last_error}")
+        pin_note = "" if route_pin is None else f" (钉死路由 {route_pin})"
+        raise BrainUnavailable(describe_call_error(last_error) + pin_note)
 
     def _chat_stream_call(self, route: LLMRoute, route_index: int, messages: list[dict],
                           tools: list[dict] | None, max_tokens: int, json_only: bool,

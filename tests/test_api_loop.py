@@ -95,14 +95,14 @@ def test_converse_events_passthrough_ndjson(client, monkeypatch):
     cyc = [e for e in events if e["t"] == "agent.cycle"]
     assert [c["n"] for c in cyc] == [1, 2]           # 逐周期流出,n 递增
     assert {c["action"] for c in cyc} == {"status"}  # 动作字段原样透传
-    assert all(c["max"] == 6 for c in cyc)           # 缺省 max_cycles = 6
+    assert all(c["max"] == 24 for c in cyc)          # 缺省 max_cycles = 24
     assert events[-1] == {"t": "say", "text": "完成:查询数据"}
     # session/text 各就其位:B1 签名 session_id 先行,端点传错位会在此显形
-    assert calls == [{"session": "demo", "text": "查询数据", "max_cycles": 6}]
+    assert calls == [{"session": "demo", "text": "查询数据", "max_cycles": 24}]
 
 
 def test_converse_max_cycles_default_sources(client, monkeypatch):
-    """缺省值层级:显式 body > llm_config.agent_loop_settings(B10)> 契约默认 6。"""
+    """缺省值层级:显式 body > llm_config.agent_loop_settings(B10)> 契约默认 24。"""
     calls: list = []
     install_fake_loop(monkeypatch, calls)
     client.post("/api/sessions", json={"id": "demo"})
@@ -118,16 +118,16 @@ def test_converse_max_cycles_default_sources(client, monkeypatch):
     _stream_events(client, "/api/converse", {"session": "demo", "text": "x"})
     assert calls[-1]["max_cycles"] == 4
 
-    # 配置通道给出越界值:缺省侧自我复核回 6,绝不让端点反过来 400 拒绝缺省请求
+    # 配置通道给出越界值:缺省侧自我复核回 24,绝不让端点反过来 400 拒绝缺省请求
     monkeypatch.setattr(llm_config, "agent_loop_settings",
                         lambda home: {"max_cycles": 99}, raising=False)
     _stream_events(client, "/api/converse", {"session": "demo", "text": "x"})
-    assert calls[-1]["max_cycles"] == 6
+    assert calls[-1]["max_cycles"] == 24
 
-    # 函数缺失(惰性 import 的 ImportError/AttributeError 路径)→ 契约默认 6
+    # 函数缺失(惰性 import 的 ImportError/AttributeError 路径)→ 契约默认 24
     monkeypatch.delattr(llm_config, "agent_loop_settings", raising=False)
     _stream_events(client, "/api/converse", {"session": "demo", "text": "x"})
-    assert calls[-1]["max_cycles"] == 6
+    assert calls[-1]["max_cycles"] == 24
 
 
 def test_converse_agent_loop_disabled_delegates_to_turn(client, monkeypatch):
@@ -163,7 +163,7 @@ def test_converse_agent_loop_disabled_delegates_to_turn(client, monkeypatch):
 
 # ---------------- ② max_cycles 越界 400,挡在开流前 ----------------
 
-@pytest.mark.parametrize("bad", [0, 13, -3, 2.5, "六", True, False])
+@pytest.mark.parametrize("bad", [0, 49, -3, 2.5, "六", True, False])
 def test_converse_max_cycles_out_of_range_400(client, monkeypatch, bad):
     calls: list = []
     install_fake_loop(monkeypatch, calls)
@@ -171,7 +171,7 @@ def test_converse_max_cycles_out_of_range_400(client, monkeypatch, bad):
     r = client.post("/api/converse",
                     json={"session": "demo", "text": "x", "max_cycles": bad})
     assert r.status_code == 400          # 统一 400(非 422/500,更不是开流后的 200)
-    assert "1-12" in r.json()["detail"]  # 带候选说明
+    assert "1-48" in r.json()["detail"]  # 带候选说明
     assert calls == []                   # 挡在开流前:打桩生成器从未被调用
 
 

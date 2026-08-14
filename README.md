@@ -1,7 +1,7 @@
 # insar-agent
 
 <!-- CI 徽章占位:推送到 GitHub 后把 OWNER/REPO 换成真实仓库路径即点亮(工作流已就位:ci.yml / desktop.yml) -->
-[![ci](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![ci](https://github.com/liujiangmu123/InSAR-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/liujiangmu123/InSAR-Agent/actions/workflows/ci.yml)
 
 可复现 InSAR 科学工作流 Agent:**参数级失效传播 + 步级断点续跑 + 完整 provenance**。
 

@@ -277,6 +277,19 @@ def test_bad_content_switches_route_then_succeeds(make_server):
     assert len(primary.requests) == 1 and len(fallback.requests) == 1
 
 
+def test_http_401_error_is_the_call_response_not_a_soft_wrap(make_server):
+    srv = make_server([{"status": 401, "json": {
+        "error": {"message": "Incorrect API key provided"}}}])
+    provider = LLMProvider(routes=[srv.route()])
+    with pytest.raises(BrainUnavailable) as ei:
+        provider.complete_json(system="s", user="u")
+    msg = str(ei.value)
+    assert "401" in msg
+    assert "Incorrect API key provided" in msg
+    assert "暂不可用" not in msg
+    assert "关键词" not in msg
+
+
 def test_http_body_not_json_falls_back(make_server):
     # 200 但整个 HTTP 体是 HTML(坏网关/门户劫持)→ 视为路由失败切备
     primary = make_server([{"raw": b"<html>gateway error</html>"}])

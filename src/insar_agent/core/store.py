@@ -115,12 +115,14 @@ class Store:
     # ---------------- sessions / chat ----------------
 
     def create_session(self, session_id: str, name: str, *, mode: str = "expert",
-                       scenario: str | None = None, meta: dict | None = None) -> None:
+                       scenario: str | None = None, meta: dict | None = None,
+                       project_id: str | None = None) -> None:
         with self.db.tx() as cur:
             cur.execute(
-                "INSERT OR IGNORE INTO sessions(session_id,name,created_at,mode,scenario,meta)"
-                " VALUES (?,?,?,?,?,?)",
-                (session_id, name, time.time(), mode, scenario, json.dumps(meta or {})),
+                "INSERT OR IGNORE INTO sessions(session_id,name,created_at,mode,scenario,meta,project_id)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (session_id, name, time.time(), mode, scenario,
+                 json.dumps(meta or {}), project_id),
             )
 
     def list_sessions(self, *, include_archived: bool = False) -> list[dict]:
@@ -154,6 +156,86 @@ class Store:
         with self.db.tx() as cur:
             cur.execute("UPDATE sessions SET archived=NULL WHERE session_id=?", (session_id,))
             return cur.rowcount > 0
+
+    def set_session_project(self, session_id: str, project_id: str | None) -> bool:
+        with self.db.tx() as cur:
+            cur.execute("UPDATE sessions SET project_id=? WHERE session_id=?",
+                        (project_id, session_id))
+            return cur.rowcount > 0
+
+    # ---------------- projects ----------------
+
+    def create_project(self, project_id: str, name: str, root: str,
+                       *, meta: dict | None = None) -> None:
+        with self.db.tx() as cur:
+            cur.execute(
+                "INSERT INTO projects(project_id,name,root,created_at,meta)"
+                " VALUES (?,?,?,?,?)",
+                (project_id, name, root, time.time(), json.dumps(meta or {})),
+            )
+
+    def get_project(self, project_id: str) -> dict | None:
+        r = self.db.query_one("SELECT * FROM projects WHERE project_id=?", (project_id,))
+        return dict(r) if r else None
+
+    def get_project_by_root(self, root: str) -> dict | None:
+        r = self.db.query_one("SELECT * FROM projects WHERE root=?", (root,))
+        return dict(r) if r else None
+
+    def list_projects(self, *, include_archived: bool = False) -> list[dict]:
+        sql = "SELECT * FROM projects"
+        if not include_archived:
+            sql += " WHERE archived IS NULL"
+        return [dict(r) for r in self.db.query(sql + " ORDER BY created_at DESC")]
+
+    def rename_project(self, project_id: str, name: str) -> bool:
+        with self.db.tx() as cur:
+            cur.execute("UPDATE projects SET name=? WHERE project_id=?",
+                        (name, project_id))
+            return cur.rowcount > 0
+
+    def archive_project(self, project_id: str) -> bool:
+        with self.db.tx() as cur:
+            cur.execute("UPDATE projects SET archived=? WHERE project_id=?",
+                        (time.time(), project_id))
+            return cur.rowcount > 0
+
+    # ---------------- loop_ops(循环程序计数器,按 session 点查) ----------------
+
+    def save_loop_op(self, session_id: str, *, op_id: str, phase: str, goal: str,
+                     n: int, max_cycles: int, cycles_summary: list[str],
+                     last_action: str | None = None, last_summary: str | None = None,
+                     route_pin: int | None = None) -> None:
+        payload = json.dumps(list(cycles_summary), ensure_ascii=False)
+        with self.db.tx() as cur:
+            cur.execute(
+                "INSERT INTO loop_ops(session_id,op_id,phase,goal,n,max_cycles,"
+                "cycles_summary,last_action,last_summary,route_pin,updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(session_id) DO UPDATE SET"
+                " op_id=excluded.op_id, phase=excluded.phase, goal=excluded.goal,"
+                " n=excluded.n, max_cycles=excluded.max_cycles,"
+                " cycles_summary=excluded.cycles_summary,"
+                " last_action=excluded.last_action, last_summary=excluded.last_summary,"
+                " route_pin=excluded.route_pin, updated_at=excluded.updated_at",
+                (session_id, op_id, phase, goal, n, max_cycles, payload,
+                 last_action, last_summary, route_pin, time.time()),
+            )
+
+    def load_loop_op(self, session_id: str) -> dict | None:
+        r = self.db.query_one("SELECT * FROM loop_ops WHERE session_id=?", (session_id,))
+        if r is None:
+            return None
+        row = dict(r)
+        try:
+            row["cycles_summary"] = json.loads(row.get("cycles_summary") or "[]")
+        except ValueError:
+            row["cycles_summary"] = []
+        return row
+
+    def clear_loop_op(self, session_id: str) -> None:
+        self.save_loop_op(session_id, op_id="idle", phase="idle", goal="",
+                          n=0, max_cycles=0, cycles_summary=[])
 
     def purge_session(self, session_id: str) -> bool:
         """硬删除会话 DB 行(极度保守:仅当会话无任何 run 时允许)。

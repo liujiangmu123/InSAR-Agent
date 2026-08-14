@@ -318,30 +318,34 @@ def test_set_params_without_run_warns_and_queues_nothing(store, workspace):
 
 # ---------------- 降级与守护 ----------------
 
-def test_llm_failure_degrades_honestly_then_rules_plan(store, workspace):
-    brain = brain_with(BrainUnavailable("boom"))
+def test_llm_failure_shows_call_error_and_does_not_degrade(store, workspace):
+    brain = brain_with(BrainUnavailable("HTTP 401 Unauthorized: invalid api key"))
     driver = make_driver(store, workspace, brain)
     events = collect(driver.turn("s1", "Ridgecrest 地震同震形变分析"))
-    assert events[0]["t"] == "note" and "LLM 暂不可用" in events[0]["text"]  # 诚实提示
-    kinds = [e["t"] for e in events]
-    assert "plan" in kinds and "candidates" in kinds  # 规则路径认出场景,照常规划
-    assert store.latest_run("s1")["scenario"] == "quake"
+    assert events[0]["t"] == "note" and events[0].get("tone") == "bad"
+    assert "HTTP 401" in events[0]["text"]
+    assert "invalid api key" in events[0]["text"]
+    assert not any(e["t"] in ("plan", "candidates", "ask") for e in events)
+    assert store.latest_run("s1") is None
+    hist = store.chat_history("s1")
+    assert hist[-1]["role"] == "agent" and "HTTP 401" in hist[-1]["content"]
 
 
-def test_llm_failure_unknown_text_falls_to_form(store, workspace):
+def test_llm_failure_unknown_text_does_not_open_form(store, workspace):
     brain = brain_with(BrainUnavailable("boom"))
     driver = make_driver(store, workspace, brain)
     events = collect(driver.turn("s1", "随便帮我搞一下"))
-    assert events[0]["t"] == "note" and "LLM 暂不可用" in events[0]["text"]
-    assert events[-1]["t"] == "ask"  # 规则路径:识别不出 → 补充表单
+    assert events[0]["t"] == "note" and "boom" in events[0]["text"]
+    assert not any(e["t"] == "ask" for e in events)
 
 
-def test_bad_json_shape_degrades_like_failure(store, workspace):
-    brain = brain_with({"action": None})  # 缺 reply → BrainUnavailable → 降级
+def test_bad_json_shape_shows_call_error(store, workspace):
+    brain = brain_with({"action": None})  # 缺 reply → BrainUnavailable
     driver = make_driver(store, workspace, brain)
     events = collect(driver.turn("s1", "你好"))
-    assert events[0]["t"] == "note" and "LLM 暂不可用" in events[0]["text"]
-    assert events[-1]["t"] == "ask"
+    assert events[0]["t"] == "note" and events[0].get("tone") == "bad"
+    assert "reply" in events[0]["text"] or "JSON" in events[0]["text"] or events[0]["text"]
+    assert not any(e["t"] == "ask" for e in events)
 
 
 def test_brain_none_rules_path_unchanged(store, workspace):

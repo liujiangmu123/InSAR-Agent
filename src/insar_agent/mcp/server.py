@@ -470,9 +470,9 @@ async def insar_converse(
         description="自然语言的回合目标,如「检查 Ridgecrest 的数据情况并把处理计划准备好」",
         min_length=1)],
     max_cycles: Annotated[int, Field(
-        description="本回合的周期上限(1-12,默认 6):每周期一个白名单动作,"
-                    "耗尽则如实收尾(note)",
-        ge=1, le=12)] = 6,
+        description="本回合的软周期上限(1-48,默认 24):每周期一个白名单动作;"
+                    "分析任务未完成时可自动延长,硬顶 48;execute 只出确认卡",
+        ge=1, le=48)] = 24,
 ) -> dict:
     """发起自主循环回合:代理逐周期自主选动作(搜数据/查环境/定计划/调参…)直到收束。
 

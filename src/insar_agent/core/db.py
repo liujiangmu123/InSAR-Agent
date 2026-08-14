@@ -36,6 +36,8 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # 投递语义列同期缺失(absorb-E4 之前的库)
     ("pending_actions", "deliver_as",
      "ALTER TABLE pending_actions ADD COLUMN deliver_as TEXT NOT NULL DEFAULT 'steer'"),
+    ("sessions", "project_id",
+     "ALTER TABLE sessions ADD COLUMN project_id TEXT"),
 )
 
 _STATEMENT_MIGRATIONS: tuple[str, ...] = (
@@ -65,6 +67,15 @@ _STATEMENT_MIGRATIONS: tuple[str, ...] = (
     " id INTEGER PRIMARY KEY, ts REAL NOT NULL, kind TEXT NOT NULL,"
     " content TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'user',"
     " session_id TEXT, weight REAL NOT NULL DEFAULT 1.0, archived REAL)",
+    "CREATE TABLE IF NOT EXISTS projects ("
+    " project_id TEXT PRIMARY KEY, name TEXT NOT NULL, root TEXT NOT NULL UNIQUE,"
+    " created_at REAL NOT NULL, archived REAL, meta TEXT)",
+    "CREATE TABLE IF NOT EXISTS loop_ops ("
+    " session_id TEXT PRIMARY KEY, op_id TEXT NOT NULL, phase TEXT NOT NULL,"
+    " goal TEXT NOT NULL, n INTEGER NOT NULL, max_cycles INTEGER NOT NULL,"
+    " cycles_summary TEXT NOT NULL, last_action TEXT, last_summary TEXT,"
+    " route_pin INTEGER, updated_at REAL NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id)",
 )
 
 

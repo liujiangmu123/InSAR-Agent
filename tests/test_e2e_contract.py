@@ -53,6 +53,8 @@ FRONTEND_REQUIRED: dict[str, set[str]] = {
     "say": {"parts"},                                 # Stream.agentMsg(renderPart)
     "say.delta": {"text"},                            # liveSay 追加(0814B §1.3,W3)
     "say.abort": {"reason"},                          # liveSay 标废(半截回复如实标注)
+    "think.delta": {"text"},                          # liveThink 追加(循环等待思考)
+    "think.end": set(),                               # 思考流收束,块保留可摺叠
     "ask": {"prompt", "fields"},                      # consume() ask 分支
     "plan": {"items"},                                # Stream.planPanel:items[{n,text,st}]
     "tool.start": {"id", "verb", "cmd", "label", "open"},
@@ -82,7 +84,7 @@ FRONTEND_ONLY = {"tool.progress", "budget"}
 # 流式帧(0814B §1.3):后端工厂(W2)与前端分支(W3)并行落地,两态都合法 ——
 # W3 未合入时按「后端有/前端无」临时豁免;合入后进入双侧交集,自动退出差集。
 # 集成完成后本清单应为空集(验证波次可收紧回精确断言)。
-STREAMING_LANDING = {"say.delta", "say.abort"}
+STREAMING_LANDING = {"say.delta", "say.abort", "think.delta", "think.end"}
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +155,8 @@ def test_factories_satisfy_frontend_required_fields():
         ev.say(["你好", {"code": "x"}]),
         ev.say_delta("正在生成的增量"),
         ev.say_abort("truncated"),
+        ev.think_delta("先检查环境再盘点数据"),
+        ev.think_end(),
         ev.ask("请补充:", [{"key": "scenario", "label": "场景", "options": ["quake"]}]),
         ev.plan([{"n": 1, "text": "探测", "st": "d"}]),
         ev.tool_start("s6", "[06/11]", "snaphu --method mcf", "解缠"),

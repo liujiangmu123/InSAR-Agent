@@ -38,7 +38,8 @@ def empty_probe():
 
 def make_driver(store, workspace, **kw) -> Driver:
     defaults = dict(workspace=workspace, probe=empty_probe(), poll=0.05,
-                    allow_simulated=True, brain=Brain(None))
+                    allow_simulated=True, brain=Brain(None),
+                    preflight_env=False, allow_auto_install=False)
     defaults.update(kw)
     return Driver(store, **defaults)
 
@@ -156,8 +157,9 @@ def test_enabled_brain_without_cycle_delegates(store, workspace):
     driver = make_driver(store, workspace, brain=EnabledBrainWithoutCycle())
     events = collect(driver.converse_loop("s1", "随便帮我搞一下"))
     kinds = [e["t"] for e in events]
-    assert kinds == ["note", "ask"]  # turn 的诚实降级路径:note + 表单
-    assert "LLM 暂不可用" in events[0]["text"]
+    assert kinds == ["note"]  # 已启用 LLM 但调用失败:只报错误,不退关键词表单
+    assert "无 converse 剧本" in events[0]["text"]
+    assert events[0].get("tone") == "bad"
     assert not any(e["t"] == "agent.cycle" for e in events)
 
 
@@ -321,7 +323,8 @@ def test_brain_unavailable_mid_loop_closes_with_note(store, workspace):
     driver = make_driver(store, workspace, brain=brain)
     events = collect(driver.converse_loop("s1", "查查状态"))
     assert len([e for e in events if e["t"] == "agent.cycle"]) == 1
-    assert events[-1]["t"] == "note" and "LLM 暂不可用" in events[-1]["text"]
+    assert events[-1]["t"] == "note" and "路由全挂" in events[-1]["text"]
+    assert events[-1].get("tone") == "bad"
 
 
 # ---------------- 动作特例:execute 审批不被绕过 / plan 进既有流程 ----------------

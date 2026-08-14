@@ -339,18 +339,21 @@ def check_turn_text(text: str) -> str:
 def default_max_cycles(home: Path) -> int:
     """/api/converse 的缺省周期上限:读 llm_config.agent_loop_settings(B10)。
 
-    B10 与本端点并行开发:函数可能尚不存在(ImportError/AttributeError 一律回
-    契约默认 6,LOOP-CONTRACT §7);已存在时其契约保证返回 1..12,这里仍复核
-    一次 —— 缺省通道给出的值绝不能反过来被端点自己的 1..12 校验拒绝。
+    配置面缺失/异常回 AGENT_MAX_CYCLES_DEFAULT;缺省通道给出的值必须落在
+    MIN..MAX,绝不能反过来被端点自己的校验拒绝。
     """
     try:
-        from insar_agent.brain.llm_config import agent_loop_settings
-        value = agent_loop_settings(home).get("max_cycles", 6)
+        from insar_agent.brain.llm_config import (
+            AGENT_MAX_CYCLES_DEFAULT, AGENT_MAX_CYCLES_MAX, AGENT_MAX_CYCLES_MIN,
+            agent_loop_settings,
+        )
+        value = agent_loop_settings(home).get("max_cycles", AGENT_MAX_CYCLES_DEFAULT)
     except (ImportError, AttributeError):
-        return 6
-    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 12:
+        return 24
+    if (isinstance(value, int) and not isinstance(value, bool)
+            and AGENT_MAX_CYCLES_MIN <= value <= AGENT_MAX_CYCLES_MAX):
         return value
-    return 6
+    return 24
 
 
 def agent_loop_enabled(home: Path) -> bool:
@@ -415,6 +418,7 @@ class SessionBody(BaseModel):
     id: str
     name: str | None = None
     mode: str = "expert"
+    project_id: str | None = None
 
 
 class SessionPatchBody(BaseModel):
@@ -470,8 +474,10 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_diag_router(home))  # 诊断包一键导出(/api/diagnostics*)
     from insar_agent.api.install_router import create_install_router
     app.include_router(create_install_router())  # 安装助手(/api/install/*,只出方案,绝不代跑安装)
+    from insar_agent.api.project_router import create_project_router
+    app.include_router(create_project_router(store, home))  # 项目文件夹
     from insar_agent.api.data_catalog_router import create_data_catalog_router  # 数据集清单
-    app.include_router(create_data_catalog_router(home))  # /api/datasets*(文件面板「数据集」区)
+    app.include_router(create_data_catalog_router(home, store=store))  # /api/datasets* 含项目文件夹
     from insar_agent.api.recommend_router import create_recommend_router  # 处理路线推荐
     app.include_router(create_recommend_router(home))  # /api/recommend(数据集 → 路线优劣对比)
     from insar_agent.api.report_router import create_report_router
@@ -502,13 +508,22 @@ def create_app(home: Path | None = None) -> FastAPI:
         with drivers_lock:
             driver = drivers.get(session_id)
             if driver is None:
-                ws = home / "sessions" / session_id
+                if store.get_session(session_id) is None:
+                    store.create_session(session_id, session_id)
+                sess = store.get_session(session_id) or {}
+                pid = sess.get("project_id")
+                proj = store.get_project(pid) if pid else None
+                project_root = None
+                if proj and Path(proj["root"]).is_dir():
+                    project_root = Path(proj["root"])
+                    ws = project_root / ".insar" / "sessions" / session_id
+                else:
+                    ws = home / "sessions" / session_id
                 driver = Driver(
-                    store, workspace=ws,
+                    store, workspace=ws, project_root=project_root,
                     brain=Brain(LLMProvider(list(fp))),
                     allow_simulated=os.environ.get("INSAR_ALLOW_SIMULATED", "1") == "1")
                 drivers[session_id] = driver
-                store.create_session(session_id, session_id)
             elif brain_routes_fp.get(session_id) != fp:
                 # 路由变了:原地替换 brain,绝不重建 Driver —— driver.bus 上挂着
                 # SSE 订阅者,重建会把订阅者留在死总线上,后续事件全部收不到
@@ -586,6 +601,14 @@ def create_app(home: Path | None = None) -> FastAPI:
     def health():
         return {"ok": True, "version": app.version}
 
+    def _decorate_session(row: dict) -> dict:
+        pid = row.get("project_id")
+        proj = store.get_project(pid) if pid else None
+        out = dict(row)
+        out["project_name"] = proj["name"] if proj else None
+        out["project_root"] = proj["root"] if proj else None
+        return out
+
     @app.get("/api/sessions")
     def sessions(include_archived: bool = False,
                  limit: int | None = Query(None, ge=1, le=1000),
@@ -597,15 +620,22 @@ def create_app(home: Path | None = None) -> FastAPI:
                 page = store.list_sessions_page(limit, cursor, include_archived, q)
             except ValueError as exc:
                 raise HTTPException(400, str(exc))
+            page["items"] = [_decorate_session(r) for r in page["items"]]
             return page if limit is not None else page["items"]
-        return store.list_sessions(include_archived=include_archived)
+        return [_decorate_session(r)
+                for r in store.list_sessions(include_archived=include_archived)]
 
     @app.post("/api/sessions")
     def create_session(body: SessionBody):
         check_session_id(body.id)  # 先校验再落库:非法 id 不留半截会话行
-        store.create_session(body.id, body.name or body.id, mode=body.mode)
+        pid = body.project_id
+        if pid and store.get_project(pid) is None:
+            raise HTTPException(400, f"项目 {pid} 不存在")
+        store.create_session(body.id, body.name or body.id, mode=body.mode,
+                             project_id=pid)
         driver_of(body.id)
-        return store.get_session(body.id)
+        row = store.get_session(body.id)
+        return _decorate_session(row) if row else row
 
     def guard_archivable(session_id: str) -> None:
         """归档守卫:有 running run 的会话拒绝归档(409)—— 先取消/等结束。
@@ -815,12 +845,16 @@ def create_app(home: Path | None = None) -> FastAPI:
         """
         if body.max_cycles is None:
             max_cycles = default_max_cycles(home)
-        elif (isinstance(body.max_cycles, bool) or not isinstance(body.max_cycles, int)
-                or not 1 <= body.max_cycles <= 12):
-            raise HTTPException(
-                400, "max_cycles 不合法:须为 1-12 的整数(缺省走模型设置 "
-                     f"agent_max_cycles,未配置为 6),收到 {body.max_cycles!r}")
         else:
+            from insar_agent.brain.llm_config import (
+                AGENT_MAX_CYCLES_DEFAULT, AGENT_MAX_CYCLES_MAX, AGENT_MAX_CYCLES_MIN,
+            )
+            if (isinstance(body.max_cycles, bool) or not isinstance(body.max_cycles, int)
+                    or not AGENT_MAX_CYCLES_MIN <= body.max_cycles <= AGENT_MAX_CYCLES_MAX):
+                raise HTTPException(
+                    400, f"max_cycles 不合法:须为 {AGENT_MAX_CYCLES_MIN}-{AGENT_MAX_CYCLES_MAX} "
+                         f"的整数(缺省走模型设置 agent_max_cycles,"
+                         f"未配置为 {AGENT_MAX_CYCLES_DEFAULT}),收到 {body.max_cycles!r}")
             max_cycles = body.max_cycles
         check_turn_text(body.text)  # 孤代理挡在开流前(/api/turn 同款守卫)
         if not agent_loop_enabled(home):

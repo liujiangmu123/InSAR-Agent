@@ -12,7 +12,33 @@ CREATE TABLE IF NOT EXISTS sessions (
   mode        TEXT NOT NULL DEFAULT 'expert',     -- expert | guide
   scenario    TEXT,
   meta        TEXT,                                -- JSON
-  archived    REAL                                 -- 归档时刻;NULL=活跃(软删除,run/工作区一律保留)
+  archived    REAL,                                -- 归档时刻;NULL=活跃(软删除,run/工作区一律保留)
+  project_id  TEXT                                 -- 所属项目;NULL=未绑文件夹(全局会话)
+);
+
+-- 项目(用户文件夹 = 对话与数据的工作目录,对齐 pi/codex 的 cwd)
+CREATE TABLE IF NOT EXISTS projects (
+  project_id  TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  root        TEXT NOT NULL UNIQUE,
+  created_at  REAL NOT NULL,
+  archived    REAL,
+  meta        TEXT
+);
+
+-- 自主循环程序计数器(pi harness 的 total-state 寄存器:按 session 点查恢复)
+CREATE TABLE IF NOT EXISTS loop_ops (
+  session_id      TEXT PRIMARY KEY,
+  op_id           TEXT NOT NULL,
+  phase           TEXT NOT NULL,                 -- idle | running
+  goal            TEXT NOT NULL,
+  n               INTEGER NOT NULL,
+  max_cycles      INTEGER NOT NULL,
+  cycles_summary  TEXT NOT NULL,                 -- JSON list
+  last_action     TEXT,
+  last_summary    TEXT,
+  route_pin       INTEGER,
+  updated_at      REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS chat_messages (

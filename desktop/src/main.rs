@@ -285,9 +285,12 @@ fn open_window(handle: &AppHandle, label: &str, title: &str, url: String, size: 
                 .title(title.as_str())
                 .inner_size(size.0, size.1)
                 .build();
-        if let Err(e) = built {
-            eprintln!("[desktop] 创建窗口失败:{e}");
-            handle_.exit(1);
+        match built {
+            Ok(win) => commands::set_picker_window(win),
+            Err(e) => {
+                eprintln!("[desktop] 创建窗口失败:{e}");
+                handle_.exit(1);
+            }
         }
     });
 }

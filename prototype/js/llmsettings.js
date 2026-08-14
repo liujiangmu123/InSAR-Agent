@@ -1,5 +1,5 @@
 /* LLM 模型设置面板:填密钥 → 获取模型 → 选模型(对话/识图)→ 测试 → 保存。
- * 兼管自主循环配置(LOOP-CONTRACT §8):「自主循环」开关 + 周期上限(1-12),
+ * 兼管自主循环配置(LOOP-CONTRACT §8):「自主循环」开关 + 周期上限(1-48),
  * 与模型配置同走 GET/POST /api/llm/config(agent_loop / agent_max_cycles 两键)。
  *
  * 安全纪律:密钥只上行(POST /api/llm/config),永不回显全文——输入框留空
@@ -19,14 +19,14 @@ function priceLabel(m) {
   return ` · ${cur}${m.price_in}/${m.price_out} 每百万`;
 }
 
-/* 周期上限输入规整:整数化并夹进 1..12 闭区间;空串/非数返回 null
+/* 周期上限输入规整:整数化并夹进 1..48 闭区间;空串/非数返回 null
  * (POST 语义与密钥留空一致:null = 服务端保留旧值)。 */
 export function normCycles(raw) {
   const s = String(raw ?? "").trim();
   if (!s) return null;
   const n = Number(s);
   if (!Number.isFinite(n)) return null;
-  return Math.min(12, Math.max(1, Math.trunc(n)));
+  return Math.min(48, Math.max(1, Math.trunc(n)));
 }
 
 /* 下拉渲染:空选项 + 模型清单(识图下拉只留 vision 模型),current 保持选中;
@@ -160,8 +160,8 @@ export function chipView(cfg) {
       <input type="checkbox" name="agent_loop" id="llmsetLoopOn" checked>
       <label for="llmsetLoopOn">自主循环(单回合内多周期自主推进)</label>
     </div>
-    <label>循环周期上限(1-12,每周期一次模型决策)
-      <input type="number" name="agent_max_cycles" min="1" max="12" step="1" value="6">
+    <label>循环周期软上限(1-48,分析任务未完成会自动再加;硬顶 48)
+      <input type="number" name="agent_max_cycles" min="1" max="48" step="1" value="24">
     </label>
     <p class="llmset-hint">关闭自主循环后回合退化为单步问答;执行类操作永远只产生
       确认卡,不会被循环绕过。</p>

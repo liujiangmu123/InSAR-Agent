@@ -89,6 +89,7 @@ export const S = {
   mode: 'expert',                 // expert | guide
   phase: 'idle',                  // idle | planning | running | paused | done
   sessionId: null,                // 当前会话 id；null=尚无会话（由 /api/sessions 水合或新建）
+  projectId: null,                // 当前项目 id；新建对话默认挂到这里
   siderOpen: true,
   dockOpen: true,
   dockTab: 'pipeline',
@@ -177,14 +178,33 @@ export function evidenceCeiling() {
    与 app.js 的渲染都拿同一个数组。
    ============================================================ */
 export const SESSIONS = [];
+export const PROJECTS = [];
+
+/** GET /api/projects 行 → 侧栏项目树。 */
+export function setProjects(rows) {
+  PROJECTS.length = 0;
+  for (const r of rows || []) {
+    if (!r || !r.project_id) continue;
+    PROJECTS.push({
+      project_id: r.project_id,
+      name: r.name || r.project_id,
+      root: r.root || '',
+      created_at: r.created_at,
+      archived: r.archived || null,
+    });
+  }
+  emit('projects');
+}
 
 function sessionSub(row) {
   const mode = row.mode === 'guide' ? '向导模式' : '专家模式';
+  const proj = (row.project_name && String(row.project_name).trim())
+    ? ` · ${String(row.project_name).trim()}` : '';
   const t = Number(row.created_at);
-  if (!Number.isFinite(t) || t <= 0) return mode;
+  if (!Number.isFinite(t) || t <= 0) return mode + proj;
   const d = new Date(t * 1000);
   const pad = (n) => String(n).padStart(2, '0');
-  return `${mode} · 建于 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${mode}${proj} · 建于 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /** 会话显示名兜底（P2-16，浏览器实测）：name 缺失/空白时退回 id，两者都无信息
@@ -202,7 +222,10 @@ export function setSessions(rows) {
   for (const r of rows || []) {
     const id = r && (r.session_id || r.id);
     if (!id) continue;
-    const entry = { id, name: sessionDisplayName(r.name, id), sub: sessionSub(r), tone: 'idle' };
+    const entry = { id, name: sessionDisplayName(r.name, id), sub: sessionSub(r), tone: 'idle',
+      project_id: r.project_id || null,
+      project_name: r.project_name || null,
+      project_root: r.project_root || null };
     if (r.archived) entry.archived = r.archived;   // 软删除时间戳（splitArchived 依据）
     SESSIONS.push(entry);
   }

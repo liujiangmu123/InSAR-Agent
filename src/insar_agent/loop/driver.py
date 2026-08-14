@@ -42,6 +42,14 @@ from insar_agent.engines import default_builder
 from insar_agent.loop import events as ev
 from insar_agent.loop.budget import clip_summary
 from insar_agent.loop.events import EventBus
+from insar_agent.loop.goal import (
+    ADAPTIVE_CHUNK,
+    cycle_kinds as _cycle_kinds,
+    goal_is_env_only as _goal_is_env_only,
+    goal_is_work as _goal_is_work,
+    should_extend_budget,
+)
+from insar_agent.brain.llm_config import AGENT_MAX_CYCLES_MAX
 from insar_agent.planner.plan import PlanResult, make_plan
 from insar_agent.registry.capabilities import REGISTRY, topo_order
 from insar_agent.registry.model import Capability
@@ -65,14 +73,17 @@ _DATASETS_TTL_S = 60.0
 
 #: 自主循环动作闭集(LOOP-CONTRACT §1,与 prototype/js/agentloop.js ACTION_META 对齐)
 LOOP_ACTIONS = ("search_data", "inspect_file", "check_env", "list_data", "status",
-                "plan", "execute", "set_params", "set_method", "thinking")
+                "plan", "execute", "set_params", "set_method", "thinking",
+                "install_engine", "list_files",
+                "learn_tool", "search_docs", "probe_scratch")
 
 #: 循环动作的中文标签(工具卡 label,文案与 agentloop.js ACTION_META.zh 一致)
 _LOOP_ACTION_LABELS = {
     "search_data": "搜索数据", "inspect_file": "查看文件", "check_env": "检查环境",
     "list_data": "列出数据", "status": "查询状态", "plan": "制定计划",
     "execute": "执行步骤", "set_params": "调整参数", "set_method": "切换方法",
-    "thinking": "思考中",
+    "thinking": "思考中", "install_engine": "安装引擎", "list_files": "列举项目文件",
+    "learn_tool": "学习工具", "search_docs": "检索文档", "probe_scratch": "受控探针",
 }
 
 #: 重复提案熔断阈值:同一动作签名连续第 3 次提案 → 记账后收束,不执行第 3 次
@@ -134,6 +145,17 @@ def _asf_filters(region: str | None, timerange: str | None
     return wkt, start, end, notes
 
 
+def _llm_error_text(exc: BaseException) -> str:
+    """LLM 调用失败原文。不包「暂不可用/已收束/关键词模式」。"""
+    msg = str(exc).strip()
+    return msg or type(exc).__name__
+
+
+def _is_resume_text(text: str) -> bool:
+    t = (text or "").strip()
+    return t in {"继续", "接着", "接着做", "往下", "继续做", "resume", "continue"} or t.startswith("继续")
+
+
 def _human_size(num_bytes: float) -> str:
     """字节数 → 人类可读(数据集摘要用,GB/MB/KB 粗粒度足够)。"""
     for unit, factor in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
@@ -185,10 +207,18 @@ class Driver:
                  probe: ProbeResult | None = None,
                  poll: float = 0.5, startup_grace: float = 30.0,
                  idle_timeout_override: float | None = None,
-                 total_timeout_override: float | None = None):
+                 total_timeout_override: float | None = None,
+                 project_root: Path | None = None,
+                 preflight_env: bool = True,
+                 allow_auto_install: bool = True):
         self.store = store
         self.workspace = Path(workspace)
         self.workspace.mkdir(parents=True, exist_ok=True)
+        self.project_root = Path(project_root).resolve() if project_root else None
+        self.preflight_env = preflight_env
+        self.allow_auto_install = allow_auto_install
+        self._last_slots: list = []
+        self._forced_continues = 0
         self.registry = registry or REGISTRY
         self.contract = load_contract()
         self.brain = brain or Brain(None)
@@ -339,11 +369,13 @@ class Driver:
                         state_summary=state_summary, out=stream_out):
                     yield frame
                 outcome = stream_out.get("outcome")
-            except BrainUnavailable:
-                # 诚实降级:LLM 失败不装哑,说明一句后走规则路径(与无 LLM 同轨)
-                # 截断/失败的半截回复到不了这之后:outcome 保持 None → 不落
-                # 聊天历史、不驱动动作(say.abort 已在流内标废)
-                yield self._emit(ev.note("warn", "LLM 暂不可用,已退化为关键词模式"))
+            except BrainUnavailable as exc:
+                # 已配置模型但调用失败:原样展示错误,不退关键词/规则路径。
+                # 无 LLM(brain.enabled=False)才走下方规则路径。
+                err = _llm_error_text(exc)
+                yield self._emit(ev.note("bad", err))
+                store.append_chat(session_id, "agent", err)
+                return
             if outcome is not None:
                 if want_title and outcome.session_title:
                     # 只信触发条件不信 LLM 时机:非首条消息带回的标题一律忽略
@@ -474,6 +506,65 @@ class Driver:
         except BrainUnavailable:
             if emitted:
                 yield ev.say_abort("unavailable")
+            raise
+
+    async def _cycle_stream(self, *, goal: str, cycles_summary: list[str],
+                            state_summary: str, route_pin: int | None,
+                            out: dict) -> AsyncIterator[dict]:
+        """cycle 的线程桥:say 字段增量 → think.delta(等待可见思考)。
+
+        假 Brain/无 on_delta 形参时整段调用、零增量,既有循环测试零感知。
+        失败语义与 _converse_stream 同款:已外发则补 think.end,再上抛。
+        """
+        cycle = self.brain.cycle
+        kwargs = dict(goal=goal, cycles_summary=cycles_summary,
+                      state_summary=state_summary, registry=self.registry,
+                      route_pin=route_pin)
+        if not _supports_on_delta(cycle):
+            out["result"] = await asyncio.to_thread(cycle, **kwargs)
+            return
+
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+
+        def push(chunk: str) -> None:
+            try:
+                loop.call_soon_threadsafe(q.put_nowait, chunk)
+            except RuntimeError:
+                pass
+
+        task = asyncio.create_task(asyncio.to_thread(cycle, on_delta=push, **kwargs))
+        self._llm_tasks.add(task)
+        task.add_done_callback(self._reap_llm_task)
+        task.add_done_callback(lambda _t: q.put_nowait(_CONVERSE_DONE))
+
+        emitted = False
+        finished = False
+        while not finished:
+            chunk = await q.get()
+            if chunk is _CONVERSE_DONE:
+                break
+            parts = [chunk]
+            while not q.empty():
+                nxt = q.get_nowait()
+                if nxt is _CONVERSE_DONE:
+                    finished = True
+                    break
+                parts.append(nxt)
+            merged = "".join(parts)
+            if merged:
+                emitted = True
+                yield ev.think_delta(merged)
+        try:
+            out["result"] = task.result()
+            out["streamed"] = emitted
+        except BrainTruncated:
+            if emitted:
+                yield ev.think_end()
+            raise
+        except BrainUnavailable:
+            if emitted:
+                yield ev.think_end()
             raise
 
     # ---------------- 规划回合(turn 的规划主体,converse plan 动作与规则路径共用) ----------------
@@ -671,6 +762,19 @@ class Driver:
             f"已排队:第 {action['step']} 步 {act_name} {payload}"
             f"(steer,下一检查点生效)", affected=[action["step"]]))
 
+    def _wsl_for_inventory(self, force: bool = False) -> dict | None:
+        """生产路径走 WSL 缓存探测(冷缓存会真探一次);测试关预检时只窥视。"""
+        if not (self.preflight_env or self.allow_auto_install):
+            return self._peek_wsl_probe()
+        try:
+            from insar_agent.runtime.wsl_probe import probe_wsl_engines_cached
+            hit = probe_wsl_engines_cached(timeout=25.0, force=force)
+            if isinstance(hit, dict) and hit.get("ok"):
+                return hit
+        except Exception:  # noqa: BLE001 —— 探测失败按未预热,不炸回合
+            log.debug("WSL 引擎探测失败,回退缓存窥视", exc_info=True)
+        return self._peek_wsl_probe()
+
     @staticmethod
     def _peek_wsl_probe() -> dict | None:
         """只窥视 WSL 引擎探测的模块级 TTL 缓存,绝不触发探测(同 doctor._peek_wsl_cache)。
@@ -704,18 +808,17 @@ class Driver:
         cached = self._peek_wsl_probe()
         if cached is not None:
             merge_wsl_probe(merged, cached)
-        suffix = " (wsl)"
-        names = {e for e in merged.engines if not e.endswith(suffix)}
-        names |= {e[:-len(suffix)] for e in merged.engines if e.endswith(suffix)}
+        from insar_agent.runtime.env_inventory import AVAILABLE, classify
+
+        self._last_slots = classify(merged)
         ok, missing = [], []
-        for name in sorted(names):
-            local, wsl = merged.engines.get(name), merged.engines.get(name + suffix)
-            if local:
-                ok.append(f"{name} {local}(本机)")
-            elif wsl:
-                ok.append(f"{name} {wsl}(WSL)")
+        for slot in self._last_slots:
+            if slot.status == AVAILABLE:
+                loc = "WSL" if slot.where == "wsl" else "本机"
+                ver = (slot.version or "").replace(" (wsl)", "").strip()
+                ok.append(f"{slot.name} {ver}({loc})")
             else:
-                missing.append(name)
+                missing.append(slot.name)
         note = ("" if cached is not None else
                 ";注:WSL 引擎探测未预热,缺失清单未含 WSL 侧"
                 "(打开环境面板或稍后再问可获得完整口径)")
@@ -741,6 +844,9 @@ class Driver:
         if env_dir:
             candidates.append(Path(env_dir))
         candidates.append(home / "datasets")
+        if self.project_root is not None:
+            candidates.append(self.project_root)
+            candidates.append(self.project_root / "data")
         try:
             raw = json.loads((home / "datasets_roots.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -792,6 +898,31 @@ class Driver:
                 + ("(仅列前 8 个)" if len(datasets) > 8 else "") + ":")
         return head + "\n" + "\n".join(lines)
 
+    def _project_files_text(self) -> tuple[str, bool]:
+        """列举项目文件夹(有界)。未绑项目则诚实说明。"""
+        if self.project_root is None or not self.project_root.is_dir():
+            return ("未绑定项目文件夹:请先「新建项目」选一个目录,把数据放进去", False)
+        from insar_agent.project.paths import list_tree
+
+        items = list_tree(self.project_root)
+        if not items:
+            return (f"项目目录 {self.project_root} 是空的:把数据放到该文件夹或 data/ 子目录",
+                    True)
+        lines = []
+        for it in items[:16]:
+            mark = "📁" if it["kind"] == "dir" else "📄"
+            extra = f" {_human_size(it['size'])}" if it.get("size") else ""
+            lines.append(f"- {mark} {it['rel']}{extra}")
+        more = f"(共 {len(items)} 项,仅列前 16)" if len(items) > 16 else f"共 {len(items)} 项"
+        return f"项目 {self.project_root.name} {more}:\n" + "\n".join(lines), True
+
+    async def _loop_install_engine(self, action: dict) -> tuple[str, bool]:
+        from insar_agent.runtime.install_runner import run_install
+
+        engine = str(action.get("engine") or "")
+        result = await asyncio.to_thread(run_install, engine)
+        return str(result.get("summary") or ""), bool(result.get("ok"))
+
     def _run_status_text(self, session_id: str) -> str:
         """最近 run 状态 + 步骤矩阵一行摘要(status 动作回复与状态注入共用)。"""
         run = self.store.latest_run(session_id)
@@ -840,12 +971,15 @@ class Driver:
         else:
             data_line = f"{src}({'在位' if Path(src).is_dir() else '路径不存在'})"
         scenarios = "、".join(f"{s.key}({s.label})" for s in SCENARIOS)
+        proj = (f"项目目录:{self.project_root}" if self.project_root
+                else "项目目录:未绑定(请先新建项目文件夹)")
         lines = [
             f"环境:{self._env_summary_text()}",
             f"运行:{self._run_status_text(session_id)}",
             f"可用场景:{scenarios}",
             f"数据源:{data_line}",
             f"数据集:{self._datasets_summary_line()}",
+            proj,
         ]
         snippets = self._memory_snippets(session_id)
         if snippets:
@@ -881,6 +1015,8 @@ class Driver:
             store.create_session(session_id, session_id)
         store.append_chat(session_id, "user", text)
         max_cycles = max(1, int(max_cycles))
+        budget = max_cycles
+        hard_cap = max(budget, AGENT_MAX_CYCLES_MAX)
         # 陈旧取消意图的入口清零(P2-8):会话级 token 只服务「取消在途回合」,
         # 上一回合收尾后才置位的 /api/abort 若滞留到现在,会在第 1 周期边界
         # 误杀本回合 —— 新回合入口即作废。run 级 control 位不动:它有排队
@@ -895,9 +1031,36 @@ class Driver:
         failed_sig: str | None = None   # 最近一次失败的动作签名(未换策略熔断)
         failed_streak = 0
         closed = False                  # 已显式收束(区分 max_cycles 自然耗尽)
+        clean_stop = False
+        self._forced_continues = 0
+        op_id = uuid.uuid4().hex[:12]
+        prev = store.load_loop_op(session_id)
+        if prev and prev.get("phase") == "running" and _is_resume_text(text):
+            goal = (prev.get("goal") or text) + f"\n[续跑] {text}"
+            prev_sum = prev.get("cycles_summary") or []
+            if isinstance(prev_sum, list):
+                cycles_summary = [str(s) for s in prev_sum]
 
         with usage_context(session_id):  # 用量账本:本回合 LLM 调用记到该会话
-            for n in range(1, max_cycles + 1):
+            if self.preflight_env:
+                async for event in self._preflight_env(session_id, cycles_summary):
+                    yield event
+            n = 0
+            while n < hard_cap:
+                if n >= budget:
+                    why = should_extend_budget(
+                        goal, cycles_summary, budget=budget, hard_cap=hard_cap)
+                    if not why:
+                        break
+                    old = budget
+                    budget = min(hard_cap, budget + ADAPTIVE_CHUNK)
+                    cycles_summary.append(f"[sys] 预算延长 {old}→{budget}:{why}")
+                    yield self._emit(ev.note(
+                        "info", f"目标未完成,周期预算 {old}→{budget}({why})"))
+                    if n >= budget:
+                        break
+                n += 1
+                max_cycles = budget  # 周期账/工具卡上的分母跟着加
                 # 1. 取消检查(周期边界):E3 控制位 + 同进程 token 快路径
                 if self._loop_cancel_requested(session_id):
                     yield self._emit(ev.note(
@@ -913,16 +1076,23 @@ class Driver:
 
                 # 3. LLM 决策:同步 provider 进线程池,不阻塞事件循环
                 #    (store/SQLite 操作全部留在事件循环线程,包括状态摘要)
+                #    有 on_delta 时把 say 字段增量裸 yield 为 think.delta
+                #    (Cursor 式等待可见思考;通道与 say.delta 同款,不经 _emit)
                 state_summary = self._converse_state(session_id)
+                cyc_out: dict = {}
                 try:
-                    result = await asyncio.to_thread(
-                        brain.cycle, goal=goal, cycles_summary=list(cycles_summary),
-                        state_summary=state_summary, registry=self.registry,
-                        route_pin=route_pin)
-                except BrainUnavailable:
-                    yield self._emit(ev.note(
-                        "warn", f"LLM 暂不可用,自主循环在第 {n} 周期收束"
-                                f"(已完成周期的结果保留)"))
+                    async for event in self._cycle_stream(
+                            goal=goal, cycles_summary=list(cycles_summary),
+                            state_summary=state_summary, route_pin=route_pin,
+                            out=cyc_out):
+                        yield event
+                    result = cyc_out["result"]
+                    if cyc_out.get("streamed"):
+                        yield ev.think_end()
+                except BrainUnavailable as exc:
+                    err = _llm_error_text(exc)
+                    yield self._emit(ev.note("bad", err))
+                    store.append_chat(session_id, "agent", err)
                     closed = True
                     break
                 if route_pin is None:
@@ -934,11 +1104,18 @@ class Driver:
                 say_text = getattr(result, "say", None)
                 say_text = say_text.strip() if isinstance(say_text, str) else ""
                 if getattr(result, "done", False) or not isinstance(action, dict):
-                    # say 收束(正常终止):有 say 无 action;坏形状同语义兜底
+                    # say 默认想收束;若还有未完成工作则拒绝停机(pi:说话不等于停)
+                    why = self._should_continue(goal, cycles_summary)
+                    if why:
+                        self._forced_continues += 1
+                        cycles_summary.append(f"[sys] 收束被拒:{why}")
+                        yield self._emit(ev.note("info", f"继续工作:{why}"))
+                        continue
                     reply = say_text or "本回合没有更多可做的了。"
                     yield self._emit(ev.say([reply]))
                     store.append_chat(session_id, "agent", reply)
                     closed = True
+                    clean_stop = True
                     break
 
                 # 4. 周期账:每周期恰好一条,先于动作执行(前端进度条契约)
@@ -961,6 +1138,10 @@ class Driver:
                     yield event
                 summary = clip_summary(out.get("summary") or f"{kind} 无输出")
                 cycles_summary.append(f"[{n}] {kind}:{summary}")
+                store.save_loop_op(
+                    session_id, op_id=op_id, phase="running", goal=goal, n=n,
+                    max_cycles=max_cycles, cycles_summary=cycles_summary,
+                    last_action=kind, last_summary=summary, route_pin=route_pin)
                 if out.get("terminal"):
                     closed = True
                     break
@@ -983,6 +1164,61 @@ class Driver:
             digest = clip_summary(";".join(cycles_summary), max_chars=200) or "无"
             yield self._emit(ev.note(
                 "warn", f"已达周期上限({max_cycles}),回合收束;进展:{digest}"))
+            store.save_loop_op(
+                session_id, op_id=op_id, phase="running", goal=goal,
+                n=max_cycles, max_cycles=max_cycles, cycles_summary=cycles_summary,
+                last_summary=digest, route_pin=route_pin)
+        elif clean_stop:
+            store.clear_loop_op(session_id)
+
+    async def _preflight_env(self, session_id: str,
+                             cycles_summary: list[str]) -> AsyncIterator[dict]:
+        """回合开工先检环境;可自动装的缺失引擎当场代装,再复检。"""
+        from insar_agent.runtime.env_inventory import open_installables
+        from insar_agent.runtime.install_runner import run_install
+
+        # 预检才允许冷启动 WSL 探测;摘要路径仍只窥视缓存(对话回合不堵 20s)
+        self._wsl_for_inventory()
+        env_text = self._env_summary_text()
+        yield self._emit(ev.tool_start("preflight-env", "[预检]", "check_env", "检查环境"))
+        yield self._emit(ev.tool_end("preflight-env", 0, clip_summary(env_text)))
+        cycles_summary.append(f"[pre] check_env:{clip_summary(env_text)}")
+        if not self.allow_auto_install:
+            return
+        for engine in open_installables(self._last_slots):
+            if self._loop_cancel_requested(session_id):
+                return
+            tool_id = f"preflight-install-{engine}"
+            yield self._emit(ev.tool_start(tool_id, "[预检]", "install_engine",
+                                           f"安装 {engine}"))
+            result = await asyncio.to_thread(run_install, engine)
+            ok = bool(result.get("ok"))
+            summary = str(result.get("summary") or "")
+            yield self._emit(ev.tool_end(tool_id, 0 if ok else 1, clip_summary(summary)))
+            cycles_summary.append(f"[pre] install_engine {engine}:{clip_summary(summary)}")
+        if any(s.startswith("[pre] install_engine") for s in cycles_summary):
+            env_text = self._env_summary_text()
+            cycles_summary.append(f"[pre] check_env:{clip_summary(env_text)}")
+
+    def _should_continue(self, goal: str, cycles_summary: list[str]) -> str | None:
+        """有未完成工作时拒绝 say 停机。闲聊/纯状态查询不强迫续跑。"""
+        from insar_agent.runtime.env_inventory import open_installables
+
+        refuse_limit = 6 if _goal_is_work(goal) else 2
+        if self._forced_continues >= refuse_limit:
+            return None
+        kinds = _cycle_kinds(cycles_summary)
+        last = kinds[-1] if kinds else ""
+        missing = open_installables(self._last_slots)
+        if missing and "install_engine" not in kinds:
+            if _goal_is_env_only(goal) or _goal_is_work(goal):
+                return f"还有可自动安装的引擎:{'、'.join(missing)}"
+        if last == "install_engine":
+            return "安装后必须复检环境"
+        if last == "check_env" and _goal_is_work(goal):
+            if "list_data" not in kinds and "list_files" not in kinds and "plan" not in kinds:
+                return "环境已盘点,继续盘点项目数据,不要收束"
+        return None
 
     def _loop_cancel_requested(self, session_id: str) -> bool:
         """自主循环的周期边界取消检查(E3:control 位是持久化意图,token 是快路径)。
@@ -1114,6 +1350,24 @@ class Driver:
                 summary, ok = self._env_summary_text(), True
             elif kind == "list_data":
                 summary, ok = self._datasets_text(), True
+            elif kind == "list_files":
+                summary, ok = self._project_files_text()
+            elif kind == "install_engine":
+                summary, ok = await self._loop_install_engine(action)
+            elif kind == "learn_tool":
+                from insar_agent.runtime.explore import learn_tool
+                summary, ok = learn_tool(str(action.get("tool") or ""))
+            elif kind == "search_docs":
+                from insar_agent.runtime.explore import search_docs
+                summary, ok = await asyncio.to_thread(
+                    search_docs, str(action.get("query") or ""))
+            elif kind == "probe_scratch":
+                from insar_agent.runtime.explore import probe_scratch
+                summary, ok = await asyncio.to_thread(
+                    probe_scratch,
+                    str(action.get("kind") or ""),
+                    str(action.get("name") or ""),
+                    project_root=self.project_root)
             elif kind == "status":
                 summary, ok = self._run_status_text(session_id), True
             else:  # set_params / set_method
@@ -1228,7 +1482,20 @@ class Driver:
                     kind_label = _DATASET_KIND_LABELS.get(d["kind"], d["kind"])
                     return (f"数据集 {d['name']}:{kind_label},"
                             f"{_human_size(d['size_bytes'])}{span}", True)
-            return f"没有名称匹配「{name}」的本地数据集", False
+            if self.project_root and self.project_root.is_dir():
+                from insar_agent.project.paths import find_in_project, read_text
+
+                hits = find_in_project(self.project_root, name)
+                if hits:
+                    it = hits[0]
+                    extra = f"(另有 {len(hits) - 1} 个同名)" if len(hits) > 1 else ""
+                    try:
+                        body = read_text(self.project_root, it["rel"])
+                    except (OSError, ValueError):
+                        return f"项目文件 {it['rel']} 无法读取", False
+                    return (f"项目文件 {it['rel']}{extra}"
+                            f"({_human_size(len(body.encode()))}):\n{body[:400]}", True)
+            return f"没有名称匹配「{name}」的本地数据集或项目文件", False
         return "inspect_file 需要 step(步骤号)或 name(数据集名),都未提供", False
 
     async def _loop_search_data(self, action: dict) -> tuple[str, bool]:

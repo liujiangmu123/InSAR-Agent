@@ -83,7 +83,10 @@ function browseButton() {
   btn.addEventListener('click', async () => {
     if (btn.disabled) return;
     btn.disabled = true;                   // 对话框未回来前防连点
-    try { await browseAndRegister(realIO()); } finally { btn.disabled = false; }
+    try { await browseAndRegister(realIO()); }
+    catch (err) {
+      toast(`选目录失败:${String(err.message || err).slice(0, 160)}`, 3600);
+    } finally { btn.disabled = false; }
   });
   return btn;
 }

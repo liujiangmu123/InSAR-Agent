@@ -73,6 +73,18 @@
   outline-offset: var(--focus-ring-offset);
 }
 
+/* 运行中即展开步骤清单(Cursor 式时间线,不等收卡才看见) */
+.alp[data-state='run'] .alp-live {
+  margin: 0;
+  border-top: 1px dashed var(--c-run-bd);
+}
+
+.alp-row.is-live {
+  background: color-mix(in srgb, var(--c-run-bg) 70%, transparent);
+}
+
+.alp-row.is-live .alp-du { color: var(--c-run-fg); }
+
 /* 停止请求已发出、等待取消链路落地:虚线边 + 脉冲暂停 */
 .alp[data-state='stopping'] .alp-bar { border-style: dashed; }
 

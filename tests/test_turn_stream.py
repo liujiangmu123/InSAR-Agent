@@ -175,17 +175,19 @@ def test_failure_after_deltas_aborts_then_degrades(store, workspace, exc_cls, re
 
     kinds = [e["t"] for e in events]
     n = kinds.count("say.delta")
-    # 序列:delta × N → say.abort 标废 → 既有降级 note → 规则路径(表单)
-    assert n >= 1 and kinds == ["say.delta"] * n + ["say.abort", "note", "ask"]
+    # 序列:delta × N → say.abort 标废 → 错误原文 note;不退关键词表单
+    assert n >= 1 and kinds == ["say.delta"] * n + ["say.abort", "note"]
     assert events[n] == {"t": "say.abort", "reason": reason}
-    assert "LLM 暂不可用" in events[n + 1]["text"]
-    # 半截回复不落聊天历史(只有用户消息)、不驱动动作、不碰 run/plan 状态
-    assert [m["role"] for m in store.chat_history("s1")] == ["user"]
+    assert "boom" in events[n + 1]["text"]
+    assert events[n + 1].get("tone") == "bad"
+    hist = store.chat_history("s1")
+    assert [m["role"] for m in hist] == ["user", "agent"]
+    assert "boom" in hist[-1]["content"]
     assert store.due_actions("steer") == []
     assert store.latest_run("s1") is None
-    # abort 与 delta 都不上总线;降级 note 照旧双通道
+    # abort 与 delta 都不上总线;错误 note 照旧双通道
     assert not any(e["t"] in ("say.delta", "say.abort") for e in bus)
-    assert any(e["t"] == "note" and "LLM 暂不可用" in e["text"] for e in bus)
+    assert any(e["t"] == "note" and "boom" in e["text"] for e in bus)
 
 
 # ---------------- ③ 未外发即失败 → 无 say.abort,与改造前同轨 ----------------
@@ -194,11 +196,11 @@ def test_failure_before_first_delta_has_no_abort(store, workspace):
     brain = StreamBrain(scripted([], error=BrainUnavailable("建流失败")))
     driver = make_driver(store, workspace, brain)
     events, bus = run_turn(driver, "你好")
-    # 零外发无废可标:事件序列与改造前逐字节同轨(降级 note + 规则路径表单)
-    assert [e["t"] for e in events] == ["note", "ask"]
-    assert "LLM 暂不可用" in events[0]["text"]
-    assert not any(e["t"] in ("say.delta", "say.abort") for e in events + bus)
-    assert [m["role"] for m in store.chat_history("s1")] == ["user"]
+    # 零外发无废可标:只报调用错误,不退表单
+    assert [e["t"] for e in events] == ["note"]
+    assert "建流失败" in events[0]["text"]
+    assert not any(e["t"] in ("say.delta", "say.abort", "ask") for e in events + bus)
+    assert [m["role"] for m in store.chat_history("s1")] == ["user", "agent"]
 
 
 # ---------------- ④ facade 无 on_delta 形参 → 防御闸门退回零流式 ----------------
@@ -214,11 +216,12 @@ def test_legacy_converse_without_on_delta_is_pure_sync(store, workspace):
     assert not any(e["t"] in ("say.delta", "say.abort") for e in bus)
 
 
-def test_legacy_converse_failure_degrades_like_before(store, workspace):
+def test_legacy_converse_failure_shows_call_error(store, workspace):
     driver = make_driver(store, workspace, LegacyBrain(BrainUnavailable("boom")))
     events, _bus = run_turn(driver, "你好")
-    assert [e["t"] for e in events] == ["note", "ask"]
-    assert "LLM 暂不可用" in events[0]["text"]
+    assert [e["t"] for e in events] == ["note"]
+    assert "boom" in events[0]["text"]
+    assert events[0].get("tone") == "bad"
 
 
 # ---------------- ⑤ 生成器在 delta 中途被 close(客户端断连) ----------------

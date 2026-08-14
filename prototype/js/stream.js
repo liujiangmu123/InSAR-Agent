@@ -272,6 +272,72 @@ export function createLiveSay(open = agentMsgStream) {
   };
 }
 
+/** 流式思考块（Cursor 式：等待时展开可见，可随时摺叠）。 */
+export function thinkStream() {
+  const text = txt('');
+  const label = txt('思考中');
+  const inner = h('div', { class: 'inner' }, text);
+  const el = push(h('details', { class: 'think turn rise is-streaming', open: true },
+    h('summary', null, h('span', { class: 'cv' }, icon('chevron')), label),
+    inner));
+  let closed = false;
+  const api = {
+    el,
+    get closed() { return closed; },
+    append(chunk) {
+      if (closed) return api;
+      text.data += String(chunk ?? '');
+      follow();
+      return api;
+    },
+    end() {
+      if (closed) return api;
+      closed = true;
+      el.classList.remove('is-streaming');
+      label.data = '思考';
+      return api;
+    },
+    collapse() {
+      el.open = false;
+      return api;
+    },
+    abort(tag = '(思考中断)') {
+      if (closed) return api;
+      closed = true;
+      el.classList.remove('is-streaming');
+      el.classList.add('is-aborted');
+      label.data = '思考';
+      inner.appendChild(h('span', { class: 'say-abort' }, tag));
+      return api;
+    },
+  };
+  return api;
+}
+
+export function createLiveThink(open = thinkStream) {
+  let cur = null;
+  return {
+    active: () => cur !== null && !cur.closed,
+    delta(chunk) {
+      if (!cur || cur.closed) cur = open();
+      cur.append(chunk);
+    },
+    end() {
+      cur?.end();
+    },
+    collapse() {
+      cur?.collapse();
+    },
+    abort(tag) {
+      cur?.abort(tag);
+      cur = null;
+    },
+    close() {
+      cur = null;
+    },
+  };
+}
+
 /* ============================================================
    只读工具聚合折叠（Cursor 工作组模式，RESEARCH §9 机制 #1）
    连续的探查类工具卡（verb 非 [NN/MM] 执行步骤，对应 id 不以

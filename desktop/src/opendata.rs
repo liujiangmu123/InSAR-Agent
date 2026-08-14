@@ -63,12 +63,13 @@ fn backend_port() -> Option<u16> {
 pub fn open_data_folder_flow<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let picked = rfd::AsyncFileDialog::new()
-            .set_title("选择数据文件夹(注册到数据集)")
-            .pick_folder()
-            .await;
-        let Some(dir) = picked else { return }; // 用户取消
-        let dir = dir.path().to_string_lossy().into_owned();
+        let picked = tauri::async_runtime::spawn_blocking(|| {
+            crate::commands::pick_folder_sync("选择数据文件夹(注册到数据集)")
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some(dir) = picked else { return };
         register_and_notify(&app, &dir);
     });
 }

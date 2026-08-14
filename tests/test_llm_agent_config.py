@@ -23,7 +23,7 @@ from insar_agent.brain.llm_config import (
     save_llm_config,
 )
 
-DEFAULTS = {"enabled": True, "max_cycles": 6}
+DEFAULTS = {"enabled": True, "max_cycles": 24}
 
 
 @pytest.fixture()
@@ -74,7 +74,7 @@ def test_settings_defaults_when_keys_missing(home):
     assert agent_loop_settings(home) == DEFAULTS
 
 
-@pytest.mark.parametrize("bad", [0, 13, -1, 100, "6", 6.5, True, False, None, [6]])
+@pytest.mark.parametrize("bad", [0, 49, -1, 100, "6", 6.5, True, False, None, [6]])
 def test_settings_bad_max_cycles_fall_back_to_default(home, bad):
     """越界/错型(含 bool——int 子类陷阱)一律回默认,绝不抛。"""
     _write_raw(home, {"agent_max_cycles": bad})
@@ -87,7 +87,7 @@ def test_settings_bad_agent_loop_falls_back_to_default(home, bad):
     assert agent_loop_settings(home) == DEFAULTS
 
 
-@pytest.mark.parametrize("n", [1, 6, 12])
+@pytest.mark.parametrize("n", [1, 6, 12, 24, 48])
 def test_settings_valid_boundaries_accepted(home, n):
     _write_raw(home, {"agent_loop": False, "agent_max_cycles": n})
     assert agent_loop_settings(home) == {"enabled": False, "max_cycles": n}
@@ -96,7 +96,7 @@ def test_settings_valid_boundaries_accepted(home, n):
 def test_settings_one_key_bad_other_good_partial_default(home):
     """两键独立校验:一键非法只影响自己,另一键照常生效。"""
     _write_raw(home, {"agent_loop": False, "agent_max_cycles": 99})
-    assert agent_loop_settings(home) == {"enabled": False, "max_cycles": 6}
+    assert agent_loop_settings(home) == {"enabled": False, "max_cycles": 24}
 
 
 # ---------------- save_llm_config 合并语义兼容新键 ----------------
@@ -141,14 +141,14 @@ def test_save_string_keys_unaffected_by_agent_updates(home):
 
 def test_get_config_echoes_defaults_when_unset(client):
     view = client.get("/api/llm/config").json()
-    assert view["agent_loop"] is True and view["agent_max_cycles"] == 6
+    assert view["agent_loop"] is True and view["agent_max_cycles"] == 24
 
 
 def test_get_config_echoes_defaults_when_file_corrupt(client, home):
     _write_raw(home, "{broken json")
     r = client.get("/api/llm/config")
     assert r.status_code == 200
-    assert r.json()["agent_loop"] is True and r.json()["agent_max_cycles"] == 6
+    assert r.json()["agent_loop"] is True and r.json()["agent_max_cycles"] == 24
 
 
 def test_post_config_updates_and_echoes_new_keys(client, home):
@@ -160,13 +160,13 @@ def test_post_config_updates_and_echoes_new_keys(client, home):
     assert agent_loop_settings(home) == {"enabled": False, "max_cycles": 3}
 
 
-@pytest.mark.parametrize("n", [1, 12])
+@pytest.mark.parametrize("n", [1, 12, 48])
 def test_post_config_boundary_cycles_accepted(client, n):
     view = client.post("/api/llm/config", json={"agent_max_cycles": n}).json()
     assert view["agent_max_cycles"] == n
 
 
-@pytest.mark.parametrize("bad", [0, 13, -5, "abc", 6.5, [6]])
+@pytest.mark.parametrize("bad", [0, 49, -5, "abc", 6.5, [6]])
 def test_post_config_bad_cycles_rejected_422(client, bad):
     """越界/错型由 pydantic 挡成 422(与 /usage 的 Query(ge/le) 同风格)。"""
     r = client.post("/api/llm/config", json={"agent_max_cycles": bad})
@@ -176,7 +176,7 @@ def test_post_config_bad_cycles_rejected_422(client, bad):
 def test_post_config_out_of_range_leaves_file_untouched(client, home):
     client.post("/api/llm/config", json={"agent_max_cycles": 5})
     assert client.post("/api/llm/config",
-                       json={"agent_max_cycles": 13}).status_code == 422
+                       json={"agent_max_cycles": 49}).status_code == 422
     assert agent_loop_settings(home)["max_cycles"] == 5  # 422 请求不产生半截写入
 
 

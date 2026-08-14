@@ -6,35 +6,147 @@
 //! - 前端调用侧(浏览器环境安全降级)见 `prototype/js/desktop.js`。
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use tauri::WebviewWindow;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+
+static PICKER_WINDOW: Mutex<Option<WebviewWindow>> = Mutex::new(None);
+
+/// 主窗口创建后登记,供选目录对话框挂父窗口(否则 Windows 上会弹在 WebView 后面)。
+pub fn set_picker_window(win: WebviewWindow) {
+    if let Ok(mut slot) = PICKER_WINDOW.lock() {
+        *slot = Some(win);
+    }
+}
 
 /// Windows CreateProcess 标志:不为子进程弹出控制台窗口(与 main.rs 的
 /// spawn_sidecar 同款,避免黑色 cmd 窗一闪而过)。
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Windows:把顶层 HWND 拉到前台,避免 IFileDialog 落到 WebView2 后面。
+/// 句柄取自 WebView 控件时先 GetAncestor(GA_ROOT) 升到外壳窗口。
+#[cfg(windows)]
+fn raise_hwnd(hwnd: isize) {
+    if hwnd == 0 {
+        return;
+    }
+    const SW_RESTORE: i32 = 9;
+    const HWND_TOP: isize = 0;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_SHOWWINDOW: u32 = 0x0040;
+    const GA_ROOT: u32 = 2;
+    const ASFW_ANY: u32 = 0xFFFF_FFFF;
+    extern "system" {
+        fn AllowSetForegroundWindow(dw_process_id: u32) -> i32;
+        fn SetForegroundWindow(h: isize) -> i32;
+        fn BringWindowToTop(h: isize) -> i32;
+        fn ShowWindow(h: isize, cmd: i32) -> i32;
+        fn SetWindowPos(
+            h: isize,
+            insert_after: isize,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> i32;
+        fn GetAncestor(h: isize, flags: u32) -> isize;
+    }
+    unsafe {
+        let top = {
+            let ancestor = GetAncestor(hwnd, GA_ROOT);
+            if ancestor != 0 {
+                ancestor
+            } else {
+                hwnd
+            }
+        };
+        AllowSetForegroundWindow(ASFW_ANY);
+        ShowWindow(top, SW_RESTORE);
+        BringWindowToTop(top);
+        SetWindowPos(
+            top,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
+        SetForegroundWindow(top);
+    }
+}
+
+#[cfg(windows)]
+fn raise_window(win: &WebviewWindow) {
+    let Ok(hwnd) = win.hwnd() else {
+        return;
+    };
+    raise_hwnd(hwnd.0 as isize);
+}
+
+/// 同步弹出原生选目录对话框。必须在非 UI 线程调用(内部再派到主线程
+/// 显示),以免 `run_on_main_thread` + `recv` 卡死主循环。
+pub(crate) fn pick_folder_sync(title: &str) -> Option<String> {
+    let window = PICKER_WINDOW.lock().ok().and_then(|g| g.clone());
+    pick_folder_blocking(title, window.as_ref())
+}
+
+fn pick_folder_blocking(title: &str, window: Option<&WebviewWindow>) -> Option<String> {
+    if let Some(win) = window {
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        #[cfg(windows)]
+        raise_window(win);
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let parent = win.clone();
+        let title_owned = title.to_string();
+        if win
+            .run_on_main_thread(move || {
+                #[cfg(windows)]
+                raise_window(&parent);
+                let picked = rfd::FileDialog::new()
+                    .set_title(&title_owned)
+                    .set_parent(&parent)
+                    .pick_folder()
+                    .map(|p| p.to_string_lossy().into_owned());
+                let _ = tx.send(picked);
+            })
+            .is_ok()
+        {
+            return rx.recv().ok().flatten();
+        }
+    }
+    rfd::FileDialog::new()
+        .set_title(title)
+        .pick_folder()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 /// 弹出原生「选择目录」对话框。
 ///
 /// - 用户选中目录 → `Some(绝对路径)`(前端拿到字符串);
 /// - 用户取消 → `None`(前端拿到 `null`,由调用方回退为手输框);
 /// - `title` 为空白时使用默认标题;
-/// - 使用 rfd 的异步对话框 + async command:对话框在独立线程弹出,
-///   不阻塞 Tauri 主事件循环。
+/// - 阻塞等待放在 `spawn_blocking`,对话框本身在 UI 线程弹出并挂父窗口。
 #[tauri::command]
 pub async fn pick_directory(title: String) -> Option<String> {
     let trimmed = title.trim();
     let dialog_title = if trimmed.is_empty() {
-        "选择目录"
+        "选择项目文件夹".to_string()
     } else {
-        trimmed
+        trimmed.to_string()
     };
-    rfd::AsyncFileDialog::new()
-        .set_title(dialog_title)
-        .pick_folder()
+    tauri::async_runtime::spawn_blocking(move || pick_folder_sync(&dialog_title))
         .await
-        .map(|dir| dir.path().to_string_lossy().into_owned())
+        .ok()
+        .flatten()
 }
 
 /// 在系统文件管理器(Windows 资源管理器)中打开目录。

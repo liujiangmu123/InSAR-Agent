@@ -85,7 +85,9 @@ CONVERSE_ACTION_TYPES = ("plan", "execute", "status", "check_env", "list_data",
 #: cycle(自主循环)动作闭集 = converse 闭集 + 循环专属三动作;命名与
 #: prototype/js/agentloop.js 的 ACTION_META 十项对齐(事件契约,LOOP-CONTRACT §1)。
 CYCLE_ACTION_TYPES = ("search_data", "inspect_file", "check_env", "list_data", "status",
-                      "plan", "execute", "set_params", "set_method", "thinking")
+                      "plan", "execute", "set_params", "set_method", "thinking",
+                      "install_engine", "list_files",
+                      "learn_tool", "search_docs", "probe_scratch")
 
 #: converse 的 system prompt。保持静态(动态系统状态走 user 消息注入,利于
 #: 供应商侧 prompt 缓存);{SCENARIO_KEYS}/{STEP_LINES} 由 converse 按当前
@@ -124,39 +126,44 @@ reply 要求:中文、口语化、简洁,不用 markdown 标题;直接回应用�
 #: prompt 缓存),{SCENARIO_KEYS}/{STEP_LINES} 用 replace 填充(免 JSON 花括号转义);
 #: 动态内容(回合目标/状态/周期摘要)一律走 user 消息。契约:LOOP-CONTRACT §3。
 CYCLE_SYSTEM = """\
-你是 InSAR 数据处理 Agent 的循环决策器,逐周期推进【回合目标】:每周期只做一个决策,
-要么给一个动作继续推进,要么收束汇报,绝不一次串多步。
+你是 InSAR 数据处理 Agent 的循环决策器,逐周期推进【回合目标】。
+每周期只做一个决策。say 只是进度说明,不是停机信号。
+停机仅当:目标已达成,或必须等人批准(execute 确认卡)。
 
-只输出一个 JSON 对象,契约二选一:
-{"say": "<中文收束汇报>"} 收束本回合;
-{"action": <下列动作之一>, "say": "<一句话过渡语>"} 继续推进。
+只输出一个 JSON 对象:
+{"say": "<中文收束汇报>"} 或 {"action": <下列之一>, "say": "<过渡语>"}。
 
-动作闭集(字段不多不少;不能发明动作/场景/步骤/方法/参数,值必须来自闭集):
-- {"type": "search_data", "query": "<可选检索词>", "region": "<可选,WKT>",
-  "timerange": "<可选,如 2019-06-01/2019-08-31>"} 检索数据(本地盘点+卫星归档),联网只出查询词
-- {"type": "inspect_file", "name": "<文件名>", "step": <步骤号整数>} 查看文件,name 与
-  step 二选一:name 取自摘要里出现过的名字,禁止路径;step 查该步状态/产物/日志
-- {"type": "check_env"} 查环境探测结果
-- {"type": "list_data"} 盘点本地数据集
+动作闭集:
+- {"type": "search_data", "query": "<可选>", "region": "<可选,WKT>",
+  "timerange": "<可选>"} 检索数据,联网只出查询词
+- {"type": "inspect_file", "name": "<文件名>", "step": <步骤号>} 看文件,禁止路径
+- {"type": "check_env"} 查环境
+- {"type": "install_engine", "engine": "<缺失清单中的引擎>"} 代装可自动装的
+- {"type": "list_data"} 盘点数据集
+- {"type": "list_files"} 列举项目文件夹
+- {"type": "learn_tool", "tool": "<引擎或步骤短名>"} 读本地技能与安装知识
+- {"type": "search_docs", "query": "<检索词>"} 查文档,只发查询词
+- {"type": "probe_scratch", "kind": "import|file_meta|cli_help",
+  "name": "<允许项>"} 受控探针,禁止任意脚本
 - {"type": "status"} 查运行状态
 - {"type": "plan", "scenario": "<场景key>", "region": "<可选>",
   "timerange": "<可选>"} 制定计划(不自动开跑)
-- {"type": "execute"} 请求执行:只向用户发确认卡,批准才开跑;发出后收束
-- {"type": "set_params", "step": <步骤号整数>, "params": {"<参数名>": <值>}} 改某步参数
-- {"type": "set_method", "step": <步骤号整数>, "method": "<方法id>"} 换某步方法
-- {"type": "thinking"} 本周期只梳理思路,不动工具
+- {"type": "execute"} 请求执行:只发确认卡,发出后收束
+- {"type": "set_params", "step": <整数>, "params": {"<名>": <值>}} 改参数
+- {"type": "set_method", "step": <整数>, "method": "<方法id>"} 换方法
+- {"type": "thinking"} 只梳理思路
 
 场景闭集:{SCENARIO_KEYS}
-步骤闭集(步骤号 名称:方法候选 | 参数名):
+步骤闭集:
 {STEP_LINES}
 
 纪律:
-- 动作结果由系统压成摘要,进下一周期的【已完成周期】;一切以摘要为准,绝不编造数值;
-  绝不输出命令、URL、文件路径。
-- 不重复已完成的动作;无新进展就换思路或收束,绝不空转。
-- 何时收束(只 say 无 action):目标已达成、需要用户决策或批准、或信息已够回答;
-  say 给出结论与下一步建议。
-- say:中文、口语化、简洁,不用 markdown 标题。
+- 以【已完成周期】为准,不编造数值;不输出命令/URL/路径。
+- 查环境/列数据/学习/检索后目标未完 → 必须再给动作。
+- 有可自动装的缺失引擎 → install_engine,不要口头指引。
+- 缺知识 → learn_tool;缺规范 → search_docs;要验证 → probe_scratch。
+- 预算按完成度自动延长。execute 才等人。
+- say:中文、口语化、简洁。
 """
 
 
@@ -380,7 +387,8 @@ class Brain:
 
     def cycle(self, *, goal: str, cycles_summary: list[str], state_summary: str,
               registry: dict[int, Capability],
-              route_pin: int | None = None) -> CycleResult:
+              route_pin: int | None = None,
+              on_delta: Callable[[str], None] | None = None) -> CycleResult:
         """自主循环的单周期决策(LOOP-CONTRACT §3):一个动作,或 say 收束。
 
         与 converse 的分工:converse 是单步会话角色(带短滚动历史);cycle 是
@@ -421,10 +429,17 @@ class Brain:
             user += "(无:这是本回合第 1 个周期)"
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": user}]
-        # max_tokens 2048 与 converse 同源:推理型模型要余量;截断即整体拒绝
-        # (provider.chat 的 BrainTruncated 语义,absorb-E9),绝不用半截 JSON
-        outcome = self.provider.chat(  # type: ignore[union-attr]
-            messages, json_only=True, max_tokens=2048, route_pin=route_pin)
+        # 优先 chat_stream:长推理模型非流式易超时;无流式实现则回落 chat。
+        # max_tokens 2048 与 converse 同源;截断即整体拒绝(absorb-E9)。
+        stream = _stream_callable(self.provider)
+        tap = _StreamingFieldTap("say", on_delta) if on_delta is not None else None
+        feed = tap.feed if tap is not None else None
+        if stream is not None:
+            outcome = stream(messages, json_only=True, max_tokens=2048,
+                             route_pin=route_pin, on_delta=feed)
+        else:
+            outcome = self.provider.chat(  # type: ignore[union-attr]
+                messages, json_only=True, max_tokens=2048, route_pin=route_pin)
         try:
             data = json.loads(outcome.content)
         except (TypeError, ValueError) as exc:
@@ -742,6 +757,42 @@ def _validate_cycle_action(action, *, scenario_keys: list[str],
             if isinstance(v, str) and v.strip():
                 out[key] = v.strip()
         return out, ""
+    if kind == "list_files":
+        return {"type": "list_files"}, ""
+    if kind == "install_engine":
+        engine = action.get("engine")
+        if not isinstance(engine, str) or not engine.strip():
+            return None, f"install_engine 缺 engine:{engine!r}"
+        engine = engine.strip().lower()
+        from insar_agent.runtime.install_guide import ENGINE_ORDER
+        if engine not in ENGINE_ORDER:
+            return None, f"engine 越界:{engine!r}(闭集:{'/'.join(ENGINE_ORDER)})"
+        return {"type": "install_engine", "engine": engine}, ""
+    if kind == "learn_tool":
+        tool = action.get("tool") or action.get("name")
+        if not isinstance(tool, str) or not tool.strip():
+            return None, f"learn_tool 缺 tool:{tool!r}"
+        tool = tool.strip().lower()
+        if any(tok in tool for tok in ("/", "\\", "..", ":")):
+            return None, f"tool 含路径成分:{tool!r}"
+        return {"type": "learn_tool", "tool": tool[:40]}, ""
+    if kind == "search_docs":
+        query = action.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return None, f"search_docs 缺 query:{query!r}"
+        return {"type": "search_docs", "query": query.strip()[:200]}, ""
+    if kind == "probe_scratch":
+        from insar_agent.runtime.explore import PROBE_KINDS
+        pk = action.get("kind")
+        if pk not in PROBE_KINDS:
+            return None, f"probe_scratch.kind 越界:{pk!r}(闭集:{PROBE_KINDS})"
+        name = action.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return None, f"probe_scratch 缺 name:{name!r}"
+        name = name.strip()
+        if any(tok in name for tok in ("/", "\\", "..", ":")):
+            return None, f"name 含路径成分:{name!r}"
+        return {"type": "probe_scratch", "kind": pk, "name": name[:80]}, ""
     # inspect_file:step 给了就按 step 走(显式坏 step 一律拦截,不静默退回 name;
     # bool 拦截同 set_* 的 step:{"step": true} 不是步骤号,是幻觉)
     if action.get("step") is not None:

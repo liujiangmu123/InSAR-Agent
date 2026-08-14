@@ -440,7 +440,7 @@ def stub_transport():
 
 
 def test_converse_tool_registration_and_schema():
-    """① 工具注册与 schema:参数名、必填集、max_cycles 边界(1..12)进 schema,
+    """① 工具注册与 schema:参数名、必填集、max_cycles 边界(1..48)进 schema,
     读写注解正确(非只读、非破坏性)。"""
     async def flow():
         async with mcp_client() as sess:
@@ -452,8 +452,8 @@ def test_converse_tool_registration_and_schema():
             assert {"session_id", "text", "max_cycles"} <= set(props)
             assert set(schema.get("required", [])) == {"session_id", "text"}
             assert props["max_cycles"].get("minimum") == 1
-            assert props["max_cycles"].get("maximum") == 12
-            assert props["max_cycles"].get("default") == 6
+            assert props["max_cycles"].get("maximum") == 48
+            assert props["max_cycles"].get("default") == 24
             assert tool.annotations.read_only_hint is False
             assert tool.annotations.destructive_hint is False
     run(flow())
@@ -674,8 +674,8 @@ def test_converse_backend_layer(stub_transport):
 
 
 def test_converse_max_cycles_bounds_rejected(monkeypatch):
-    """⑤ max_cycles 越界(0/13/-1):MCP 层直接拒(schema ge/le),请求绝不
-    触达后端(不会产生 HTTP 400);边界值 1/12 照常放行。"""
+    """⑤ max_cycles 越界(0/49/-1):MCP 层直接拒(schema ge/le),请求绝不
+    触达后端(不会产生 HTTP 400);边界值 1/48 照常放行。"""
     calls: list[int] = []
 
     async def fake_converse(session_id: str, text: str, max_cycles: int):
@@ -686,16 +686,16 @@ def test_converse_max_cycles_bounds_rejected(monkeypatch):
 
     async def flow():
         async with mcp_client() as sess:
-            for bad in (0, 13, -1):
+            for bad in (0, 49, -1):
                 res = await call(sess, "insar_converse", {
                     "session_id": "s", "text": "推进", "max_cycles": bad})
                 assert res.is_error, f"max_cycles={bad} 应被 MCP 层拒绝"
-            for good in (1, 12):
+            for good in (1, 48):
                 out = payload_of(await call(sess, "insar_converse", {
                     "session_id": "s", "text": "推进", "max_cycles": good}))
                 assert out["ended_by"] == "say"
     run(flow())
-    assert calls == [1, 12], "越界值不应触达后端层"
+    assert calls == [1, 48], "越界值不应触达后端层"
 
 
 def test_converse_over_real_app_when_endpoint_lands(backend_app, monkeypatch):

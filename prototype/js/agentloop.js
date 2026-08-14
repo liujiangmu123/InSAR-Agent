@@ -56,6 +56,11 @@ export const ACTION_META = {
   set_params:   { zh: '调整参数', ic: '🎚' },
   set_method:   { zh: '切换方法', ic: '🔀' },
   thinking:     { zh: '思考中',   ic: '💭' },
+  install_engine: { zh: '安装引擎', ic: '📦' },
+  list_files:   { zh: '列举文件', ic: '📂' },
+  learn_tool:   { zh: '学习工具', ic: '📘' },
+  search_docs:  { zh: '检索文档', ic: '📚' },
+  probe_scratch:{ zh: '受控探针', ic: '🧪' },
 };
 
 /** 契约外动作兜底:保留原始动作名、不抛错(循环核心可能先于本模块加动作)。 */
@@ -230,6 +235,7 @@ export function createAgentLoop({ doc = globalThis.document, quietMs = 8000 } = 
     loop.cycles.push({ n: loop.n, action: loop.action, at: now, endAt: null, tools: [] });
     if (btnStopVisible()) loop.localBusy = true;        // 首个周期先于观察器翻转到达时补记
     paintBar(loop);
+    paintLive(loop);
     follow();
   }
 
@@ -243,6 +249,7 @@ export function createAgentLoop({ doc = globalThis.document, quietMs = 8000 } = 
     };
     cy.tools.push(t);
     if (t.id != null) loop.toolIndex.set(t.id, t);
+    paintLive(loop);
   }
 
   function onToolEnd(loop, ev) {
@@ -251,6 +258,7 @@ export function createAgentLoop({ doc = globalThis.document, quietMs = 8000 } = 
     t.t1 = Date.now();
     t.exit = Number.isFinite(Number(ev.exit)) ? Number(ev.exit) : 0;
     if (ev.summary) t.summary = String(ev.summary);
+    paintLive(loop);
   }
 
   /* ---------------- 进度条(运行中形态) ---------------- */
@@ -275,13 +283,15 @@ export function createAgentLoop({ doc = globalThis.document, quietMs = 8000 } = 
     }, '停止');
     // role=status + aria-live:每个周期播报一次「第 n/N 步 · 当前动作」
     loop.txtEl = h('span', { class: 'alp-txt', role: 'status', 'aria-live': 'polite' });
+    loop.rowsEl = h('ol', { class: 'alp-rows alp-live' });
     loop.el = h('div', { class: 'alp turn rise', dataset: { state: 'run' } },
       h('div', { class: 'alp-bar' },
         h('span', { class: 'alp-bot', 'aria-hidden': 'true' }, '🤖'),
         h('span', { class: 'alp-spin', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
         loop.txtEl,
         h('span', { class: 'alp-grow' }),
-        loop.stopBtn));
+        loop.stopBtn),
+      loop.rowsEl);
     host.appendChild(loop.el);
     // 用户绕过本条、直接点 composer 停止钮:同样如实标「已被用户停止」
     const b = btnStop();
@@ -318,16 +328,25 @@ export function createAgentLoop({ doc = globalThis.document, quietMs = 8000 } = 
 
   /* ---------------- 工作记录卡(收尾形态) ---------------- */
 
-  function rowNode(loop, cy) {
+  function rowNode(loop, cy, live = false) {
     const meta = actionMeta(cy.action);
     const ex = cycleExit(cy);
     const sums = cy.tools.map((t) => t.summary).filter(Boolean);
-    return h('li', { class: 'alp-row' },
+    const end = cy.endAt ?? loop.endedAt;
+    const dur = end != null ? fmtDur(end - cy.at) : '进行中';
+    return h('li', { class: live ? 'alp-row is-live' : 'alp-row' },
       h('span', { class: 'alp-ic', 'aria-hidden': 'true' }, meta.ic),
       h('span', { class: 'alp-nm' }, `第 ${cy.n} 步 · ${meta.zh}`),
-      h('span', { class: 'alp-du' }, fmtDur((cy.endAt ?? loop.endedAt) - cy.at)),
+      h('span', { class: 'alp-du' }, dur),
       ex.cls !== 'none' ? h('span', { class: `alp-st is-${ex.cls}` }, ex.label) : null,
       sums.length ? h('div', { class: 'alp-summ' }, sums.join(' · ')) : null);
+  }
+
+  function paintLive(loop) {
+    if (!loop.rowsEl || loop.finalized) return;
+    const last = loop.cycles.length - 1;
+    loop.rowsEl.replaceChildren(...loop.cycles.map((cy, i) =>
+      rowNode(loop, cy, i === last && cy.endAt == null)));
   }
 
   function renderCard(loop) {

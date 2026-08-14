@@ -28,7 +28,9 @@ from insar_agent.registry.capabilities import REGISTRY
 
 #: 事件契约钉死的 10 项动作闭集(LOOP-CONTRACT §1,顺序随前端 ACTION_META)
 CONTRACT_ACTIONS = ("search_data", "inspect_file", "check_env", "list_data", "status",
-                    "plan", "execute", "set_params", "set_method", "thinking")
+                    "plan", "execute", "set_params", "set_method", "thinking",
+                    "install_engine", "list_files",
+                    "learn_tool", "search_docs", "probe_scratch")
 
 
 @dataclass
@@ -176,6 +178,26 @@ def test_inspect_file_requires_pathless_name():
         assert "拦截" in r.say
 
 
+def test_learn_tool_and_probe_are_closed():
+    ok, _ = run_cycle([outcome_of({"action": {"type": "learn_tool", "tool": " GDAL "},
+                                   "say": "先学工具"})])
+    assert ok.action == {"type": "learn_tool", "tool": "gdal"}
+    path_hit, _ = run_cycle([outcome_of({
+        "action": {"type": "learn_tool", "tool": "../x"}, "say": "学"})])
+    assert path_hit.action is None and path_hit.source == "degraded"
+    docs, _ = run_cycle([outcome_of({
+        "action": {"type": "search_docs", "query": " unwrap "}, "say": "查文档"})])
+    assert docs.action == {"type": "search_docs", "query": "unwrap"}
+    probe, _ = run_cycle([outcome_of({
+        "action": {"type": "probe_scratch", "kind": "import", "name": "numpy"},
+        "say": "探针"})])
+    assert probe.action == {"type": "probe_scratch", "kind": "import", "name": "numpy"}
+    bad_kind, _ = run_cycle([outcome_of({
+        "action": {"type": "probe_scratch", "kind": "bash", "name": "x"},
+        "say": "探针"})])
+    assert bad_kind.action is None and bad_kind.source == "degraded"
+
+
 def test_inspect_file_step_form_reaches_closed_set():
     """inspect_file 的 step 形态(P2-10):与 name 二选一,step 优先。
 
@@ -294,7 +316,7 @@ def test_first_cycle_has_empty_summary_placeholder():
 # ---------------- 提示词:动作闭集完整性(与前端 ACTION_META 对齐) ----------------
 
 def test_cycle_action_types_closed_set():
-    assert CYCLE_ACTION_TYPES == CONTRACT_ACTIONS  # 10 项,顺序随前端
+    assert CYCLE_ACTION_TYPES == CONTRACT_ACTIONS  # 顺序随前端 ACTION_META
     assert set(CONVERSE_ACTION_TYPES) < set(CYCLE_ACTION_TYPES)  # 循环闭集是超集
 
 
@@ -318,4 +340,58 @@ def test_action_closed_set_matches_frontend_action_meta():
     block = re.search(r"ACTION_META\s*=\s*\{(.*?)\n\};",
                       js_path.read_text("utf-8"), re.S).group(1)
     keys = re.findall(r"^\s*(\w+):\s*\{", block, re.M)
-    assert set(keys) == set(CYCLE_ACTION_TYPES) and len(keys) == 10
+    assert set(keys) == set(CYCLE_ACTION_TYPES) and len(keys) == len(CYCLE_ACTION_TYPES)
+
+
+def test_cycle_on_delta_taps_say_field():
+    chunks: list[str] = []
+
+    class StreamStub:
+        enabled = True
+
+        def chat_stream(self, messages, **kwargs):
+            on_delta = kwargs.get("on_delta")
+            raw = '{"say":"先检查环境","action":{"type":"check_env"}}'
+            if on_delta:
+                on_delta(raw)
+            return FakeOutcome(content=raw)
+
+    result = Brain(StreamStub()).cycle(
+        goal="x", cycles_summary=[], state_summary="s", registry=REGISTRY,
+        on_delta=chunks.append)
+    assert result.action == {"type": "check_env"}
+    assert "".join(chunks) == "先检查环境"
+
+
+def test_cycle_prefers_chat_stream_when_present():
+    """上游决策走流式:有 chat_stream 时不再走整段 chat。"""
+
+    class StreamStub:
+        enabled = True
+        stream_calls = 0
+        chat_calls = 0
+
+        def chat_stream(self, messages, **kwargs):
+            self.stream_calls += 1
+            return FakeOutcome(content='{"say":"流式","action":{"type":"status"}}')
+
+        def chat(self, messages, **kwargs):
+            self.chat_calls += 1
+            return FakeOutcome(content='{"say":"非流"}')
+
+    stub = StreamStub()
+    result = Brain(stub).cycle(goal="x", cycles_summary=[], state_summary="s",
+                               registry=REGISTRY)
+    assert stub.stream_calls == 1 and stub.chat_calls == 0
+    assert result.action == {"type": "status"} and result.say == "流式"
+
+
+def test_install_engine_and_list_files_validate():
+    r, _ = run_cycle([outcome_of({"action": {"type": "install_engine", "engine": "gdal"},
+                                  "say": "装 gdal"})])
+    assert r.action == {"type": "install_engine", "engine": "gdal"}
+    r2, _ = run_cycle([outcome_of({"action": {"type": "list_files"}, "say": "看目录"})])
+    assert r2.action == {"type": "list_files"}
+    r3, _ = run_cycle([outcome_of({"action": {"type": "install_engine", "engine": "nope"},
+                                   "say": "装一个不存在的"})])
+    assert r3.done is True and r3.source == "degraded"
