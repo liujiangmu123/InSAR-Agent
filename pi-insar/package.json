@@ -15,6 +15,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "skills": "node scripts/sync-skills.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

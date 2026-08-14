@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#
+# insar-pi — start pi with the InSAR agent loaded.
+#
+# One command instead of four flags. Everything it passes is *additive*: the
+# extension, the InSAR skills and an appended system prompt. It never passes
+# --system-prompt / --no-extensions / --no-skills / --no-builtin-tools / --tools,
+# because those would take pi capabilities away — graduated freedom is enforced
+# per tool call by the extension's guard (strict mode), not by crippling pi.
+#
+#   scripts/insar-pi                     # interactive, free mode
+#   scripts/insar-pi --insar-strict      # start in strict reproducible mode
+#   scripts/insar-pi -p "plan a Ridgecrest run"   # any pi flag passes through
+#
+# Environment:
+#   INSAR_API_BASE          backend base URL (default http://127.0.0.1:8873)
+#   INSAR_PI_SKIP_HEALTH=1  skip the backend reachability check
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+
+EXTENSION="${REPO_ROOT}/pi-insar/src/index.ts"
+APPEND_SYSTEM="${REPO_ROOT}/pi-insar/APPEND_SYSTEM.md"
+
+# Skill roots, kept in sync with pi-insar/scripts/sync-skills.mjs (SKILL_ROOTS).
+# pi recurses into a directory and loads every folder that holds a SKILL.md, so
+# the repo's skills/ stays the single source of truth — nothing is copied.
+SKILL_ROOTS=(
+  "${REPO_ROOT}/pi-insar/skills/00-insar-agent"
+  "${REPO_ROOT}/skills"
+  "${REPO_ROOT}/src/insar_agent/registry/scenario_packs"
+)
+
+INSAR_API_BASE="${INSAR_API_BASE:-http://127.0.0.1:8873}"
+export INSAR_API_BASE
+
+die() {
+  printf 'insar-pi: %s\n' "$1" >&2
+  exit 1
+}
+
+for required in "${EXTENSION}" "${APPEND_SYSTEM}"; do
+  [ -f "${required}" ] || die "missing ${required} — is the repo checkout complete?"
+done
+
+command -v pi >/dev/null 2>&1 ||
+  die "pi is not on PATH. Install it with: npm i -g @earendil-works/pi-coding-agent (needs Node >= 22.19)"
+
+if [ "${INSAR_PI_SKIP_HEALTH:-0}" != "1" ]; then
+  if ! command -v curl >/dev/null 2>&1; then
+    printf 'insar-pi: curl not found, skipping the backend check (%s)\n' "${INSAR_API_BASE}" >&2
+  elif ! curl -fsS --max-time 5 "${INSAR_API_BASE}/api/health" >/dev/null 2>&1; then
+    cat >&2 <<EOF
+insar-pi: the InSAR backend is not answering at ${INSAR_API_BASE}/api/health
+
+Start it in another terminal, from ${REPO_ROOT}:
+
+    INSAR_HOME=./workspace .venv/bin/python -m insar_agent.api.app
+
+Then re-run this command. Point INSAR_API_BASE elsewhere if the backend runs on
+another host or port, or set INSAR_PI_SKIP_HEALTH=1 to start pi anyway (the
+insar_* tools will fail until the backend is up).
+EOF
+    exit 1
+  fi
+fi
+
+PI_ARGS=(-e "${EXTENSION}")
+for root in "${SKILL_ROOTS[@]}"; do
+  [ -d "${root}" ] && PI_ARGS+=(--skill "${root}")
+done
+PI_ARGS+=(--append-system-prompt "${APPEND_SYSTEM}")
+
+exec pi "${PI_ARGS[@]}" "$@"

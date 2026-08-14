@@ -8,6 +8,9 @@ pi is the top-level process and owns the chat UI. This extension adds:
 - **`insar_*` tools** — high-level operations the model calls (plan, execute, preview,
   fork, provenance, logs, mode). They talk HTTP to the existing Python FastAPI backend
   (`src/insar_agent/api`), which keeps the reproducible science kernel unchanged.
+- **Domain knowledge** — `APPEND_SYSTEM.md` (mission context + red lines + the two
+  freedom modes) and the `00-insar-agent` operator skill on top of the repo's 11
+  per-step skills and 4 scenario packs (P2).
 - **A monitored-pipeline sidebar** — the 11 steps × five stages, current step, progress,
   evidence level and taints, rendered in pi's native TUI above the editor plus a compact
   footer line.
@@ -30,7 +33,21 @@ cd pi-insar
 npm install   # see "npm note" below if you regenerate the lockfile
 ```
 
-Run pi with the extension:
+Run everything with one command (from anywhere):
+
+```bash
+scripts/insar-pi                    # interactive, free mode
+scripts/insar-pi --insar-strict     # start in strict reproducible mode
+```
+
+`scripts/insar-pi` checks `GET $INSAR_API_BASE/api/health` first and prints how to start
+the backend if it is down (it never spawns it), then execs pi with **additive flags only**:
+`-e pi-insar/src/index.ts`, `--skill` for each skill root, and `--append-system-prompt
+pi-insar/APPEND_SYSTEM.md`. It never passes `--system-prompt`, `--no-extensions`,
+`--no-skills`, `--no-builtin-tools` or `--tools`: taking pi capabilities away is the
+strict-mode gate's job, per tool call, not the launcher's.
+
+Or wire it up by hand:
 
 ```bash
 INSAR_API_BASE=http://127.0.0.1:8873 pi -e ./pi-insar/src/index.ts
@@ -50,9 +67,36 @@ INSAR_HOME=<dir> INSAR_PORT=8873 .venv/bin/python -m insar_agent.api.app
 | Knob | Meaning |
 | --- | --- |
 | `INSAR_API_BASE` | Backend base URL (default `http://127.0.0.1:8873`) |
+| `INSAR_PI_SKIP_HEALTH=1` | `scripts/insar-pi` only: start pi without the backend check |
 | `--insar-session <id>` | Bind this pi session to an existing InSAR session (sidebar starts immediately) |
 | `--insar-strict` | Start in strict reproducible mode |
 | `/insar-mode [free\|strict\|status]` | Show or switch the freedom mode at runtime |
+
+## Prompt and skills
+
+| Resource | Role |
+| --- | --- |
+| `APPEND_SYSTEM.md` | Appended to pi's system prompt (never replaces it): the 11-step pipeline, the red lines, and the free/strict modes. Kept small — it is in every request. |
+| `skills/00-insar-agent/SKILL.md` | Hand-written operator skill: how to drive the tool layer end to end, the five stages, stale/dirty cascade, the six-level evidence ladder, and the "never fabricate a number" rule. |
+| `../skills/01-*` … `../skills/11-*` | The repo's per-step domain skills (methods, parameter heuristics, failure playbooks). Unchanged, loaded in place. |
+| `../src/insar_agent/registry/scenario_packs/*/SKILL.md` | Scenario packs (`quake`, `permafrost`, `landslide`, `stripmap_coseismic`). |
+
+**Skills are not copied.** pi's `--skill <dir>` recurses and loads every directory holding a
+`SKILL.md`, so the launcher points at the three roots above and the repo `skills/` stays the
+single source of truth — nothing can go stale. `scripts/sync-skills.mjs` therefore *validates*
+that wiring by default (frontmatter, name/description limits, duplicate names, missing roots)
+and exits non-zero on a problem:
+
+```bash
+npm run skills                 # validate every skill root
+node scripts/sync-skills.mjs --json
+node scripts/sync-skills.mjs --copy   # packaging only: copy into pi-insar/skills/
+```
+
+`--copy` exists for shipping pi-insar as a standalone pi package (pi auto-discovers a
+`skills/` directory inside a package). Copies are idempotent, marked with `.synced-from`,
+pruned when their source disappears, and gitignored — only `skills/00-insar-agent/` is
+tracked.
 
 ## Tools
 
@@ -92,6 +136,10 @@ they are parsed and validated before any HTTP call.
 | `src/guard.ts` | Pure `decideBlock(tool, mode)` + the exception-safe `tool_call` hook |
 | `src/sidebar.ts` | Pure `renderPipelineRail(monitor)` + the `ctx.hasUI`-gated widget poller |
 | `src/index.ts` | Extension factory wiring everything together |
+| `APPEND_SYSTEM.md` | InSAR mission context + red lines + modes, appended to the system prompt |
+| `skills/00-insar-agent/` | Operator skill for the tool layer (hand-written, tracked) |
+| `scripts/sync-skills.mjs` | Validates the skill roots; `--copy` materialises them for packaging |
+| `../scripts/insar-pi` | Launcher: health check + `pi` with additive flags only |
 
 Design constraints worth keeping:
 
@@ -132,7 +180,10 @@ temporary `INSAR_HOME`, waits for `/api/health`, and tears it down afterwards. T
 integration suite drives `insar_create_session → insar_plan_run → insar_execute_run →
 insar_run_status → insar_export_provenance → insar_set_mode` by calling the tools'
 `execute()` directly, since they are plain objects with no pi runtime dependency.
-`render.test.ts` and `guard.test.ts` are pure golden/unit tests.
+`render.test.ts` and `guard.test.ts` are pure golden/unit tests. `skills.test.ts` needs
+neither: it validates the frontmatter of every skill the launcher loads (through
+`scripts/sync-skills.mjs --json`), checks that `APPEND_SYSTEM.md` and the operator skill
+name all 16 registered tools, and asserts the launcher only ever passes additive pi flags.
 
 ### npm note
 
