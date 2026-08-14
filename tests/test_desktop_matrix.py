@@ -264,6 +264,13 @@ _PROBES: list[tuple] = [
      lambda b: "engine_prefix" in str(b.get("detail", ""))),
     ("setup-engine-env", "POST", "/api/setup/engine-env", {}, {200},
      lambda b: isinstance(b.get("commands"), list) and b["commands"]),
+    # install_router(/api/install)—— 安装助手只出方案文本,绝不代跑安装;
+    # guide 含 WSL 冷探测,放宽超时(setup-status 同款口径)
+    ("install-guide", "GET", "/api/install/guide", {"timeout": 150.0}, {200},
+     lambda b: {"missing", "plans", "engines", "wsl"} <= set(b)),
+    ("install-mark-done-unknown", "POST", "/api/install/mark-done",
+     {"json": {"engine": "no-such-engine"}}, {400},
+     lambda b: "未知引擎" in str(b.get("detail", ""))),
     # llm_router(/api/llm)—— 读写闭环另有专测,这里只探形状(零网络出行)
     ("llm-config", "GET", "/api/llm/config", {}, {200},
      lambda b: {"configured", "source", "api_key_masked"} <= set(b)),
@@ -271,6 +278,13 @@ _PROBES: list[tuple] = [
      lambda b: b.get("ok") is False and "密钥" in b.get("error", "")),
     ("llm-test-unconfigured", "POST", "/api/llm/test", {"json": {}}, {200},
      lambda b: b.get("ok") is False),
+    # credentials_router(/api/credentials)—— 凭证面未配置态(临时 HOME 无
+    # credentials.json 且 EARTHDATA* 已剥离);verify 无凭证短路返回,零网络出行
+    ("credentials-unconfigured", "GET", "/api/credentials", {}, {200},
+     lambda b: b.get("configured") is False and b.get("mode") == "none"),
+    ("credentials-verify-unconfigured", "POST", "/api/credentials/verify",
+     {"json": {}}, {200},
+     lambda b: b.get("ok") is False and "未配置" in b.get("error", "")),
     # version_router(/api/version)
     ("version", "GET", "/api/version", {}, {200},
      lambda b: {"version", "git_head", "build"} <= set(b)),
@@ -291,6 +305,16 @@ _PROBES: list[tuple] = [
     ("visionqa-post-norun", "POST", "/api/vision-qa",
      {"json": {"session": "matrix-probe", "run_id": "no-such-run",
                "figure": "x.png"}}, {200, 400, 404}, None),
+    # advisor_router(/api/advise)—— 纯读端点:无 run 会话 404,不落会话目录
+    ("advise-norun", "GET", "/api/advise", {"params": {"session": _S}}, {404}, None),
+    # memory_router(/api/memory)—— 跨会话记忆面(列表 + 校验/软删/萃取拒绝面)
+    ("memory-list", "GET", "/api/memory", {}, {200},
+     lambda b: isinstance(b.get("items"), list)),
+    ("memory-post-badkind", "POST", "/api/memory",
+     {"json": {"kind": "no-such-kind", "content": "x"}}, {400}, None),
+    ("memory-delete-unknown", "DELETE", "/api/memory/999999", {}, {404}, None),
+    ("memory-extract-norun", "POST", "/api/memory/extract",
+     {"json": {"run_id": "no-such-run"}}, {404}, None),
     # admin_router(/api/admin)
     ("admin-runs", "GET", "/api/admin/runs", {}, {200},
      lambda b: isinstance(b, list)),
@@ -317,6 +341,10 @@ _PROBES: list[tuple] = [
     ("datasets-root-relative", "POST", "/api/datasets/roots",
      {"json": {"path": "relative/path"}}, {400}, None),
     ("datasets-unknown", "GET", "/api/datasets/no-such-id", {}, {404}, None),
+    # recommend_router(/api/recommend)—— 未知数据集重扫一次仍未命中 → 404
+    # (环境探测只在命中数据集后才发生,本探针零探测成本)
+    ("recommend-unknown", "GET", "/api/recommend",
+     {"params": {"dataset_id": "no-such-id"}}, {404}, None),
     # queue_router(/api/queue)
     ("queue-list", "GET", "/api/queue", {}, {200},
      lambda b: isinstance(b.get("items"), list)),
@@ -344,8 +372,15 @@ _PROBES: list[tuple] = [
      lambda b: b.get("run") is None),
     ("turn-invalid-session", "POST", "/api/turn",
      {"json": {"session": "bad/id", "text": "x"}}, {400}, None),
+    # /api/converse(自主循环回合)—— max_cycles 校验挡在开流/建会话之前,
+    # 非法值 400 即流式端点的可表驱动拒绝面(循环全链行为归 loop 专测)
+    ("converse-invalid-cycles", "POST", "/api/converse",
+     {"json": {"session": _S, "text": "x", "max_cycles": 0}}, {400},
+     lambda b: "max_cycles" in str(b.get("detail", ""))),
     ("resume-norun", "POST", "/api/resume", {"json": {"session": _S}}, {200}, None),
-    ("abort-norun", "POST", "/api/abort", {"json": {"session": _S}}, {404}, None),
+    # 202=集成波次 P2 契约(无 run 会话置会话级取消 token 受理);曾宽容 404
+    # 兼容早于该契约的旧冻结包,2026-08-14 dist 重建后按约定收紧为 {202}
+    ("abort-norun", "POST", "/api/abort", {"json": {"session": _S}}, {202}, None),
     ("message-unknown-session", "POST", "/api/message",
      {"json": {"session": "no-such-session", "text": "hi"}}, {404}, None),
     ("actions-unknown-action", "POST", "/api/actions",

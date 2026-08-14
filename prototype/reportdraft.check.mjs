@@ -10,7 +10,11 @@
    ④ 一键复制:点「复制全文」→ 剪贴板收到草稿全文 + toast 复制文案;
    ⑤ 骨架回退:llm_polish=false → 徽章「LLM 润色:否(回退骨架)」;
    ⑥ 失败语义:404 → 「还没有可生成草稿的 run」提示,且不清掉已有结果;
-   ⑦ dock 重渲染 → 观察器自动重挂,已生成结果不丢失。
+   ⑦ dock 重渲染 → 观察器自动重挂,已生成结果不丢失;
+   ⑧ 一键完整报告(0814B W5):fullErrorText/fullSavedNote 纯函数;
+     「生成完整报告」→ POST /api/report/full → renderMarkdown 全文渲染
+     (复现包链接关闭)+ 「确定性拼装」徽章 + 复制全文;
+   ⑨ 完整报告失败语义:404 → 「还没有可生成完整报告的 run」,不清掉已有结果。
    只依赖 node 内建能力,零 npm 依赖(check() 约定与其余 check.mjs 一致)。
    ============================================================ */
 
@@ -290,6 +294,78 @@ MO_INSTANCES.forEach((mo) => mo.cb());
 await sleep(10);
 check('观察器自动重挂且仍只有一个区块', mounted().length === 1);
 check('重挂后已生成结果不丢失',
+  !!shell() && shell().textContent.includes('骨架文本'));
+
+/* ---------------- ⑧ 一键完整报告 ---------------- */
+console.log('\n== ⑧ 一键完整报告 ==');
+check('fullErrorText:404 = 还没有可生成完整报告的 run',
+  RD.fullErrorText(404).includes('还没有可生成完整报告的 run'));
+check('fullErrorText:其余状态码回落草稿口径(HTTP 码在场)',
+  RD.fullErrorText(500).includes('HTTP 500') && RD.fullErrorText(0).includes('后端不可达'));
+check('fullSavedNote:saved+path → 落盘注明带文件名',
+  RD.fullSavedNote({ saved: true, path: 'report_full.md' }).includes('report_full.md'));
+check('fullSavedNote:落盘失败如实注明',
+  RD.fullSavedNote({ saved: false, path: null }).includes('落盘失败'));
+
+const fullBtn = () => pane.querySelectorAll('button')
+  .find((b) => b.textContent.includes('生成完整报告') || b.textContent.includes('拼装中'));
+check('「生成完整报告」按钮在场', !!fullBtn());
+check('注明缺素材如实占位、不依赖 LLM',
+  mounted()[0].textContent.includes('缺素材如实占位'));
+
+const FULL_MD = [
+  '# InSAR 处理完整报告:coseismic(run `20260814T000000-full01`)',
+  '',
+  '## 元信息',
+  '',
+  '- run:`20260814T000000-full01`',
+  '',
+  '## 结果',
+  '',
+  '结果章节:run 未完成,不可用(当前状态 running)。',
+].join('\n');
+const callsBefore = fetchCalls.length;
+fetchScript = [{ status: 200, payload: {
+  ok: true, run_id: '20260814T000000-full01', path: 'report_full.md',
+  markdown: FULL_MD, saved: true,
+} }];
+fullBtn().click();
+await sleep(10);
+const fullCall = fetchCalls[fetchCalls.length - 1];
+check('POST /api/report/full 且 body 带 session',
+  fetchCalls.length === callsBefore + 1 && fullCall.url === '/api/report/full'
+  && fullCall.opts.method === 'POST'
+  && JSON.parse(fullCall.opts.body).session === 'sess-check');
+const fullResult = () => mounted()[0].querySelector('.reportdraft-full-result');
+const fullDraft = () => fullResult() && fullResult().querySelector('.draft');
+check('全文经面板既有渲染(.draft 容器,标题与占位句在场)',
+  !!fullDraft() && fullDraft().textContent.includes('InSAR 处理完整报告')
+  && fullDraft().textContent.includes('结果章节:run 未完成,不可用'));
+check('渲染关闭复现包链接(报告自带复现附录章,不重复挂入口)',
+  !fullDraft().querySelectorAll('a').some((a) => a.textContent.includes('导出复现包')));
+check('「确定性拼装」徽章 + 落盘注明 report_full.md 在场',
+  fullResult().textContent.includes('确定性拼装')
+  && fullResult().textContent.includes('report_full.md'));
+const copyFullBtn = fullResult().querySelectorAll('button')
+  .find((b) => b.textContent.includes('复制全文'));
+check('「复制全文」按钮在场(完整报告区)', !!copyFullBtn);
+const writesBefore = clipboardWrites.length;
+copyFullBtn.click();
+await sleep(10);
+check('剪贴板收到完整报告 Markdown 原文',
+  clipboardWrites.length === writesBefore + 1
+  && clipboardWrites[clipboardWrites.length - 1] === FULL_MD);
+
+/* ---------------- ⑨ 完整报告失败语义(404) ---------------- */
+console.log('\n== ⑨ 完整报告失败语义 ==');
+fetchScript = [{ status: 404, payload: { detail: 'no run' } }];
+fullBtn().click();
+await sleep(10);
+check('404 → 「还没有可生成完整报告的 run」提示',
+  mounted()[0].textContent.includes('还没有可生成完整报告的 run'));
+check('失败不清掉已有完整报告结果',
+  !!fullDraft() && fullDraft().textContent.includes('InSAR 处理完整报告'));
+check('方法草稿区结果同样不受影响',
   !!shell() && shell().textContent.includes('骨架文本'));
 
 console.log(failed ? `\n${count} 项断言,${failed} 项失败` : `\n全部 ${count} 项断言通过`);

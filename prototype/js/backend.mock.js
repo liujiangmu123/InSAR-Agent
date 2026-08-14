@@ -2,7 +2,7 @@
    模拟后端 —— 唯一需要替换成真实 SSE 的一层
    对外只暴露 AsyncIterable<Event>，事件形状与 DESIGN §5 的
    events.py 契约对齐：给 LLM 的 data 与给前端的 ui_update 分离。
-   替换方式：把 runTurn / runPipeline 换成 EventSource 读取即可，
+   替换方式：把 runTurn / runConverse / runPipeline 换成流式读取即可，
    上层 app.js 完全不用改。
    ============================================================ */
 import { S, STEP_DEFS, def_, st_, workSummary, estimateRerun } from './state.js';
@@ -74,16 +74,31 @@ export function classify(text) {
 
 /* ============================================================
    规划回合：用户输入 → 事件流
+   runTurn(/api/turn 替身)与 runConverse(/api/converse 替身)共用
+   同一剧本(planningTurn),区别只有一条:
+   · runConverse 按自主循环契约「每周期一条 agent.cycle」织入 4 个周期
+     (thinking → check_env → list_data → plan,动作闭集见 agentloop.js
+     ACTION_META),工具执行复用既有 tool.start/end,say 收尾 ——
+     file:// 离线演示的进度条数据源(mock 模式由 app.js consume 转发给
+     agentloop.js;agent.cycle 不进 consume 的 switch 分发);
+   · runTurn 保持既有事件序列不变 —— demo-mode.check.mjs 以
+     「mock 事件类型 ⊆ app.js case 闭集」「首事件 thinking」锁定它,
+     且 app.js 按 e2e 契约(tests/test_e2e_contract.py BACKEND_ONLY)
+     不得出现 agent.cycle 分支。
    ============================================================ */
-export async function* runTurn(text, token) {
+async function* planningTurn(text, token, withCycles) {
   const sc = classify(text);
+  /** 周期账:仅 runConverse 通道发;空数组时 yield* 零产出。 */
+  const cycle = (n, action) => (withCycles ? [{ t: 'agent.cycle', n, max: 6, action }] : []);
 
+  yield* cycle(1, 'thinking');
   yield { t: 'thinking', title: '解析意图与约束', body:
     `区域：${sc.region}\n目标：${sc.chain} 时序形变\n时间范围：${sc.dates}\n数据：${sc.scenes}\n` +
     `模式：${S.mode === 'expert' ? '专家（每步人工确认方法）' : '向导（Agent 自动决策，关键节点征询）'}` };
   await wait(520, token);
 
   // ---- 环境探测 ----
+  yield* cycle(2, 'check_env');
   yield { t: 'tool.start', id: 'probe', verb: 'probe', cmd: 'runtime/probe.py --engines --wsl',
           label: '探测可用引擎' };
   const probeLines = [
@@ -102,6 +117,7 @@ export async function* runTurn(text, token) {
   await wait(300, token);
 
   // ---- 数据诊断 ----
+  yield* cycle(3, 'list_data');
   yield { t: 'tool.start', id: 'diag', verb: 'inspect', cmd: `core/store.py --scan --session ${S.sessionId}`,
           label: '扫描已有产物与指纹' };
   for (const [l, tone] of [
@@ -118,6 +134,7 @@ export async function* runTurn(text, token) {
   await wait(320, token);
 
   // ---- 生成计划 ----
+  yield* cycle(4, 'plan');
   yield { t: 'plan', items: [
     { n: 1, text: '探测引擎与环境，收窄候选集', st: 'd' },
     { n: 2, text: '扫描已有产物，按指纹判定可跳过步骤', st: 'd' },
@@ -137,6 +154,16 @@ export async function* runTurn(text, token) {
   await wait(200, token);
 
   yield { t: 'candidates', stepId: 6 };
+}
+
+/** 规划回合(既有序列,不带 agent.cycle —— 序列锁定见 planningTurn 头注)。 */
+export async function* runTurn(text, token) {
+  yield* planningTurn(text, token, false);
+}
+
+/** 自主循环回合(mock):同一剧本 + agent.cycle 周期账,离线演示进度条数据源。 */
+export async function* runConverse(text, token) {
+  yield* planningTurn(text, token, true);
 }
 
 /* ============================================================

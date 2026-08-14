@@ -34,6 +34,7 @@
 <link rel="stylesheet" href="css/installguide.css">
 <link rel="stylesheet" href="css/credpanel.css">
 <link rel="stylesheet" href="css/captions.css">
+<link rel="stylesheet" href="css/agentloop.css">
 <script type="module">
   // 桌面/首启增强:环境向导(后端就绪则静默)+ 窗口标题状态同步;均安全降级
   import('./js/setup.js').then((m) => m.maybeShowSetupWizard()).catch(() => {});
@@ -92,7 +93,7 @@
         <button type="button" data-mode="expert" aria-pressed="true">专家</button>
         <button type="button" data-mode="guide" aria-pressed="false">向导</button>
       </div>
-      <div class="who"><span class="av" aria-hidden="true">师</span><span>讲师账号 · 本机 WSL2</span></div>
+      <div class="who"><span class="av" aria-hidden="true">本</span><span>本机环境</span></div>
     </div>
   </aside>
 
@@ -218,5 +219,6 @@
 <script type="module" src="js/advisor.js"></script><!-- run 终态「下一步建议」卡(自初始化,可安全降级) -->
 <script type="module" src="js/quickactions.js"></script><!-- 一键操作中心:rail「⚡ 快捷」浮出面板(自初始化,样式自注入,动作全部复用既有入口) -->
 <script type="module" src="js/memorypanel.js"></script><!-- 侧栏底部「记忆」入口:跨会话记忆管理面板(自初始化,可安全降级) -->
+<script type="module" src="js/agentloop.js"></script><!-- 多轮自主循环可视化:回合内进度条 + 工作记录卡(自初始化,可安全降级) -->
 </body>
 </html>

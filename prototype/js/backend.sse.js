@@ -1,15 +1,19 @@
 /* ============================================================
    真实后端(FastAPI + NDJSON 流)—— backend.mock.js 的对等替身。
-   对外接口与 mock 完全一致:Cancel / runTurn / runPipeline / rerunSummary。
-   app.js 的 consume() 一行不用改(Phase 5 承诺)。
+   对外接口与 mock 完全一致:Cancel / runTurn / runConverse / runPipeline /
+   rerunSummary。app.js 的 consume() 一行不用改(Phase 5 承诺)。
 
    协议(api/app.py):
      POST /api/turn      {session, text}            → NDJSON 事件流
+     POST /api/converse  {session, text}            → NDJSON 事件流(自主循环,含 agent.cycle)
      POST /api/pipeline  {session, run_id?, step_ids?} → NDJSON 事件流
-     POST /api/abort     {session}                  → 202(配合 Cancel)
+     POST /api/abort     {session}                  → 202(配合 Cancel;converse 循环同样在周期边界响应)
      POST /api/actions   {...}                      → 202(参数/方法变更走干预队列)
 
    兜底:file:// 打开或后端不可达时,动态退回 backend.mock.js(纯演示)。
+   两层互不冲突的回退语义(runConversePreferred):
+     · 404/405 = 旧后端缺 /api/converse → 当次回退 /api/turn,S.noConverse 记忆;
+     · 离线/501 = 无后端(静态文件服务器)→ useMock,与 runTurn 同一条回退路。
    ============================================================ */
 import { S, workSummary, estimateRerun, def_ } from './state.js';
 
@@ -20,6 +24,26 @@ let useMock = location.protocol === 'file:';
 async function mock() {
   if (!mockModule) mockModule = await import('./backend.mock.js');
   return mockModule;
+}
+
+/* ---- mock(演示)模式的对外信号:app.js 顶栏徽章靠它保持诚实语义 ---- */
+
+/** 演示模式是否已激活:file:// 启动即真;后端不可达回退后置真(粘性,不自动复原)。 */
+export function isMockActive() { return useMock; }
+
+const mockWatchers = new Set();
+
+/** 订阅「回退到演示模式」的瞬间(file:// 启动态不通知,由启动探活自行发现)。 */
+export function onMockActivated(fn) {
+  mockWatchers.add(fn);
+  return () => mockWatchers.delete(fn);
+}
+
+/** 统一的回退落点:置位 + 广播,观察者异常不打断事件流。 */
+function activateMock() {
+  if (useMock) return;
+  useMock = true;
+  mockWatchers.forEach((fn) => { try { fn(); } catch { /* 观察者自身的错误不外溢 */ } });
 }
 
 /** 协作式取消令牌 —— 接口与 mock 的 Cancel 相同,内部映射 AbortController。 */
@@ -88,6 +112,13 @@ function isNoBackend(err) {
   return /^HTTP (404|405|501)$/.test(err?.message || '');
 }
 
+/** 当次响应是否「旧后端缺 /api/converse」:404(无路由)/405(方法不符)。
+    501 不算 —— 那是静态文件服务器(无后端),归 useMock 回退;
+    真实后端的 5xx 也不算,仍作为真错误抛出。纯逻辑,单测锁定。 */
+export function isNoConverse(err) {
+  return /^HTTP (404|405)$/.test(err?.message || '');
+}
+
 /** 规划回合:意图 → 探测 → 计划 → 候选决策点。 */
 export async function* runTurn(text, token) {
   if (useMock) { const m = await mock(); yield* m.runTurn(text, token); return; }
@@ -96,7 +127,7 @@ export async function* runTurn(text, token) {
   } catch (err) {
     if (err?.name === 'AbortError') throw new CancelledError();
     if (isOffline(err) || isNoBackend(err)) {
-      useMock = true;
+      activateMock();
       const m = await mock();
       yield { t: 'note', tone: 'warn', text: '后端不可达,已切换到本地演示模式(mock)' };
       yield* m.runTurn(text, token);
@@ -104,6 +135,46 @@ export async function* runTurn(text, token) {
     }
     throw err;
   }
+}
+
+/** 自主循环回合:POST /api/converse,NDJSON 消费与 runTurn 完全同构(复用 ndjson)。
+    404/405(旧后端缺该端点)原样上抛 —— 是否回退 /api/turn 由调用方决策
+    (runConversePreferred 记忆 S.noConverse);离线/501(无后端)仍走 useMock 回退。 */
+export async function* runConverse(text, token) {
+  if (useMock) { const m = await mock(); yield* m.runConverse(text, token); return; }
+  try {
+    yield* ndjson('/api/converse', { session: S.sessionId, text }, token);
+  } catch (err) {
+    if (err?.name === 'AbortError') throw new CancelledError();
+    if (isNoConverse(err)) throw err;   // 旧后端:交给调用方回退 runTurn,不切演示模式
+    if (isOffline(err) || isNoBackend(err)) {
+      activateMock();
+      const m = await mock();
+      yield { t: 'note', tone: 'warn', text: '后端不可达,已切换到本地演示模式(mock)' };
+      yield* m.runConverse(text, token);
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * 回合首选入口(app.js submit 消费):优先 /api/converse 自主循环;
+ * 旧后端缺端点(404/405)→ 当次回退 /api/turn 并在 S.noConverse 记忆,
+ * 后续回合直接走 /api/turn 不再探测。与 useMock 回退互不干扰:
+ * 离线/静态服务器在 runConverse/runTurn 内部处理,不会误记 noConverse。
+ */
+export async function* runConversePreferred(text, token) {
+  if (!S.noConverse) {
+    try {
+      yield* runConverse(text, token);
+      return;
+    } catch (err) {
+      if (!isNoConverse(err)) throw err;
+      S.noConverse = true;   // 旧后端无自主循环端点:记住,别每回合白探一次
+    }
+  }
+  yield* runTurn(text, token);
 }
 
 /** 执行回合:先把 UI 侧的方法/参数改动同步给服务端(干预队列),再流式执行。 */
@@ -115,8 +186,10 @@ export async function* runPipeline(stepIds, token) {
   } catch (err) {
     if (err?.name === 'AbortError') throw new CancelledError();
     if (isOffline(err) || isNoBackend(err)) {
-      useMock = true;
+      activateMock();
       const m = await mock();
+      // 与 runTurn/runConverse 同款警示:回退演示后的事件全是假的,必须先声明
+      yield { t: 'note', tone: 'warn', text: '后端不可达,已切换到本地演示模式(mock)' };
       yield* m.runPipeline(stepIds, token);
       return;
     }

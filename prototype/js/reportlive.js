@@ -265,10 +265,13 @@ function renderBlock(b) {
   return p;
 }
 
-/** markdown 文本 → DOM 容器(调用方塞进 .draft 容器获得排版样式)。 */
-export function renderMarkdown(md) {
+/** markdown 文本 → DOM 容器(调用方塞进 .draft 容器获得排版样式)。
+    reproLink=false 时不追加「导出复现包」链接(完整报告区块自带复现附录章,
+    再挂链接就重复了);缺省 true,dock.js 的既有调用零改动。 */
+export function renderMarkdown(md, { reproLink = true } = {}) {
   const root = document.createElement('div');
   for (const b of parseBlocks(md)) root.appendChild(renderBlock(b));
+  if (!reproLink) return root;
   // 「导出复现包」:href 直链 GET /api/repro-bundle(zip:provenance/run.sh/
   // methods/qa/图件 + MANIFEST sha256 清单);run 非 done 时后端 409 不出包
   const a = document.createElement('a');

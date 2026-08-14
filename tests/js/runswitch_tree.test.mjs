@@ -8,7 +8,7 @@ import './_env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildRunTree, optionLabel, runStamp, stepsSuffix,
+  buildRunTree, optionLabel, runStamp, stepsSuffix, simSuffix,
   setActiveRun, activeRunId, READONLY_HINT,
 } from '../../prototype/js/runswitch.js';
 
@@ -60,6 +60,21 @@ test('optionLabel:最新前缀 + 谱系缩进(└)+ 状态与统计后缀', () =
   assert.equal(optionLabel(child, 'zzz'), '└ 20260812T000000(failed · ✓1 ✗2)');
   const grand = { run: R('20260811T000000-ff', { status: 'running', steps: null }), depth: 2 };
   assert.equal(optionLabel(grand, 'zzz'), '\u3000└ 20260811T000000(running)');
+});
+
+test('simSuffix/optionLabel:simulated run 如实标「模拟」,真实 run 文案逐字节不变(0814B W6)', () => {
+  assert.equal(simSuffix({ simulated: true }), ' · 模拟');
+  assert.equal(simSuffix({ simulated: 1 }), ' · 模拟');       // /api/runs 送布尔,SQLite 侧曾是 0/1
+  assert.equal(simSuffix({ simulated: false }), '');
+  assert.equal(simSuffix({}), '');                            // 旧后端无字段:不标
+  assert.equal(simSuffix(null), '');
+  const sim = {
+    run: { ...R('20260814T010203-aa11bb22', { status: 'done', steps: { total: 1, done: 1, skipped: 0, failed: 0 } }), simulated: true },
+    depth: 0,
+  };
+  assert.equal(optionLabel(sim, 'zzz'), '20260814T010203(done · 模拟 · ✓1)');
+  const real = { run: R('20260814T010203-aa11bb22', { status: 'done', steps: { total: 1, done: 1, skipped: 0, failed: 0 } }), depth: 0 };
+  assert.equal(optionLabel(real, 'zzz'), '20260814T010203(done · ✓1)');
 });
 
 test('runStamp:取 run_id 时间戳前缀;fork 后缀不影响;空值给占位不给空白', () => {

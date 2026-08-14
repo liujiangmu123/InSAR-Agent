@@ -6,7 +6,7 @@
 import { h, txt, icon, $, keepScroll, toast } from './dom.js';
 import {
   S, LADDER, STEP_DEFS, def_, st_, validateParam, workSummary,
-  THRESHOLDS, evidenceCeiling,
+  THRESHOLDS, evidenceCeiling, setServerThresholds,
 } from './state.js';
 import { galleryView } from './gallery.js';
 import { ENV_NOTE, WSL, WORKSPACE, ENGINES, DISKS } from './envdata.js';
@@ -127,12 +127,20 @@ const STATE_TXT = {
   interrupted: '已取消 · 可续跑', orphaned: 'WSL 已停止 · 计算未完成',
 };
 
+/** 空镜像兜底（P1-5，浏览器实测）：会话还没有 run 时 S.steps 为空，st_() 无条目
+ *  —— 无守卫解引用会在面板每次渲染炸出未处理拒绝 + 错误横幅。空态按 pending
+ *  形状兜底（方法取注册表默认，与 syncServerSteps 创建镜像时的缺省一致）。 */
+const stOr = (id) => st_(id) || {
+  state: 'pending', stale: false, method: def_(id)?.method || '',
+  params: {}, fingerprint: '········',
+};
+
 function pipelineView() {
   const list = h('div', { class: 'pipe', role: 'list' });
   // 行级视图模型:本地状态先渲染;服务端字段(staleReason / skipped 三态)异步并入
   const vms = new Map();
   for (const d of STEP_DEFS) {
-    const st = st_(d.id);
+    const st = stOr(d.id);
     vms.set(d.id, {
       id: d.id, name: d.name, state: st.state, stale: !!st.stale,
       staleReason: null, fingerprint: st.fingerprint,
@@ -248,7 +256,7 @@ function pipelineView() {
 }
 
 function stepDetail(stepId) {
-  const d = def_(stepId), st = st_(stepId);
+  const d = def_(stepId), st = stOr(stepId);   // 空镜像同 pipelineView 兜底（P1-5）
   if (!d) return txt('');
   const mth = d.methods.find((m) => m.id === st.method);
 
@@ -328,18 +336,23 @@ function stepDetail(stepId) {
       h('div', { class: 'field' }, h('label', null, '方法'), methodSel),
       mth ? h('p', { style: { fontSize: '11.5px', color: 'var(--text-2)' } }, `${mth.engine} · ${mth.why}`) : null,
       h('div', { class: 'pform' }, ...fields),
-      h('p', { class: 'fnote' }, '参数当前值为演示占位数据（示意），非真实运行配置。'),
+      // 界面诚实化(0814B W6):原「参数为演示占位数据」脚注是反向假文案 ——
+      // 参数实为 /api/state 下发的服务端真值,已删;「预估 0 min(示意)」
+      // 恒零假行同删(dur 恒 0,诚实预估走 estimateRerunHonest 的运行历史)
       h('dl', { class: 'kv' },
         h('dt', null, '指纹'), h('dd', null, st.fingerprint),
         h('dt', null, '依赖'), h('dd', null, d.deps.length ? d.deps.map((x) => `#${x}`).join(' ') : '—'),
-        h('dt', null, '预估'), h('dd', null, `${Math.round(d.dur / 60)} min（示意）`),
         h('dt', null, '产物'), h('dd', null, (d.outputs || []).map((o) => o.path).join('\n') || '—')),
-      h('div', { class: 'shell' }, buildCmd(stepId))));
+      h('div', { class: 'shell' }, buildCmd(stepId)),
+      h('p', { class: 'fnote' },
+        '上为按方法与参数拼装的示意命令;真实执行命令以复现脚本(GET /api/run.sh)为准。')));
 }
 
-/** 由 method + params 渲染等价裸命令行 —— 对应 DESIGN §12 第 3 条要求。 */
+/** 由 method + params 渲染等价裸命令行 —— 对应 DESIGN §12 第 3 条要求。
+ *  注意:这是前端拼装的「示意命令」(程序名为约定映射),与服务端真实 argv
+ *  无关;详情卡已随行标注,真实命令的唯一来源是 /api/run.sh 复现脚本。 */
 export function buildCmd(stepId) {
-  const d = def_(stepId), st = st_(stepId);
+  const d = def_(stepId), st = stOr(stepId);   // stepDetail 内联调用，同守卫（P1-5）
   const flags = Object.entries(st.params)
     .map(([k, v]) => `--${k.replace(/_/g, '-')} ${Array.isArray(v) ? v.join(',') : v}`)
     .join(' ');
@@ -547,79 +560,20 @@ function reportView() {
 }
 
 /* ============================================================
-   内置浏览器（数据源检索的可视化）
+   浏览器面板 —— 诚实空态(界面诚实化,0814B W6)
+   原「内置浏览器」渲染的是整面写死的假检索结果(假 ASF granule、
+   假文献引用数)且无演示标识,真实后端下照常出现 —— 已整体删除。
+   实时检索过程当前未接入此面板;tab 结构保留,待检索可视化真实
+   接线后再点亮。
    ============================================================ */
-const SITES = {
-  asf: {
-    url: 'https://search.asf.alaska.edu',
-    label: 'ASF 数据源',
-    h: 'ASF Vertex · Sentinel-1 数据搜索',
-    s: 'search.asf.alaska.edu · Sentinel-1 C 波段',
-    facets: ['Ridgecrest 117.6°W 35.7°N', '2019-06 — 2019-08', '极化 VV', 'path 71 降轨'],
-    hits: [
-      ['S1A_IW_SLC__1SDV_20190610T135154', 'SLC · VV · path 71 · frame 479 · 2.4 GB'],
-      ['S1A_IW_SLC__1SDV_20190704T135155', 'SLC · VV · path 71 · frame 479 · 2.4 GB'],
-      ['S1A_IW_SLC__1SDV_20190716T135156', 'SLC · VV · path 71 · frame 479 · 2.4 GB'],
-      ['…共 7 个获取日期 / 11 个干涉对 · 已在本地（402 MB）', ''],
-    ],
-  },
-  cds: {
-    url: 'https://cds.climate.copernicus.eu',
-    label: 'ERA5 气象',
-    h: 'Copernicus CDS · ERA5 再分析',
-    s: 'cds.climate.copernicus.eu · 对流层延迟校正数据',
-    facets: ['ERA5 pressure levels', '37 层', '6 小时间隔', '2019-06 — 2019-08'],
-    hits: [
-      ['ERA5.h5 · 45.7 MB', '已下载 · 用于 PyAPS 对流层校正'],
-      ['注意：CDS API 不稳定，失败需降级至 tropo_height_corr', '竞品踩坑记录：InSAR_Agent agent.py:1049'],
-    ],
-  },
-  lit: {
-    url: 'https://www.webofscience.com',
-    label: '文献检索',
-    h: '文献检索 · InSAR 同震形变',
-    s: '用于论文方法节引用',
-    facets: ['Ridgecrest coseismic InSAR', '2018 — 2026', 'Web of Science'],
-    hits: [
-      ['Coseismic displacements of the 2019 Ridgecrest earthquake sequence from Sentinel-1 InSAR', 'Seismological Research Letters · 2020 · 被引 132'],
-      ['MintPy: A Python package for InSAR time-series analysis', 'Computers & Geosciences · 2021 · 被引 156'],
-      ['EZ-InSAR: an easy-to-use open-source toolbox', 'Earth Sci Inform · 2023 · 被引 42'],
-    ],
-  },
-};
-
 function webView() {
-  const site = SITES[S.webSite] || SITES.asf;
-  const input = h('input', { value: site.url, spellcheck: 'false', 'aria-label': '地址栏' });
-
-  const go = () => {
-    const v = input.value;
-    const found = Object.entries(SITES).find(([, s]) => v.includes(new URL(s.url).hostname));
-    S.webSite = found ? found[0] : S.webSite;
-    refresh();
-  };
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
-
   return h('div', null,
-    h('h3', { class: 'sect' }, 'Agent 内置浏览器'),
-    h('div', { class: 'web' },
-      h('div', { class: 'addr' },
-        h('span', { class: 'd', style: { background: '#fca5a5' } }),
-        h('span', { class: 'd', style: { background: '#fcd34d' } }),
-        h('span', { class: 'd', style: { background: '#86efac' } }),
-        input,
-        h('button', { class: 'icon-btn', type: 'button', onclick: go, 'aria-label': '打开' }, icon('expand'))),
-      h('div', { class: 'marks' }, ...Object.entries(SITES).map(([k, s]) => h('button', {
-        type: 'button', 'aria-pressed': String(k === S.webSite),
-        onclick: () => { S.webSite = k; refresh(); },
-      }, s.label))),
-      h('div', { class: 'page' },
-        h('div', { class: 'top' }, h('div', { class: 'h' }, site.h), h('div', { class: 's' }, site.s)),
-        h('div', { class: 'facets' }, ...site.facets.map((f) => h('span', null, f))),
-        h('div', { class: 'hits' }, ...site.hits.map(([t, m]) => h('div', { class: 'r' },
-          h('b', null, t), m ? h('div', { class: 'm' }, m) : null))))),
-    h('p', { class: 'blurb' },
-      'Agent 的数据源检索过程对用户可见。所有下载走服务端 task_id 句柄，LLM 不接触本地路径。'));
+    h('h3', { class: 'sect' }, '数据检索'),
+    ES.renderEmpty(null, {
+      icon: 'globe', title: '实时检索过程未接入此面板',
+      hint: '数据检索请在聊天中让 Agent 执行(自主循环的 search_data 动作),' +
+        '检索过程与结果见聊天流的工具卡。所有下载走服务端句柄,LLM 不接触本地路径。',
+    }));
 }
 
 /* ============================================================
@@ -683,10 +637,13 @@ function envView() {
   }));
 
   const ceilingNote = () => {
-    const { level, pending } = evidenceCeiling();
+    // 证据上限优先由服务端阈值台账(/api/env)推导;只有离线回落本地常量时
+    // 才如实标「离线示意」(界面诚实化,0814B W6)
+    const { level, pending, source } = evidenceCeiling();
     return h('div', { class: 'note is-stale ceiling', role: 'status' },
       icon('warn'),
-      h('span', null, h('b', null, `当前证据上限：${LADDER[level]}`), `（${pending.length} 项阈值待标定）`),
+      h('span', null, h('b', null, `当前证据上限：${LADDER[level]}`),
+        `（${pending.length} 项阈值待标定${source === 'local' ? ' · 离线示意' : ''}）`),
       h('span', { class: 'law' }, '§4.13 没有依据就不给数'));
   };
 
@@ -876,6 +833,8 @@ function envView() {
     if (!root.isConnected) return;
     root.replaceChildren(LIVE.skeleton());       // 骨架屏：等待探测结果
     const data = await LIVE.fetchEnvLive();
+    // 服务端阈值台账落进全局状态(证据上限推导的权威来源,面板切走也成立)
+    if (data) setServerThresholds(data.thresholds);
     if (!root.isConnected) return;                // 面板已切走，丢弃过期结果
     root.replaceChildren(...(data ? liveBody(LIVE, data) : demoBody(LIVE)));
   })();

@@ -19,9 +19,11 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import inspect
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -30,13 +32,15 @@ from typing import AsyncIterator
 from insar_agent.audit.contract import load_contract
 from insar_agent.audit.verify import verify_metrics
 from insar_agent.brain.facade import Brain, ConverseResult
-from insar_agent.brain.provider import BrainUnavailable
+from insar_agent.brain.provider import BrainTruncated, BrainUnavailable
+from insar_agent.brain.usage import usage_context
 from insar_agent.core.actions import apply_action
 from insar_agent.core.failures import DISPOSITIONS, FailureClass
 from insar_agent.core.ledger import write_provenance
 from insar_agent.core.store import Store
 from insar_agent.engines import default_builder
 from insar_agent.loop import events as ev
+from insar_agent.loop.budget import clip_summary
 from insar_agent.loop.events import EventBus
 from insar_agent.planner.plan import PlanResult, make_plan
 from insar_agent.registry.capabilities import REGISTRY, topo_order
@@ -58,6 +62,76 @@ _DATASET_KIND_LABELS = {"hyp3": "HyP3 产品", "alos_raw": "ALOS 原始条带",
 
 #: 数据集清单缓存 TTL(秒):与 /api/datasets 的清单缓存同一口径
 _DATASETS_TTL_S = 60.0
+
+#: 自主循环动作闭集(LOOP-CONTRACT §1,与 prototype/js/agentloop.js ACTION_META 对齐)
+LOOP_ACTIONS = ("search_data", "inspect_file", "check_env", "list_data", "status",
+                "plan", "execute", "set_params", "set_method", "thinking")
+
+#: 循环动作的中文标签(工具卡 label,文案与 agentloop.js ACTION_META.zh 一致)
+_LOOP_ACTION_LABELS = {
+    "search_data": "搜索数据", "inspect_file": "查看文件", "check_env": "检查环境",
+    "list_data": "列出数据", "status": "查询状态", "plan": "制定计划",
+    "execute": "执行步骤", "set_params": "调整参数", "set_method": "切换方法",
+    "thinking": "思考中",
+}
+
+#: 重复提案熔断阈值:同一动作签名连续第 3 次提案 → 记账后收束,不执行第 3 次
+_LOOP_REPEAT_BREAKER = 3
+
+#: 失败未换策略熔断阈值:同签名动作连续失败 2 次 → unresolved_failure 收束
+_LOOP_FAILURE_BREAKER = 2
+
+#: WKT 几何前缀:ASF 的 intersectsWith 只认 WKT,region 非此形状就不传空间参数
+_WKT_RE = re.compile(
+    r"^\s*(?:POINT|LINESTRING|POLYGON|MULTIPOINT|MULTILINESTRING|MULTIPOLYGON"
+    r"|GEOMETRYCOLLECTION)\s*\(", re.IGNORECASE)
+
+#: ISO 日期前缀(YYYY[-MM[-DD]]):timerange 两端只认它,认不出就不传时间参数
+_DATE_RE = re.compile(r"^\d{4}(?:-\d{1,2}){0,2}$")
+
+#: _converse_stream 的队列哨兵:LLM 线程任务终态后经 add_done_callback 投递,
+#: 消费侧读到即知任务已结束(成功/失败都必达,消费循环绝不悬停在 q.get)
+_CONVERSE_DONE: object = object()
+
+
+def _supports_on_delta(converse) -> bool:
+    """facade.converse 是否声明了 on_delta 形参(0814B W1 并行开发的防御闸门)。
+
+    只认显式命名形参:**kwargs 形态的替身(测试桩/旧实现)即使收下 on_delta
+    也不会外发,按不支持处置最诚实;签名探不出(C 实现/Mock)同样回 False ——
+    误传关键字给旧签名会直接 TypeError 炸回合,退回无流式调用永远安全。
+    W1 落地带 on_delta 的签名后此闸门自动放行,driver 无需再改。
+    """
+    try:
+        return "on_delta" in inspect.signature(converse).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _asf_filters(region: str | None, timerange: str | None
+                 ) -> tuple[str | None, str | None, str | None, list[str]]:
+    """把 facade 归一化的 search_data 过滤字段翻译为 asf_search 参数。
+
+    facade(_validate_cycle_action)只透传非空字符串:region 是 WKT 或地名,
+    timerange 形如 "2019-06-01/2019-08-31"(容忍 ~ 分隔,单端也认)。
+    返回 (intersects_wkt, start, end, notes):翻译不出的条件不上送(ASF 收到
+    坏参数会整次报错),但必须进 notes 如实注记 —— 过滤条件绝不静默蒸发。
+    """
+    notes: list[str] = []
+    wkt = region if region and _WKT_RE.match(region) else None
+    if region and wkt is None:
+        notes.append(f"区域「{clip_summary(region, max_chars=40)}」非 WKT,"
+                     f"ASF 未按空间过滤")
+    start = end = None
+    if timerange:
+        halves = [p.strip() for p in re.split(r"\s*[/~]\s*", timerange, maxsplit=1)]
+        halves += [""] * (2 - len(halves))  # 单端形态("2019-06")按只给 start 处理
+        start = halves[0] if _DATE_RE.match(halves[0]) else None
+        end = halves[1] if _DATE_RE.match(halves[1]) else None
+        if start is None and end is None:
+            notes.append(f"时间范围「{clip_summary(timerange, max_chars=40)}」"
+                         f"无法解析,ASF 未按时间过滤")
+    return wkt, start, end, notes
 
 
 def _human_size(num_bytes: float) -> str:
@@ -125,9 +199,17 @@ class Driver:
         self.bus = EventBus()
         self._probe = probe
         self._tokens: dict[str, CancelToken] = {}
+        # 无 run 会话的会话级取消意图(/api/abort 无 run 情形):converse 回合
+        # 不产生 run,没有持久化 control 位可落 —— 同进程一次性 token,
+        # converse_loop 在周期边界消费(_loop_cancel_requested)
+        self._session_cancels: set[str] = set()
         # 在途执行任务的强引用(asyncio 只弱引用 task):回合生成器被提前关闭
         # (断连/关停)后 exec_task 仍要继续跑完当前步,不能被 GC 掐断(P2-2r2)
         self._exec_tasks: set[asyncio.Task] = set()
+        # 在途 LLM 线程任务的强引用(_exec_tasks 同款,0814B §1.3):流式回合
+        # 生成器在 delta 中途被关闭(客户端断连)后,brain.converse 线程仍要
+        # 跑完收尾(同步 HTTP 调用本就无法中断),不能被 GC 掐断
+        self._llm_tasks: set[asyncio.Task] = set()
         # 本 run 用过的自带保活的后端实例(WslJobBackend),run 收尾统一释放
         # keepalive(WSL P2:此前 sleep infinity 随 run 数量堆积泄漏)
         self._run_backends: dict[str, list[JobBackend]] = {}
@@ -167,6 +249,15 @@ class Driver:
         token = self._tokens.get(run_id)
         if token is not None:
             token.cancel()
+
+    def request_session_cancel(self, session_id: str) -> None:
+        """无 run 会话的取消入口(/api/abort 在 run_id 缺省且会话无 run 时调用)。
+
+        converse 回合不产生 run,取消意图没有 control 位可落盘 —— 置同进程
+        会话级一次性 token,converse_loop 在周期边界消费(消费即清除,不让
+        遗留意图误拦下一个回合)。有 run 的会话仍走 request_cancel(run_id),
+        语义不变(control 位落盘 + run 级 token)。"""
+        self._session_cancels.add(session_id)
 
     def _backend_for(self, run: dict, cap: Capability, method_id: str,
                      job_dir: str | None = None) -> JobBackend:
@@ -237,13 +328,21 @@ class Driver:
                                   "附 session_title(不超过 12 字的中文标题,"
                                   "概括用户想做的事)")
             outcome: ConverseResult | None = None
+            stream_out: dict = {}
             try:
-                outcome = self.brain.converse(
-                    text, history=history,
-                    state_summary=state_summary,
-                    registry=self.registry)
+                # converse 经线程桥调用(0814B §1.3):say.delta / say.abort 帧
+                # 裸 yield 只进回合 NDJSON,不经 _emit(不上总线/trace,例外
+                # 条款见 docs/AGENT-LOOP.md §4.1);结果写 stream_out,失败
+                # 语义与旧同步调用一致,之后的分支零改动
+                async for frame in self._converse_stream(
+                        text, history=history,
+                        state_summary=state_summary, out=stream_out):
+                    yield frame
+                outcome = stream_out.get("outcome")
             except BrainUnavailable:
                 # 诚实降级:LLM 失败不装哑,说明一句后走规则路径(与无 LLM 同轨)
+                # 截断/失败的半截回复到不了这之后:outcome 保持 None → 不落
+                # 聊天历史、不驱动动作(say.abort 已在流内标废)
                 yield self._emit(ev.note("warn", "LLM 暂不可用,已退化为关键词模式"))
             if outcome is not None:
                 if want_title and outcome.session_title:
@@ -292,6 +391,90 @@ class Driver:
         async for event in self._plan_turn(session_id, session, text, sc,
                                            intent_source=intent.source):
             yield event
+
+    # ---------------- converse 线程桥(turn 的流式辅助,0814B §1.3) ----------------
+
+    def _reap_llm_task(self, task: asyncio.Task) -> None:
+        """LLM 线程任务收尾回调:释放强引用 + 兜底取回异常(_reap_exec_task 同款)。
+
+        回合生成器在 delta 中途被提前关闭(断连/关停)后无人再消费
+        task.result(),不取回异常会积累「Task exception was never retrieved」
+        告警噪音。正常路径的异常仍由 _converse_stream 的 task.result() 上抛,
+        这里只兜底、不处置。"""
+        self._llm_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def _converse_stream(self, text: str, *, history: list[dict],
+                               state_summary: str, out: dict) -> AsyncIterator[dict]:
+        """converse 的线程桥:同步 LLM 调用进线程,delta 增量经队列回事件循环
+        (异步化顺带解决旧隐患 —— 此前同步调用会把事件循环阻塞至多 60s)。
+
+        产出帧闭集:say.delta × N;失败且已外发过时补一帧 say.abort 收尾
+        (reason:truncated=token 上限截断 / unavailable=供应商失败)。这些帧
+        由调用方(turn)裸 yield 只进回合 NDJSON,不经 _emit(例外条款见
+        docs/AGENT-LOOP.md §4.1)。成功结果写 out["outcome"](异步生成器无
+        返回值,_loop_action_events 的 out 写回同款);失败原样上抛 ——
+        turn() 的 BrainUnavailable 分支语义与旧同步调用逐字节一致。
+
+        facade.converse 的 on_delta 形参由 W1 并行开发:签名未声明时退回
+        无流式调用(仍进线程,零 delta),集成后自动点亮流式。
+        """
+        converse = self.brain.converse
+        kwargs = dict(history=history, state_summary=state_summary,
+                      registry=self.registry)
+        if not _supports_on_delta(converse):
+            out["outcome"] = await asyncio.to_thread(converse, text, **kwargs)
+            return
+
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+
+        def push(chunk: str) -> None:
+            # provider 线程 → 事件循环的唯一通道;循环已关闭(服务关停竞态)
+            # 时静默丢弃 —— 已无消费者,增量无处可去(终稿语义不受影响)
+            try:
+                loop.call_soon_threadsafe(q.put_nowait, chunk)
+            except RuntimeError:
+                pass
+
+        task = asyncio.create_task(
+            asyncio.to_thread(converse, text, on_delta=push, **kwargs))
+        # 强引用防 GC(asyncio 只弱引用 task):回合生成器在 yield 点被提前
+        # 关闭(客户端断连)后线程任务仍要跑完收尾。哨兵经 add_done_callback
+        # 投递(成功/失败都必达,消费循环绝不悬停);回调按登记序执行:
+        # 先收割(释放引用 + 兜底取回异常),再投哨兵唤醒消费侧。
+        self._llm_tasks.add(task)
+        task.add_done_callback(self._reap_llm_task)
+        task.add_done_callback(lambda _t: q.put_nowait(_CONVERSE_DONE))
+
+        emitted = False   # 是否外发过 delta:决定失败时要不要补 say.abort
+        finished = False
+        while not finished:
+            chunk = await q.get()
+            if chunk is _CONVERSE_DONE:
+                break
+            parts = [chunk]
+            while not q.empty():  # 排空合帧:消费慢时积压的增量合成一帧外发
+                nxt = q.get_nowait()
+                if nxt is _CONVERSE_DONE:
+                    finished = True
+                    break
+                parts.append(nxt)
+            merged = "".join(parts)
+            if merged:
+                emitted = True
+                yield ev.say_delta(merged)
+        try:
+            out["outcome"] = task.result()
+        except BrainTruncated:
+            if emitted:  # 半截回复标废;零外发则无废可标,与改造前序列一致
+                yield ev.say_abort("truncated")
+            raise
+        except BrainUnavailable:
+            if emitted:
+                yield ev.say_abort("unavailable")
+            raise
 
     # ---------------- 规划回合(turn 的规划主体,converse plan 动作与规则路径共用) ----------------
 
@@ -668,6 +851,455 @@ class Driver:
         if snippets:
             lines.append("用户记忆:" + ";".join(snippets))
         return "\n".join(lines)
+
+    # ---------------- 自主循环回合(LOOP-CONTRACT §4) ----------------
+
+    async def converse_loop(self, session_id: str, text: str, *,
+                            max_cycles: int = 6) -> AsyncIterator[dict]:
+        """自主循环回合:一个回合内自主跑多个「决策 → 动作」周期。
+
+        「单周期单决策」纪律不变:LLM 每周期仍只输出一个闭集动作或 say 收束,
+        周期间由本方法(确定性驱动器)衔接 —— 动作结果压缩为 ≤300 字摘要回灌
+        下一周期(原始日志绝不进 LLM)。终止条件闭集:say(正常终止)|
+        max_cycles 耗尽 | 取消 | BrainUnavailable | 同签名连续 3 次提案熔断 |
+        同签名连续 2 次失败(unresolved_failure)。除 say 外一律 note 收尾。
+
+        降级闸门(零回归铁律):brain 不可用或缺 cycle 职责(B3 未就绪/被拔除)
+        时逐事件转发既有 turn(),该路径行为与单步版本逐字节一致。
+
+        签名注记:契约 §4 的 converse_loop(text) 是省写 —— 与 turn 同形,
+        首参是 session_id(Driver 不持有会话标识,由调用方注入,turn 同款)。
+        """
+        brain = self.brain
+        if not getattr(brain, "enabled", False) or not callable(getattr(brain, "cycle", None)):
+            async for event in self.turn(session_id, text):
+                yield event
+            return
+
+        store = self.store
+        if store.get_session(session_id) is None:
+            store.create_session(session_id, session_id)
+        store.append_chat(session_id, "user", text)
+        max_cycles = max(1, int(max_cycles))
+        # 陈旧取消意图的入口清零(P2-8):会话级 token 只服务「取消在途回合」,
+        # 上一回合收尾后才置位的 /api/abort 若滞留到现在,会在第 1 周期边界
+        # 误杀本回合 —— 新回合入口即作废。run 级 control 位不动:它有排队
+        # 语义(归 run_queue 的未来 execute 消费者,见 _loop_cancel_requested)。
+        self._session_cancels.discard(session_id)
+
+        goal = text
+        cycles_summary: list[str] = []  # 逐周期结构化摘要(唯一回灌 LLM 的过程记忆)
+        route_pin: int | None = None    # 首周期后钉死路由(周期间不换供应商)
+        prev_sig: str | None = None     # 上一周期动作签名(重复提案熔断)
+        repeat = 0
+        failed_sig: str | None = None   # 最近一次失败的动作签名(未换策略熔断)
+        failed_streak = 0
+        closed = False                  # 已显式收束(区分 max_cycles 自然耗尽)
+
+        with usage_context(session_id):  # 用量账本:本回合 LLM 调用记到该会话
+            for n in range(1, max_cycles + 1):
+                # 1. 取消检查(周期边界):E3 控制位 + 同进程 token 快路径
+                if self._loop_cancel_requested(session_id):
+                    yield self._emit(ev.note(
+                        "warn", f"自主循环已取消(第 {n} 周期边界);已完成周期的结果保留"))
+                    closed = True
+                    break
+
+                # 2. steering:捎话(USER_MESSAGE,steer)并入回合目标
+                for msg in self._consume_loop_steering(session_id):
+                    goal += f"\n[用户第 {n} 周期补充] {msg}"
+                    yield self._emit(ev.intervention(
+                        f"已并入用户补充:{clip_summary(msg, max_chars=80)}", mode="steer"))
+
+                # 3. LLM 决策:同步 provider 进线程池,不阻塞事件循环
+                #    (store/SQLite 操作全部留在事件循环线程,包括状态摘要)
+                state_summary = self._converse_state(session_id)
+                try:
+                    result = await asyncio.to_thread(
+                        brain.cycle, goal=goal, cycles_summary=list(cycles_summary),
+                        state_summary=state_summary, registry=self.registry,
+                        route_pin=route_pin)
+                except BrainUnavailable:
+                    yield self._emit(ev.note(
+                        "warn", f"LLM 暂不可用,自主循环在第 {n} 周期收束"
+                                f"(已完成周期的结果保留)"))
+                    closed = True
+                    break
+                if route_pin is None:
+                    pin = getattr(result, "route_index", None)  # B3 可选字段,缺失不钉
+                    if isinstance(pin, int) and not isinstance(pin, bool):
+                        route_pin = pin
+
+                action = getattr(result, "action", None)
+                say_text = getattr(result, "say", None)
+                say_text = say_text.strip() if isinstance(say_text, str) else ""
+                if getattr(result, "done", False) or not isinstance(action, dict):
+                    # say 收束(正常终止):有 say 无 action;坏形状同语义兜底
+                    reply = say_text or "本回合没有更多可做的了。"
+                    yield self._emit(ev.say([reply]))
+                    store.append_chat(session_id, "agent", reply)
+                    closed = True
+                    break
+
+                # 4. 周期账:每周期恰好一条,先于动作执行(前端进度条契约)
+                kind = str(action.get("type") or "")
+                yield self._emit(ev.agent_cycle(n, max_cycles, kind))
+                sig = json.dumps(action, sort_keys=True, ensure_ascii=False)
+                repeat = repeat + 1 if sig == prev_sig else 1
+                prev_sig = sig
+                if repeat >= _LOOP_REPEAT_BREAKER:
+                    yield self._emit(ev.note(
+                        "warn", f"熔断:同一动作已连续提出 {repeat} 次({kind}),"
+                                f"不再执行,回合收束"))
+                    closed = True
+                    break
+
+                # 5. 动作执行(闭集分发;单周期失败不炸回合,如实记入摘要)
+                out: dict = {}
+                async for event in self._loop_action_events(
+                        session_id, n, max_cycles, goal, action, say_text, out):
+                    yield event
+                summary = clip_summary(out.get("summary") or f"{kind} 无输出")
+                cycles_summary.append(f"[{n}] {kind}:{summary}")
+                if out.get("terminal"):
+                    closed = True
+                    break
+
+                # 6. 失败未换策略熔断:同签名连续失败 2 次即停,如实声明未解决
+                if out.get("ok", True):
+                    failed_sig, failed_streak = None, 0
+                else:
+                    failed_streak = failed_streak + 1 if sig == failed_sig else 1
+                    failed_sig = sig
+                    if failed_streak >= _LOOP_FAILURE_BREAKER:
+                        yield self._emit(ev.note(
+                            "warn", f"unresolved_failure:同一动作连续失败 "
+                                    f"{failed_streak} 次未换策略({kind}:{summary}),"
+                                    f"回合收束,问题未解决"))
+                        closed = True
+                        break
+
+        if not closed:
+            digest = clip_summary(";".join(cycles_summary), max_chars=200) or "无"
+            yield self._emit(ev.note(
+                "warn", f"已达周期上限({max_cycles}),回合收束;进展:{digest}"))
+
+    def _loop_cancel_requested(self, session_id: str) -> bool:
+        """自主循环的周期边界取消检查(E3:control 位是持久化意图,token 是快路径)。
+
+        消费语义:run 未在执行(status != running)且不在运行队列时,本循环
+        就是取消意图的唯一在场消费者 —— 兑现(收束回合)后复位 control 位并
+        释放 token,不让遗留意图误拦用户下一次显式执行;执行回合在场
+        (running)时只读不碰,位的归属在执行回合的入口/步间检查点。
+
+        排队例外(P1-4):run 在 run_queue 有活跃条目(pending/running)时,
+        control 位属于未来的 execute 消费者(调度器出队 → execute 入口读位
+        收尾为 interrupted)—— 这里只读不清,否则用户取消过的重计算照样开跑
+        (重型计算管控红线)。
+        """
+        # 会话级取消(/api/abort 无 run 情形置位):一次性消费,先于 run 检查
+        if session_id in self._session_cancels:
+            self._session_cancels.discard(session_id)
+            return True
+        run = self.store.latest_run(session_id)
+        if run is None:
+            return False  # 无 run 且无会话级取消:无取消载体
+        run_id = run["run_id"]
+        token = self._tokens.get(run_id)
+        hit = bool(token is not None and token.cancelled) \
+            or run.get("control") == "cancel_requested"
+        if hit and run.get("status") != "running":
+            from insar_agent.loop.queue import RunQueue  # 局部导入:仅此处用到队列视图
+
+            if RunQueue(self.store).position(run_id) is None:
+                if run.get("control") == "cancel_requested":
+                    self.store.clear_cancel(run_id)
+                self._tokens.pop(run_id, None)
+        return hit
+
+    def _consume_loop_steering(self, session_id: str) -> list[str]:
+        """消费捎话(USER_MESSAGE,deliver_as=steer)→ 返回文本列表,并入 goal。
+
+        归属纪律参照 _consume_steer:会话有 run 时只取绑定该 run 的行
+        (include_unattributed=False,防跨会话互吞 —— REVIEW-r2 P1-3 同款);
+        无 run 时只取未定向(run_id IS NULL)的行,无 run 会话的捎话本就无从
+        绑定。其余动作(KILL/SET_* 等)一律不动:它们的消费点在执行回合。
+        """
+        store = self.store
+        run = store.latest_run(session_id)
+        if run is not None:
+            pool = store.due_actions("steer", run_id=run["run_id"],
+                                     include_unattributed=False)
+        else:
+            pool = [a for a in store.due_actions("steer") if a["run_id"] is None]
+        out: list[str] = []
+        for action in pool:
+            if action["action"] != "USER_MESSAGE":
+                continue
+            store.consume_action(action["id"])
+            msg = str((action.get("payload") or {}).get("text") or "").strip()
+            if msg:
+                out.append(msg[:500])  # 捎话与 converse 历史条目同款硬预算
+        return out
+
+    async def _loop_action_events(self, session_id: str, n: int, max_cycles: int,
+                                  goal: str, action: dict, say_text: str,
+                                  out: dict) -> AsyncIterator[dict]:
+        """执行一个循环动作。事件直接产出;结果写回 out(异步生成器无返回值):
+        summary=结果摘要 / ok=是否成功(喂给未换策略熔断)/ terminal=是否收束回合。
+
+        纪律:动作语义全部复用既有代码路径(_apply_converse/_plan_turn 同源),
+        绝不绕过校验/状态机;单个动作抛错不炸回合 —— 隔离为失败摘要留给 LLM
+        换策略(EventBus 监听器隔离的同款哲学,absorb-E8)。
+        """
+        kind = str(action.get("type") or "")
+        store = self.store
+
+        if kind == "thinking":
+            body = say_text or "(整理思路)"
+            yield self._emit(ev.thinking("思考", body))
+            out.update(summary=f"思考:{body}", ok=True)
+            return
+
+        if kind == "execute":
+            # 红线 §0.3:execute 只产生确认卡(ask)+ say 收束,绝不自启流水线;
+            # 「计划不会自动开始」的用户承诺不因自主循环而变。
+            run = store.latest_run(session_id)
+            if run is None:
+                yield self._emit(ev.note(
+                    "warn", "还没有可执行的 run:先完成规划,再请求执行"))
+                out.update(summary="execute 被拒:当前会话还没有 run,应先 plan", ok=False)
+                return
+            reply = say_text or "计划已就绪,等你确认后开始执行(计划不会自动开始)。"
+            yield self._emit(ev.ask(
+                f"Agent 请求执行 run {run['run_id']} 的待跑步骤,是否批准?",
+                [{"key": "confirm", "label": "确认执行(等价点击「运行流水线」)",
+                  "options": ["run_pipeline"]}]))
+            yield self._emit(ev.say([reply]))
+            store.append_chat(session_id, "agent", reply)
+            out.update(summary=f"已发执行确认卡等待用户批准(run {run['run_id']})",
+                       ok=True, terminal=True)
+            return
+
+        if kind == "plan":
+            # 与下方工具类动作同款单动作异常隔离(P2-11):规划流程(探测/建库/
+            # 决策点)任一环节抛错只记失败摘要留给 LLM 换策略,不炸回合
+            try:
+                async for event in self._loop_plan_action(session_id, goal, action, out):
+                    yield event
+            except Exception as exc:  # noqa: BLE001 —— 单周期失败隔离,如实进摘要
+                log.exception("自主循环动作 plan 执行异常")
+                out.update(summary=f"plan 执行异常:{type(exc).__name__}: {exc}",
+                           ok=False)
+            return
+
+        if kind not in LOOP_ACTIONS:
+            yield self._emit(ev.note(
+                "warn", f"动作越界已忽略:{kind!r}(闭集:{LOOP_ACTIONS})"))
+            out.update(summary=f"动作 {kind!r} 越界被拦截,请改用闭集动作或 say 收束",
+                       ok=False)
+            return
+
+        # ---- 其余动作:tool.start/tool.end 包裹的只读查询或入队 ----
+        tool_id = f"loop{n}"
+        label = _LOOP_ACTION_LABELS.get(kind, kind)
+        yield self._emit(ev.tool_start(tool_id, f"[{n:02d}/{max_cycles:02d}]", kind, label))
+        extra_events: list[dict] = []
+        try:
+            if kind == "search_data":
+                summary, ok = await self._loop_search_data(action)
+            elif kind == "inspect_file":
+                summary, ok = self._loop_inspect_file(session_id, action)
+            elif kind == "check_env":
+                summary, ok = self._env_summary_text(), True
+            elif kind == "list_data":
+                summary, ok = self._datasets_text(), True
+            elif kind == "status":
+                summary, ok = self._run_status_text(session_id), True
+            else:  # set_params / set_method
+                summary, ok, extra_events = self._loop_queue_change(session_id, kind, action)
+        except Exception as exc:  # noqa: BLE001 —— 单周期失败隔离,如实进摘要
+            log.exception("自主循环动作 %s 执行异常", kind)
+            summary, ok = f"{kind} 执行异常:{type(exc).__name__}: {exc}", False
+        yield self._emit(ev.tool_end(tool_id, 0 if ok else 1, clip_summary(summary)))
+        for event in extra_events:
+            yield self._emit(event)
+        out.update(summary=summary, ok=ok)
+
+    async def _loop_plan_action(self, session_id: str, goal: str, action: dict,
+                                out: dict) -> AsyncIterator[dict]:
+        """plan 动作:与 turn 的 converse plan 分支同源 —— 场景闭集校验后进入
+        既有规划流程(_plan_turn:探测、next_run 消费、make_plan、决策点叙述)。
+        规划有问题(缺引擎等)时 run 停在 planning,如实记为失败摘要。
+        """
+        sc = scenario_of(str(action.get("scenario") or ""))
+        if sc is None:
+            yield self._emit(ev.note(
+                "warn", f"计划动作的场景越界,已忽略:{action.get('scenario')!r}"))
+            out.update(summary=f"plan 被拒:场景 {action.get('scenario')!r} 越界", ok=False)
+            return
+        region = action.get("region")
+        timerange = action.get("timerange")
+        region = region.strip() if isinstance(region, str) and region.strip() else None
+        timerange = (timerange.strip()
+                     if isinstance(timerange, str) and timerange.strip() else None)
+        if region or timerange:
+            # 与 turn 的 converse plan 分支同款:只覆盖展示元数据,不进指纹
+            sc = dataclasses.replace(sc, region=region or sc.region,
+                                     dates=timerange or sc.dates)
+        session = self.store.get_session(session_id)
+        async for event in self._plan_turn(session_id, session, goal, sc,
+                                           intent_source="agent_loop"):
+            yield event
+        run = self.store.latest_run(session_id)
+        if run is None or run["status"] == "planning":
+            out.update(summary=f"规划未就绪:{self._run_status_text(session_id)}", ok=False)
+        else:
+            out.update(summary=f"规划完成:{self._run_status_text(session_id)}", ok=True)
+
+    def _loop_queue_change(self, session_id: str, kind: str,
+                           action: dict) -> tuple[str, bool, list[dict]]:
+        """set_params/set_method:与 _apply_converse 同语义 —— 入 pending_actions
+        队列(steer),消费点的 apply_change 会再校验一次。B3 已做闭集校验,
+        这里用 registry 复核一遍(双保险,与消费点纪律同源),越界只拒不炸。
+        返回 (摘要, 是否成功, 追发事件)。
+        """
+        store = self.store
+        run = store.latest_run(session_id)
+        if run is None:
+            return ("参数/方法修改无处归属:当前会话还没有 run,应先 plan", False, [])
+        step = action.get("step")
+        if isinstance(step, bool) or not isinstance(step, int) or step not in self.registry:
+            return (f"步骤号越界:{step!r}(闭集:{sorted(self.registry)})", False, [])
+        cap = self.registry[step]
+        if kind == "set_method":
+            method = action.get("method")
+            if not isinstance(method, str) or cap.method(method) is None:
+                return (f"方法越界:{method!r}(候选:{[m.id for m in cap.methods]})",
+                        False, [])
+            act_name, payload = "SET_METHOD", {"method": method}
+        else:
+            params = action.get("params")
+            if not isinstance(params, dict) or not params:
+                return ("params 缺失或为空", False, [])
+            errors = cap.validate_params(params)
+            if errors:
+                return (f"参数校验失败:{errors}", False, [])
+            act_name, payload = "SET_PARAMS", {"params": params}
+        store.push_action(scope="step", target=str(step), action=act_name,
+                          payload=payload, deliver_as="steer", run_id=run["run_id"])
+        msg = f"已排队:第 {step} 步 {act_name} {payload}(steer,下一检查点生效)"
+        return (msg, True, [ev.intervention(msg, affected=[step])])
+
+    def _loop_inspect_file(self, session_id: str, action: dict) -> tuple[str, bool]:
+        """inspect_file:闭集内文件检查(红线 §0.5「LLM 零命令零路径」)。
+
+        可检查对象只有两类:当前 run 某步的日志尾部与产物清单(step 字段)、
+        按名称匹配的本地数据集(name 字段)。LLM 给的值只做闭集匹配/查表,
+        绝不当文件系统路径解引用;日志读取走 _tail_text 的有界口径。
+        """
+        step = action.get("step")
+        if isinstance(step, int) and not isinstance(step, bool):
+            run = self.store.latest_run(session_id)
+            if run is None:
+                return "没有 run,无步骤日志/产物可查", False
+            row = self.store.load_step(run["run_id"], step)
+            if row is None:
+                return f"第 {step} 步不在当前 run 中", False
+            parts = [f"第 {step} 步「{row.name}」:状态 {row.state},方法 {row.method}"]
+            arts = self.store.artifacts_of(run["run_id"], step)
+            if arts:
+                names = "、".join(Path(a["path"]).name for a in arts[:5])
+                parts.append(f"产物 {len(arts)} 个:{names}")
+            # 日志尾行只在失败时回灌且 ≤120 字(红线 §0.5:原始日志绝不进 LLM,
+            # 只允许失败步骤的错误窗口)—— 成功/在跑步骤的日志与 LLM 无关
+            if row.state == "failed" and row.log_path:
+                tail = _tail_text(Path(row.log_path), limit_kb=4)
+                lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+                if lines:
+                    parts.append(f"日志尾行:{lines[-1][:120]}")
+            return ";".join(parts), True
+        name = str(action.get("name") or "").strip()
+        if name:
+            for d in self._scan_datasets():
+                if name.lower() in str(d.get("name", "")).lower():
+                    rng = d.get("date_range") or {}
+                    span = f",{rng['start']}~{rng['end']}" if rng else ""
+                    kind_label = _DATASET_KIND_LABELS.get(d["kind"], d["kind"])
+                    return (f"数据集 {d['name']}:{kind_label},"
+                            f"{_human_size(d['size_bytes'])}{span}", True)
+            return f"没有名称匹配「{name}」的本地数据集", False
+        return "inspect_file 需要 step(步骤号)或 name(数据集名),都未提供", False
+
+    async def _loop_search_data(self, action: dict) -> tuple[str, bool]:
+        """search_data:本地盘点 + ASF 检索 + 可选 web,经 gather_limited 并行扇出。
+
+        insar_agent.net(B4)与 loop.subtasks(B8)是并行在建单元,经契约解耦:
+        模块缺失/接口不符/扇出抛错 → 优雅降级为仅本地盘点(_memory_snippets
+        同款防御纪律),检索能力缺位绝不炸循环。部分失败不整体失败(net 契约
+        同语义):任一来源成功即算本周期成功。联网纪律:只发查询词,不发数据。
+
+        字段契约(P1-1):facade 校验器透传的是 region/timerange(循环提示词
+        教的也是这两个),由 _asf_filters 翻译为 asf_search 的
+        intersects_wkt/start/end;翻译不出的条件不上送、进摘要注记。
+        """
+        import importlib
+
+        def field(key: str) -> str | None:
+            v = action.get(key)
+            return v.strip() if isinstance(v, str) and v.strip() else None
+
+        try:
+            net = importlib.import_module("insar_agent.net")
+            subtasks = importlib.import_module("insar_agent.loop.subtasks")
+            asf_search, web_search = net.asf_search, net.web_search
+            gather_limited = subtasks.gather_limited
+        except Exception:  # noqa: BLE001 —— 可选依赖,任何失败都按「模块未就绪」处置
+            local = await asyncio.to_thread(self._datasets_summary_line)
+            return f"本地数据集:{local}(联网检索模块未就绪,已降级为仅本地盘点)", True
+
+        wkt, start, end, filter_notes = _asf_filters(field("region"), field("timerange"))
+        named = {
+            "local": asyncio.to_thread(self._datasets_summary_line),
+            "asf": asyncio.to_thread(asf_search, intersects_wkt=wkt,
+                                     start=start, end=end,
+                                     max_results=20),
+        }
+        query = field("query")
+        if query:
+            named["web"] = asyncio.to_thread(web_search, query, k=5)
+        try:
+            results = await gather_limited(named, limit=3, timeout=25.0)
+        except Exception:  # noqa: BLE001 —— B8 契约防御:扇出器坏了退回仅本地盘点
+            log.debug("search_data 扇出失败,降级为仅本地盘点", exc_info=True)
+            for coro in named.values():
+                try:
+                    coro.close()  # 未被消费的协程显式关闭,不留 never-awaited 告警
+                except Exception:  # noqa: BLE001
+                    pass
+            local = await asyncio.to_thread(self._datasets_summary_line)
+            return f"本地数据集:{local}(检索扇出失败,已降级为仅本地盘点)", True
+
+        parts: list[str] = []
+        any_ok = False
+        for key, title in (("local", "本地数据集"), ("asf", "ASF 检索"), ("web", "网页检索")):
+            r = results.get(key)
+            if r is None:
+                continue
+            if getattr(r, "ok", False):
+                any_ok = True
+                value = getattr(r, "value", None)
+                if key == "local":
+                    parts.append(f"{title}:{value}")
+                elif isinstance(value, list):
+                    parts.append(f"{title}:命中 {len(value)} 条")
+                else:
+                    parts.append(f"{title}:完成")
+            else:
+                err = clip_summary(str(getattr(r, "error", "") or "未知错误"), max_chars=60)
+                parts.append(f"{title}:失败({err})")
+        parts.extend(f"注:{n}" for n in filter_notes)  # 被丢弃的过滤条件如实可见
+        return ";".join(parts) or "检索无结果", any_ok
 
     # ---------------- 执行回合 ----------------
 

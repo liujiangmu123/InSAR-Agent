@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import socket
+import threading
 import time
 from contextlib import asynccontextmanager
 from functools import partial
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -28,6 +31,7 @@ import httpx
 from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
 
+from conftest import TIME_FACTOR
 from insar_agent.api.app import create_app
 from insar_agent.mcp import backend as mcp_backend
 from insar_agent.mcp import server as mcp_server_module
@@ -38,7 +42,7 @@ PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 EXPECTED_TOOLS = {
     "insar_list_sessions", "insar_create_session", "insar_plan_run",
     "insar_execute_run", "insar_run_status", "insar_intervene",
-    "insar_get_provenance", "insar_list_figures",
+    "insar_get_provenance", "insar_list_figures", "insar_converse",
 }
 
 
@@ -120,7 +124,7 @@ def asgi_backend(backend_app):
 # ---------------- 用例 ----------------
 
 def test_tool_enumeration_and_annotations(asgi_backend):
-    """工具枚举:8 个 insar_ 前缀工具,描述非空,读写注解正确。"""
+    """工具枚举:9 个 insar_ 前缀工具,描述非空,读写注解正确。"""
     async def flow():
         async with mcp_client() as sess:
             listed = await sess.list_tools()
@@ -363,4 +367,368 @@ def test_stdio_entrypoint_smoke():
                 listed = await session.list_tools()
                 assert {t.name for t in listed.tools} == EXPECTED_TOOLS
 
+    run(flow())
+
+
+# ================ 自主循环工具 insar_converse(契约 §10)================
+#
+# 后端 POST /api/converse 由 B5 并行开发,driver.converse_loop 由 B1 并行开发:
+# 本区用例对 MCP 自己的两层打桩验证 —— 工具层(MCP 会话真实 call_tool,HTTP 面
+# 用注入 transport 伪造后端)与 backend 层(直接调 mcp.backend.converse)。
+# 真后端联调用例(test_converse_over_real_app_when_endpoint_lands)在端点
+# 落地前自动跳过,落地后无须改动即激活。
+
+#: 契约 §1/§4 形状的多周期回合剧本:每周期一条 agent.cycle,工具执行走
+#: tool.start/tool.end,中途告警 note 不是收尾,execute 只产生确认卡(ask),
+#: say = 正常收束(parts 里的对象部件应被过滤)。
+CONVERSE_SCRIPT = [
+    {"t": "agent.cycle", "n": 1, "max": 4, "action": "search_data"},
+    {"t": "tool.start", "id": "cv1", "name": "search_data", "label": "检索 ASF 归档"},
+    {"t": "tool.end", "id": "cv1", "exit": 0, "summary": "命中 12 景 SLC"},
+    {"t": "agent.cycle", "n": 2, "max": 4, "action": "check_env"},
+    {"t": "tool.start", "id": "cv2", "name": "check_env", "label": "探测处理环境"},
+    {"t": "tool.end", "id": "cv2", "exit": 0, "summary": "引擎 0/7 就绪(将走模拟)"},
+    {"t": "note", "tone": "warn", "text": "云端步骤将跳过"},
+    {"t": "agent.cycle", "n": 3, "max": 4, "action": "plan"},
+    {"t": "agent.cycle", "n": 4, "max": 4, "action": "execute"},
+    {"t": "ask", "prompt": "将执行 11 步计划(模拟模式),确认?", "fields": []},
+    {"t": "say", "parts": ["数据与环境已核对:12 景 SLC,计划就绪,等待执行确认。",
+                          {"kind": "card"}]},
+]
+
+
+def _ndjson_bytes(events: list[dict]) -> bytes:
+    return "".join(
+        json.dumps(e, ensure_ascii=False) + "\n" for e in events).encode("utf-8")
+
+
+class _HangingStream(httpx.AsyncByteStream):
+    """先吐出部分事件行,然后长眠不收尾 —— 模拟回合超出消费窗仍未结束。"""
+
+    def __init__(self, lines: list[bytes], hang_s: float = 3600.0):
+        self._lines = lines
+        self._hang_s = hang_s
+
+    async def __aiter__(self):
+        for line in self._lines:
+            yield line
+        await asyncio.sleep(self._hang_s)   # deadline 必须在此打断
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _StreamTransport(httpx.AsyncBaseTransport):
+    """返回自定义流式响应的 transport(MockTransport 只能给定长 body,
+    验证 deadline 截断需要「可悬挂」的流)。"""
+
+    def __init__(self, make_response):
+        self._make_response = make_response
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return self._make_response(request)
+
+
+@pytest.fixture()
+def stub_transport():
+    """把 MCP 后端层指到注入的 httpx transport(无真实后端,用后复位)。"""
+    def install(transport: httpx.AsyncBaseTransport) -> None:
+        mcp_backend.configure(base_url="http://insar-backend.test",
+                              transport=transport)
+    yield install
+    mcp_backend.reset()
+
+
+def test_converse_tool_registration_and_schema():
+    """① 工具注册与 schema:参数名、必填集、max_cycles 边界(1..12)进 schema,
+    读写注解正确(非只读、非破坏性)。"""
+    async def flow():
+        async with mcp_client() as sess:
+            listed = await sess.list_tools()
+            tool = next(t for t in listed.tools if t.name == "insar_converse")
+            assert tool.description and "自主循环" in tool.description
+            schema = tool.input_schema
+            props = schema["properties"]
+            assert {"session_id", "text", "max_cycles"} <= set(props)
+            assert set(schema.get("required", [])) == {"session_id", "text"}
+            assert props["max_cycles"].get("minimum") == 1
+            assert props["max_cycles"].get("maximum") == 12
+            assert props["max_cycles"].get("default") == 6
+            assert tool.annotations.read_only_hint is False
+            assert tool.annotations.destructive_hint is False
+    run(flow())
+
+
+def test_converse_multi_cycle_digest(stub_transport):
+    """② 打桩流(工具层):契约形状的多周期事件 → 周期账/结论/工具摘要/确认卡;
+    同时验证请求体形状({session, text, max_cycles})与路径 /api/converse。"""
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST" and request.url.path == "/api/converse"
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, content=_ndjson_bytes(CONVERSE_SCRIPT),
+                              headers={"content-type": "application/x-ndjson"})
+
+    stub_transport(httpx.MockTransport(handler))
+
+    async def flow():
+        async with mcp_client() as sess:
+            out = payload_of(await call(sess, "insar_converse", {
+                "session_id": "s-loop", "text": "检查数据并准备计划",
+                "max_cycles": 4}))
+            assert seen == [{"session": "s-loop", "text": "检查数据并准备计划",
+                             "max_cycles": 4}]
+            assert out["session_id"] == "s-loop"
+            assert out["cycles"] == [
+                {"n": 1, "action": "search_data"}, {"n": 2, "action": "check_env"},
+                {"n": 3, "action": "plan"}, {"n": 4, "action": "execute"}]
+            assert out["ended_by"] == "say"
+            assert out["reply"] == "数据与环境已核对:12 景 SLC,计划就绪,等待执行确认。"
+            assert out["tool_summaries"] == ["命中 12 景 SLC", "引擎 0/7 就绪(将走模拟)"]
+            assert out["problems"] == []          # 告警 note 不是坏消息
+            assert out["questions"] == [
+                {"prompt": "将执行 11 步计划(模拟模式),确认?", "fields": []}]
+            assert out["truncated"] is False and out["stream_finished"] is True
+            assert "questions" in out["next"]     # 确认卡要转述给用户
+    run(flow())
+
+
+def test_converse_note_wrapup(stub_transport):
+    """②b 预算耗尽:回合以 note 收尾(无 say)→ ended_by=note,收尾语进 reply,
+    指引提示调大 max_cycles / 拆小目标。"""
+    script = [
+        {"t": "agent.cycle", "n": 1, "max": 2, "action": "thinking"},
+        {"t": "agent.cycle", "n": 2, "max": 2, "action": "status"},
+        {"t": "note", "tone": "warn",
+         "text": "周期预算耗尽:已完成状态盘点,计划未生成"},
+    ]
+    stub_transport(httpx.MockTransport(lambda request: httpx.Response(
+        200, content=_ndjson_bytes(script))))
+
+    async def flow():
+        async with mcp_client() as sess:
+            out = payload_of(await call(sess, "insar_converse",
+                                        {"session_id": "s", "text": "推进"}))
+            assert out["ended_by"] == "note"
+            assert out["reply"] == "周期预算耗尽:已完成状态盘点,计划未生成"
+            assert out["truncated"] is False       # 回合正常收尾,不是截断
+            assert [c["action"] for c in out["cycles"]] == ["thinking", "status"]
+            assert "max_cycles" in out["next"]
+    run(flow())
+
+
+@pytest.mark.timing  # 判定窗 = 消费 deadline(区分「事件已到」与「流悬挂」),乘 TIME_FACTOR
+def test_converse_deadline_truncation(stub_transport, monkeypatch):
+    """③ deadline 截断:流吐出 2 个周期后悬挂 → INSAR_MCP_CONVERSE_TIMEOUT 打断,
+    如实标 truncated=true 且 next 给轮询指引(断开不取消回合)。"""
+    monkeypatch.setenv("INSAR_MCP_CONVERSE_TIMEOUT", str(0.6 * TIME_FACTOR))
+    lines = [json.dumps(e, ensure_ascii=False).encode("utf-8") + b"\n" for e in (
+        {"t": "agent.cycle", "n": 1, "max": 6, "action": "search_data"},
+        {"t": "agent.cycle", "n": 2, "max": 6, "action": "plan"},
+    )]
+    stub_transport(_StreamTransport(lambda request: httpx.Response(
+        200, stream=_HangingStream(lines), request=request)))
+
+    async def flow():
+        async with mcp_client() as sess:
+            out = payload_of(await call(sess, "insar_converse",
+                                        {"session_id": "s", "text": "推进"}))
+            assert out["truncated"] is True and out["stream_finished"] is False
+            assert out["ended_by"] is None and out["reply"] == ""
+            assert [c["action"] for c in out["cycles"]] == ["search_data", "plan"]
+            assert "INSAR_MCP_CONVERSE_TIMEOUT" in out["next"]   # 可调上限
+            assert "insar_run_status" in out["next"]             # 轮询指引
+    run(flow())
+
+
+@pytest.mark.timing  # 判定窗 = 消费 deadline,乘 TIME_FACTOR
+def test_converse_truncation_ignores_midstream_note(stub_transport, monkeypatch):
+    """③b 摘要不误判(P2-9):deadline 截断前恰好收到一条中途告警 note ——
+    绝不能把它当收尾(此前 ended_by="note"、truncated=false,宿主被误导为
+    「回合已正常收尾」而不再轮询)。截断流一律 ended_by=None + truncated=true。"""
+    monkeypatch.setenv("INSAR_MCP_CONVERSE_TIMEOUT", str(0.6 * TIME_FACTOR))
+    lines = [json.dumps(e, ensure_ascii=False).encode("utf-8") + b"\n" for e in (
+        {"t": "agent.cycle", "n": 1, "max": 6, "action": "check_env"},
+        {"t": "note", "tone": "warn", "text": "云端步骤将跳过"},  # 中途告警,不是收尾
+    )]
+    stub_transport(_StreamTransport(lambda request: httpx.Response(
+        200, stream=_HangingStream(lines), request=request)))
+
+    async def flow():
+        async with mcp_client() as sess:
+            out = payload_of(await call(sess, "insar_converse",
+                                        {"session_id": "s", "text": "推进"}))
+            assert out["ended_by"] is None      # 中途 note 不是终止事件
+            assert out["truncated"] is True and out["stream_finished"] is False
+            assert "insar_run_status" in out["next"]  # 仍给轮询指引,不装收尾
+    run(flow())
+
+
+class _SlowNdjsonServer:
+    """真 socket 的 NDJSON 慢流服务:相邻事件行之间睡 gap_s 秒再续写(chunked)。
+
+    验证 read timeout 语义必须走真实网络 —— 注入 transport 的假流不经 httpcore
+    的超时机制,read timeout 永远不会触发,断言会空转。
+    """
+
+    def __init__(self, events: list[dict], gap_s: float):
+        outer_lines = [json.dumps(e, ensure_ascii=False).encode("utf-8") + b"\n"
+                       for e in events]
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):  # 静默:保持测试输出干净
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                if n:
+                    self.rfile.read(n)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                for i, line in enumerate(outer_lines):
+                    if i:
+                        time.sleep(gap_s)  # 事件间静默期(> http_timeout)
+                    self.wfile.write(f"{len(line):X}\r\n".encode() + line + b"\r\n")
+                    self.wfile.flush()
+                self.wfile.write(b"0\r\n\r\n")
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self.httpd.shutdown()
+        self._thread.join(timeout=5)
+        self.httpd.server_close()
+
+
+@pytest.mark.timing  # 判定窗:事件间静默期(2s×TF)> http_timeout(0.5s×TF),乘系数保持比例
+def test_converse_survives_event_gap_longer_than_http_timeout(monkeypatch):
+    """③c 读超时不误杀长回合(P1-3):自主循环周期间的 LLM 决策静默期可远超
+    单次 HTTP 超时 —— consume 侧 per-request 把 read 超时放宽到消费 deadline,
+    相邻事件间隔 > INSAR_MCP_HTTP_TIMEOUT 时流仍存活直至自然收尾。"""
+    monkeypatch.setenv("INSAR_MCP_HTTP_TIMEOUT", str(0.5 * TIME_FACTOR))
+    monkeypatch.setenv("INSAR_MCP_CONVERSE_TIMEOUT", str(30 * TIME_FACTOR))
+    srv = _SlowNdjsonServer([
+        {"t": "agent.cycle", "n": 1, "max": 6, "action": "thinking"},
+        {"t": "say", "parts": ["静默期后照常收尾"]},
+    ], gap_s=2.0 * TIME_FACTOR)
+    srv.start()
+    try:
+        # 真网络(无注入 transport):read timeout 由 httpcore 真实执行
+        mcp_backend.configure(base_url=srv.base_url)
+        events, finished = run(mcp_backend.converse("s1", "推进", 6))
+        assert finished is True                       # 修复前:ReadTimeout → BackendError
+        assert [e["t"] for e in events] == ["agent.cycle", "say"]
+    finally:
+        srv.stop()
+        mcp_backend.reset()
+
+
+def test_converse_endpoint_missing_upgrade_guidance(stub_transport):
+    """④ 旧后端(无 /api/converse 端点):404/405 不裸传 HTTP 状态,
+    归一化为升级指引(版本线 + 分步替代方案)。"""
+    for status in (404, 405):
+        stub_transport(httpx.MockTransport(
+            lambda request, status=status: httpx.Response(
+                status, json={"detail": "Not Found"})))
+
+        async def flow():
+            async with mcp_client() as sess:
+                res = await call(sess, "insar_converse",
+                                 {"session_id": "s", "text": "推进"})
+                msg = error_text(res)
+                assert "版本过旧" in msg and "2026-08-14" in msg
+                assert "insar_plan_run" in msg    # 升级前的分步替代指引
+        run(flow())
+
+
+def test_converse_backend_layer(stub_transport):
+    """backend 层直测:mcp.backend.converse 的事件解析、结束标志与 404 归一化
+    (BackendError.status 属性承载状态码)。"""
+    def ok_handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/converse"
+        return httpx.Response(200, content=_ndjson_bytes(CONVERSE_SCRIPT))
+
+    stub_transport(httpx.MockTransport(ok_handler))
+    events, finished = run(mcp_backend.converse("s1", "推进", 6))
+    assert finished is True and len(events) == len(CONVERSE_SCRIPT)
+    assert events[0]["t"] == "agent.cycle" and events[-1]["t"] == "say"
+
+    stub_transport(httpx.MockTransport(
+        lambda request: httpx.Response(404, json={"detail": "Not Found"})))
+    with pytest.raises(mcp_backend.BackendError) as ei:
+        run(mcp_backend.converse("s1", "推进", 6))
+    assert ei.value.status == 404 and "版本过旧" in str(ei.value)
+
+
+def test_converse_max_cycles_bounds_rejected(monkeypatch):
+    """⑤ max_cycles 越界(0/13/-1):MCP 层直接拒(schema ge/le),请求绝不
+    触达后端(不会产生 HTTP 400);边界值 1/12 照常放行。"""
+    calls: list[int] = []
+
+    async def fake_converse(session_id: str, text: str, max_cycles: int):
+        calls.append(max_cycles)
+        return [{"t": "say", "parts": ["ok"]}], True
+
+    monkeypatch.setattr(mcp_backend, "converse", fake_converse)
+
+    async def flow():
+        async with mcp_client() as sess:
+            for bad in (0, 13, -1):
+                res = await call(sess, "insar_converse", {
+                    "session_id": "s", "text": "推进", "max_cycles": bad})
+                assert res.is_error, f"max_cycles={bad} 应被 MCP 层拒绝"
+            for good in (1, 12):
+                out = payload_of(await call(sess, "insar_converse", {
+                    "session_id": "s", "text": "推进", "max_cycles": good}))
+                assert out["ended_by"] == "say"
+    run(flow())
+    assert calls == [1, 12], "越界值不应触达后端层"
+
+
+def test_converse_over_real_app_when_endpoint_lands(backend_app, monkeypatch):
+    """(前瞻联调)后端 POST /api/converse 落地(B5)后自动激活:
+    driver.converse_loop 打桩为契约 §4 形状的假生成器,ASGITransport 直连
+    真实 app,验证「MCP 工具 → 端点 → NDJSON → 摘要」全链。落地前跳过。"""
+    if not any(getattr(r, "path", None) == "/api/converse" for r in backend_app.routes):
+        pytest.skip("后端尚无 POST /api/converse(B5 并行开发中);落地后本用例自动激活")
+
+    from insar_agent.loop.driver import Driver
+
+    async def fake_converse_loop(self, session_id: str, text: str, *,
+                                 max_cycles: int = 6):
+        # 签名对齐 B1 落地形状(与 turn 同形,首参 session_id;契约 §4 的
+        # converse_loop(text) 是省写)—— 端点按 (session, text=..., max_cycles=...)
+        # 调用,省写签名会 TypeError(text 重复赋值)
+        yield {"t": "agent.cycle", "n": 1, "max": max_cycles, "action": "check_env"}
+        yield {"t": "tool.start", "id": "cv9", "name": "check_env", "label": "探测环境"}
+        yield {"t": "tool.end", "id": "cv9", "exit": 0, "summary": "引擎 0/7 可用"}
+        yield {"t": "agent.cycle", "n": 2, "max": max_cycles, "action": "plan"}
+        yield {"t": "say", "parts": [f"目标「{text}」已推进:计划就绪"]}
+
+    monkeypatch.setattr(Driver, "converse_loop", fake_converse_loop, raising=False)
+    mcp_backend.configure(base_url="http://insar-backend.test",
+                          transport=httpx.ASGITransport(app=backend_app))
+
+    async def flow():
+        async with mcp_client() as sess:
+            sid = payload_of(await call(sess, "insar_create_session",
+                                        {"name": "自主循环"}))["session"]["session_id"]
+            out = payload_of(await call(sess, "insar_converse", {
+                "session_id": sid, "text": "把计划准备好", "max_cycles": 5}))
+            assert [c["action"] for c in out["cycles"]] == ["check_env", "plan"]
+            assert out["ended_by"] == "say" and "计划就绪" in out["reply"]
+            assert out["tool_summaries"] == ["引擎 0/7 可用"]
     run(flow())

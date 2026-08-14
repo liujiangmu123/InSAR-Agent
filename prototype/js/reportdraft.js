@@ -1,5 +1,5 @@
 /* ============================================================
-   方法章节草稿生成(报告 tab 底部的独立自初始化区块)。
+   方法章节草稿 + 一键完整报告(报告 tab 底部的独立自初始化区块)。
 
    职责:
    - 「生成方法章节草稿」按钮 → POST /api/report/draft {session, run_id?}
@@ -8,10 +8,15 @@
    - 后端两段式防幻觉:骨架由账本事实纯代码拼接,LLM 只润色措辞且经双向
      数值校验,不过即回退骨架 —— 所以 LLM 未配置时按钮照常可用(骨架模式),
      区块内注明该语义;
-   - 草稿同时落盘 run 工作目录 report_draft.md(响应 saved 字段如实展示)。
+   - 草稿同时落盘 run 工作目录 report_draft.md(响应 saved 字段如实展示);
+   - 「生成完整报告」按钮(0814B W5)→ POST /api/report/full {session, run_id?}
+     → 后端把方法/结果草稿、图件与图注、QA 指标与证据阶梯、复现附录、
+     参考文献拼成完整 Markdown 并落盘 report_full.md;成功后复用面板既有
+     渲染(reportlive.renderMarkdown,关掉其复现包链接 —— 报告自带复现附录章)
+     展示全文 + 一键复制。拼装全链确定性(不触 LLM),缺素材如实占位。
 
-   挂载策略(所有权约束:不改 dock.js / reportlive.js —— 后者正被并行
-   代理重构,本模块与其零 import、零共享状态):
+   挂载策略(0814B 起 reportdraft.js 与 reportlive.js 同归 W5,允许 import
+   其纯渲染函数;dock.js/app.js 仍属他人,不碰):
    - dock 的 pane 由 dock.js 动态生成 → 无法静态挂载,采用 provview.js 同款
      自初始化:MutationObserver 观察 #dockBody,#pane-report 出现且不含
      本区块时追加到 pane 尾部;dock 重渲染清掉区块后观察器自动重挂,
@@ -24,6 +29,7 @@
 import { h, icon, toast } from './dom.js';
 import { S } from './state.js';
 import { activeRunId } from './runswitch.js';
+import { renderMarkdown } from './reportlive.js';
 
 /* ============================================================
    纯函数(node 校验脚本直测,不碰 DOM)
@@ -53,12 +59,36 @@ export function errorText(status) {
   return `生成失败(HTTP ${status}),请稍后重试。`;
 }
 
+/** 完整报告的错误文案:404 换措辞,其余与草稿同口径。 */
+export function fullErrorText(status) {
+  if (status === 404) return '本会话还没有可生成完整报告的 run:先完成一次执行再来。';
+  return errorText(status);
+}
+
+/** 完整报告落盘注明(纯函数,check 脚本直测)。 */
+export function fullSavedNote(d) {
+  return d.saved && d.path
+    ? `报告已落盘 run 工作目录 ${d.path}(文件面板可见);`
+    : '报告落盘失败(工作目录不可写),以上全文仍可复制;';
+}
+
 /* ============================================================
    数据层
    ============================================================ */
 
 async function postDraft() {
   const resp = await fetch('/api/report/draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestPayload(S.sessionId, activeRunId())),
+  });
+  if (!resp.ok) throw Object.assign(new Error(`HTTP ${resp.status}`), { status: resp.status });
+  return resp.json();
+}
+
+/** 一键完整报告:请求体与草稿同形({session, run_id?})。 */
+async function postFull() {
+  const resp = await fetch('/api/report/full', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requestPayload(S.sessionId, activeRunId())),
@@ -92,6 +122,9 @@ const ui = {
   busy: false,
   data: null,      // 最近一次成功响应 {run_id, draft, llm_polish, facts_used, saved}
   error: null,     // 最近一次失败文案(与 data 互斥展示,成功后清空)
+  fullBusy: false,
+  full: null,      // 完整报告最近一次成功响应 {ok, run_id, path, markdown, saved}
+  fullError: null,
   session: null,   // 结果所属会话:切会话自动复位
 };
 
@@ -100,6 +133,9 @@ function resetUiIfSessionChanged() {
     ui.busy = false;
     ui.data = null;
     ui.error = null;
+    ui.fullBusy = false;
+    ui.full = null;
+    ui.fullError = null;
     ui.session = S.sessionId;
   }
 }
@@ -133,6 +169,35 @@ function resultView() {
         : 'LLM 未配置或润色未过校验时展示骨架 —— 事实与数字直接来自 provenance 账本。'));
 }
 
+function fullResultView() {
+  const d = ui.full;
+  if (!d) return null;
+  return h('div', { class: 'reportdraft-full-result' },
+    h('div', {
+      style: { display: 'flex', gap: '7px', alignItems: 'center',
+               flexWrap: 'wrap', margin: '8px 0' },
+    },
+      h('span', {
+        class: 'tag is-ok',
+        title: '拼装全链确定性:不触 LLM;方法/结果章复用已校验草稿或骨架,缺素材如实占位',
+      }, icon('shield'), '确定性拼装'),
+      h('span', { class: 'tag', title: `run ${d.run_id}` },
+        `run ${String(d.run_id || '').slice(0, 15)}`),
+      h('span', { style: { flex: '1' } }),
+      h('button', {
+        class: 'btn btn-gho btn-sm', type: 'button',
+        'aria-label': '复制完整报告全文',
+        onclick: () => copyText(d.markdown, '已复制完整报告全文(Markdown)'),
+      }, icon('clip'), '复制全文')),
+    // 复用报告面板既有渲染(reportlive.renderMarkdown);复现包链接关掉 ——
+    // 报告自带「复现附录」章,重复挂链接会造成两个入口
+    h('div', { class: 'draft', role: 'region', 'aria-label': '完整报告全文' },
+      renderMarkdown(d.markdown, { reproLink: false })),
+    h('p', { class: 'blurb' },
+      fullSavedNote(d),
+      '拼装不经 LLM:缺素材章节如实占位(如「结果章节:run 未完成,不可用」),绝不编内容。'));
+}
+
 function render(root) {
   resetUiIfSessionChanged();
   root.replaceChildren(
@@ -161,7 +226,34 @@ function render(root) {
     }, icon('doc'), ui.busy ? '生成中…' : '生成方法章节草稿'),
     ui.error ? h('div', { class: 'note is-stale', role: 'status', style: { marginTop: '8px' } },
       icon('warn'), h('span', null, ui.error)) : null,
-    resultView());
+    resultView(),
+    h('h3', { class: 'sect', style: { marginTop: '18px' } }, '完整报告(一键拼装)'),
+    h('p', { class: 'blurb' },
+      '把方法/结果草稿、图件与双语图注、QA 指标表与证据阶梯、复现附录(run.sh + ' +
+      'provenance)、技能参考文献拼成一份完整 Markdown 并落盘 report_full.md。' +
+      '全链确定性(不依赖 LLM),缺素材如实占位。'),
+    h('button', {
+      class: 'btn btn-pri btn-sm', type: 'button',
+      disabled: ui.fullBusy || undefined,
+      'aria-label': '生成完整报告(POST /api/report/full)',
+      onclick: async () => {
+        if (ui.fullBusy) return;
+        ui.fullBusy = true;
+        render(root);
+        try {
+          ui.full = await postFull();
+          ui.fullError = null;
+        } catch (e) {
+          ui.fullError = fullErrorText(e && typeof e.status === 'number' ? e.status : 0);
+        } finally {
+          ui.fullBusy = false;
+          if (root.isConnected) render(root);
+        }
+      },
+    }, icon('doc'), ui.fullBusy ? '拼装中…' : '生成完整报告'),
+    ui.fullError ? h('div', { class: 'note is-stale', role: 'status', style: { marginTop: '8px' } },
+      icon('warn'), h('span', null, ui.fullError)) : null,
+    fullResultView());
 }
 
 /* ============================================================
@@ -176,7 +268,8 @@ function ensureMounted() {
   if (!pane) return;
   if (rootEl && pane.contains(rootEl)) return;   // 已在场:幂等直返
   if (!rootEl) {
-    rootEl = h('section', { class: 'reportdraft', 'aria-label': '方法章节草稿生成' });
+    rootEl = h('section', { class: 'reportdraft',
+                            'aria-label': '报告生成(方法章节草稿与完整报告)' });
   }
   pane.appendChild(rootEl);                      // 报告 tab 底部(pane 尾部)
   render(rootEl);

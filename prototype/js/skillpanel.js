@@ -8,13 +8,16 @@
      GET /api/skills/{step} → {capability,name,version,content_hash,sections:{五章节:全文 Markdown}}
      整个列表 404/网络错 = 后端未含技能系统 → 不渲染任何技能 UI,零报错;
      详情 404 = 该步无技能。
-   本地 mock:URL 带 ?skillmock=1 时启用内嵌的第 6 步解缠技能样例
-   (开发/截图验证用,不发真实请求);另 &skillopen=1 默认展开(仅 mock 生效)。
+   本地 mock:URL 带 ?skillmock=1 且处于演示态(file:// 直开或 API 已回退
+   演示模式,isMockActive)时启用内嵌的第 6 步解缠技能样例(开发/截图验证
+   用,不发真实请求);另 &skillopen=1 默认展开(仅 mock 生效)。真实后端
+   存活时带 ?skillmock=1 也走真实请求 —— 界面诚实化(0814B W6)。
 
    所有权边界:不改 app.js / dock.js —— 事件委托 + MutationObserver 挂载;
    步骤失败态直接读步骤按钮的状态类名(.pstep.f),不依赖内部状态模块。
    ============================================================ */
 import { h, txt } from './dom.js';
+import { isMockActive } from './backend.sse.js';   // 演示态判据(agentloop.js 同款门控)
 
 /* ---------------- 契约常量 ---------------- */
 export const SECTION_NAMES = ['适用判据', '参数启发式', '常见失败与处置', 'QA 依据', '参考文献'];
@@ -339,7 +342,10 @@ export function initSkillPanel() {
   let mock = false, autoOpen = false;
   try {
     const q = new URLSearchParams(window.location.search);
-    mock = q.get('skillmock') === '1';
+    // 界面诚实化(0814B W6):?skillmock=1 须叠加演示态判据 —— 仅 file://
+    // 直开或 API 已回退演示模式才生效,真实后端下绝不渲染内嵌假技能
+    mock = q.get('skillmock') === '1'
+      && (window.location.protocol === 'file:' || isMockActive());
     autoOpen = mock && q.get('skillopen') === '1';
   } catch { /* 无 location(异常宿主)时按真实路径走 */ }
   const store = createSkillStore({ mockData: mock ? MOCK_SKILL : null });

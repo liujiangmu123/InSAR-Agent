@@ -61,6 +61,26 @@ def say(parts: list) -> dict:
     return {"t": "say", "parts": parts}
 
 
+def say_delta(text: str) -> dict:
+    """流式回复增量(0814B 契约 §1.3)。生命周期:say.delta × N → 终帧二选一:
+    say(定稿,parts 整体替换)或 say.abort(标废)。
+
+    通道例外(docs/AGENT-LOOP.md §4.1「delta 例外条款」):只走回合 NDJSON
+    (driver 裸 yield),不经 _emit —— 不上 EventBus/SSE、不进 trace;
+    终帧 say 照旧双通道。前端 app.js 的 liveSay 状态机按 textContent 追加。
+    """
+    return {"t": "say.delta", "text": text}
+
+
+def say_abort(reason: str) -> dict:
+    """流式回复标废(终帧之一):半截回复不是回复,前端保留已见文本并如实标注。
+
+    reason 闭集:truncated(token 上限截断)| unavailable(供应商失败)|
+    stopped(用户停止)。通道例外与 say_delta 同款(不经 _emit)。
+    """
+    return {"t": "say.abort", "reason": reason}
+
+
 def plan(items: list[dict]) -> dict:
     return {"t": "plan", "items": items}
 
@@ -94,6 +114,17 @@ def step_stage(step_id: int, stage: str) -> dict:
     (tests/test_e2e_contract.py 的事件类型注册表)。前端当前静默忽略该类型。
     """
     return {"t": "step.stage", "stepId": step_id, "stage": stage}
+
+
+def agent_cycle(n: int, max_cycles: int, action: str) -> dict:
+    """自主循环周期账(LOOP-CONTRACT §1,driver.converse_loop 每周期恰好一条)。
+
+    n 从 1 递增;action 是循环动作闭集(search_data/inspect_file/check_env/
+    list_data/status/plan/execute/set_params/set_method/thinking)成员。
+    app.js 的 consume() 对该类型静默丢弃,由 prototype/js/agentloop.js
+    自建 SSE 订阅渲染「自主工作中」进度条与工作记录卡。
+    """
+    return {"t": "agent.cycle", "n": n, "max": max_cycles, "action": action}
 
 
 def overall(pct: int) -> dict:

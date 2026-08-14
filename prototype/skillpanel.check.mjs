@@ -118,6 +118,10 @@ const DOC = {
 globalThis.document = DOC;
 globalThis.Node = NodeBase;
 globalThis.window = { innerWidth: 1280, innerHeight: 800 };   // 无 MutationObserver → 模块不自启动
+// 0814B W6:skillpanel.js 静态引入 backend.sse.js(演示门控 isMockActive),
+// 其导入链(backend.sse → state)顶层读 location.protocol 与 localStorage,补最小桩
+globalThis.location = { protocol: 'http:', search: '' };
+globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
 
 /* ---------------- 断言工具(check_frontend.py 解析的既有格式) ---------------- */
 let failed = 0;

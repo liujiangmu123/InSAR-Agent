@@ -2,7 +2,7 @@
    装配层：事件流 → UI
    backend.mock.js 换成真 SSE 时，这里的 consume() 不用改。
    ============================================================ */
-import { h, txt, icon, $, $$, toast, sleep } from './dom.js';
+import { h, txt, icon, $, $$, toast } from './dom.js';
 import * as St from './state.js';
 import { S, STEP_DEFS, def_, st_, LADDER, SESSIONS, DISK_TIERS } from './state.js';
 import * as Stream from './stream.js';
@@ -17,6 +17,20 @@ const el = {};
 let token = null;                 // 当前取消令牌
 const tools = new Map();          // tool id → toolCall api
 let currentPlan = null;
+
+/* 流式回复状态机（0814B §1.4，逻辑在 stream.js createLiveSay，node 可单测）：
+   say.delta 开流/追加 → 终帧 say（定稿替换）或 say.abort（标废）关闭；
+   回合结束（consume 尾部 / submit finally）兜底关闭。
+   note 等其他事件不经状态机 —— 穿行不打断进行中的流式气泡。 */
+const liveSay = Stream.createLiveSay();
+
+/** say.abort 的 reason 闭集（loop/events.py say_abort 工厂）→ 中文标注。
+    未知 reason 走 agentMsgStream 的缺省标注,不编理由。 */
+const SAY_ABORT_LABELS = {
+  truncated: '(回复被截断,内容不完整)',
+  unavailable: '(连接中断,回复不完整)',
+  stopped: '(已停止,回复未完成)',
+};
 let lastChange = null;            // 最近一次方法/参数变更 {stepId, method?, params?}（审批卡向服务端要影响预估用）
 let dropEvents = null;            // 全局 SSE 通道的断开函数
 const attachments = [];           // 附件演示：只留 {name,size}，不读内容、不上传
@@ -76,7 +90,6 @@ function boot() {
       changeMethod: (id, m) => applyMethod(id, m),
       changeParams: (id, p) => applyParams(id, p),
       runSteps: (ids) => run(ids),   // 流水线面板「重跑影响确认」→ 现有执行链路
-      lightbox: (fig) => Stream.openLightbox(fig, { onDock: () => Dock.openImages() }),
       export: doExport,
     },
   });
@@ -99,8 +112,11 @@ function boot() {
   paintBudget();
   paintSubtitle();
 
+  // 回合中后端失联退回 mock 的瞬间,顶栏徽章立刻翻成「演示」(诚实语义)
+  API.onMockActivated(() => paintOffline(offline));
+
   // 启动水合:会话列表 → 注册表 → 当前会话状态/历史。全部来自服务端;
-  // 后端不可达时只显示「离线」徽章与空态,不再回填任何演示内容。
+  // 后端不可达时只显示「离线/演示」徽章与空态,不再回填任何演示内容。
   hydrateFromServer();
 }
 
@@ -134,17 +150,26 @@ async function ensureRegistry() {
   } catch { /* 后端不可达:目录保持为空,面板显示空态 */ }
 }
 
-/** 顶栏「离线」徽章:后端不可达（探测链路失败）时才显示。 */
+/** 顶栏诚实徽章(FEATURES 缺口 2 的动态化收口):
+    · 演示模式(file:// 或后端不可达后回退 mock)→「演示」——数值为示意值;
+    · 后端探活失败但尚未回退 →「离线」——数据无法刷新;
+    · 探活成功(hydrate / 新建会话成功)→ 隐藏。绝不常驻。 */
 let offline = false;
 function paintOffline(on) {
   offline = !!on;
   let tag = $('#offlineTag');
   if (!tag) {
-    tag = h('span', { class: 'tag is-bad', id: 'offlineTag', role: 'status', hidden: true,
-                      title: '后端不可达——界面数据无法刷新,请启动本机服务后重试' }, '离线');
+    tag = h('span', { class: 'tag is-bad', id: 'offlineTag', role: 'status', hidden: true });
     el.status.before(tag);
   }
-  tag.hidden = !offline;
+  const demo = API.isMockActive();   // 粘性:mock 一旦接管回合,徽章如实保持「演示」
+  tag.hidden = !(offline || demo);
+  if (tag.hidden) return;
+  tag.className = demo ? 'tag is-stale' : 'tag is-bad';
+  tag.textContent = demo ? '演示' : '离线';
+  tag.title = demo
+    ? '后端未接入,数值为示意值(本地演示模式)'
+    : '后端不可达——界面数据无法刷新,请启动本机服务后重试';
 }
 
 /** 副标题 = 当前会话名;没有会话时显示应用工作区名。 */
@@ -869,13 +894,31 @@ function paintBudget() {
    ============================================================ */
 async function consume(iter) {
   for await (const ev of iter) {
+    // 演示(mock)模式没有 SSE 总线:把回合事件转发给自主循环可视化层
+    // (agentloop.js 的全局出口),file:// 离线也能看到 agent.cycle 进度条;
+    // 真实后端下它经 /api/events 自建订阅,这里不转发以免重复渲染。
+    // consume 本身不认识 agent.cycle:未知事件依旧走 switch 静默丢弃。
+    if (API.isMockActive()) globalThis.__insarAgentLoop?.handleEvent?.(ev);
     switch (ev.t) {
       case 'thinking':
         Stream.thinking(ev.title, h('div', { style: { whiteSpace: 'pre-line' } }, ev.body));
         break;
 
+      /* ---- 流式回复（0814B §1.4）：say.delta × N → 终帧 say / say.abort ---- */
+      case 'say.delta':
+        liveSay.delta(ev.text);
+        break;
+
       case 'say':
-        Stream.agentMsg(...ev.parts.map(renderPart));
+        // 有进行中的流式气泡 → 终帧 parts 整体替换（以定稿为准，增量文本只是展示旁路）；
+        // 无 → 非流式路径原样渲染
+        if (!liveSay.finalize(ev.parts.map(renderPart))) {
+          Stream.agentMsg(...ev.parts.map(renderPart));
+        }
+        break;
+
+      case 'say.abort':
+        liveSay.abort(SAY_ABORT_LABELS[ev.reason]);
         break;
 
       /* 后端意图识别失败的补充表单(§3.5 降级,loop/events.py ask 工厂)。
@@ -998,6 +1041,9 @@ async function consume(iter) {
         break;
     }
   }
+  // 回合结束兜底：流没等到终帧（say/say.abort）就正常收尾 → 半截标废，
+  // 绝不把未定稿文本冒充完整回复（异常/停止路径的兜底在 submit 的 finally）。
+  liveSay.abort();
 }
 
 /* ============================================================
@@ -1112,6 +1158,18 @@ function renderAttachments() {
 /* ============================================================
    用户提交
    ============================================================ */
+
+/** 打字指示器与首事件接力（0814B §1.4）：首个事件到达才移除指示器 ——
+    固定延时会在流式首包到达前留下空窗或提前消失；空流/建流失败等
+    没有首事件的路径由调用方 finally 兜底（remove 幂等）。 */
+async function* withFirst(iter, onFirst) {
+  let first = true;
+  for await (const ev of iter) {
+    if (first) { first = false; onFirst(); }
+    yield ev;
+  }
+}
+
 async function submit() {
   let text = el.input.value.trim();
   if (!text) return;
@@ -1137,16 +1195,18 @@ async function submit() {
   token = new API.Cancel();
   const stopTyping = Stream.typingIndicator();
   try {
-    await sleep(320);
-    stopTyping();
-    await consume(API.runTurn(text, token));
+    // 优先自主循环 /api/converse;旧后端缺端点(404/405)时当次回退 /api/turn
+    // 并记忆(S.noConverse),不重复探测 —— 编排在 backend.sse.js(纯逻辑可单测)
+    await consume(withFirst(API.runConversePreferred(text, token), stopTyping));
     await syncStepsFromServer();   // 规划回合产生了新 run:镜像服务端步骤状态
   } catch (err) {
-    stopTyping();
     if (err?.name !== 'CancelledError') {
       Stream.note('bad', `执行中断：${err.message}`);
     }
   } finally {
+    stopTyping();   // 兜底:空流/建流失败/异常路径,指示器绝不残留(remove 幂等)
+    // 停止/异常中断时半截回复如实标废;正常路径状态机已被终帧关闭,此处空操作
+    liveSay.abort('(已停止,回复未完成)');
     setBusy(false);
   }
 }

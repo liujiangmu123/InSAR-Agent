@@ -19,3 +19,15 @@ def trim_history(messages: list[dict], *, max_chars: int = 8000) -> list[dict]:
         kept.append(msg)
         used += size
     return list(reversed(kept))
+
+
+def clip_summary(text: str, *, max_chars: int = 300) -> str:
+    """动作结果 → 单行摘要:压平空白 + 硬截断(自主循环的周期摘要预算)。
+
+    LOOP-CONTRACT §4 纪律:每周期动作结果只以 ≤max_chars 的摘要回灌 LLM,
+    原始日志/清单绝不整段进上下文。截断补省略号,让 LLM 知道信息不完整。
+    """
+    flat = " ".join(str(text).split())
+    if len(flat) <= max_chars:
+        return flat
+    return flat[:max(0, max_chars - 1)] + "…"

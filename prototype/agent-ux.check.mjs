@@ -325,6 +325,40 @@ const again = mkAsk();
 check('C4 撤销后同族审批重新弹卡（不再自动通过）',
   again !== null && again.matches('div.ask') && ran === 1);
 
+/* ============================================================
+   E. 候选集空镜像守卫（P1-6，浏览器实测回归）
+   新会话首回合 candidates 事件先于 /api/state 镜像同步到达：
+   S.steps 无条目时 candidateSet 必须以注册表默认方法兜底渲染，
+   不许抛 TypeError（此前表现为「执行中断」横幅 + 决策卡丢失）。
+   ============================================================ */
+console.log('\n== E. 候选集空镜像守卫 ==');
+const St = await import('./js/state.js');
+St.setRegistry([{
+  id: 6, name: '相位解缠', deps: [], method: 'snaphu_mcf',
+  methods: [
+    { id: 'snaphu_mcf', label: 'SNAPHU MCF', engine: 'snaphu', why: '默认最短路', ok: true, recommend: true },
+    { id: 'icu', label: 'ICU', engine: 'isce2', why: '备选', ok: true },
+  ],
+  params: {}, outputs: [],
+}]);
+S.steps.clear();   // 复现空镜像：会话还没有任何 /api/state 步骤条目
+let candErr = null;
+let candOpts = null;
+const candPicked = [];
+try {
+  candOpts = Stream.candidateSet({ stepId: 6, onPick: (m) => candPicked.push(m) });
+} catch (e) {
+  candErr = e;
+}
+check('E1 S.steps 空镜像时 candidateSet 不抛异常', candErr === null && !!candOpts);
+const candBtns = candOpts ? candOpts.querySelectorAll('.opt') : [];
+check('E2 兜底态照常渲染候选按钮，注册表默认方法标「当前」',
+  candBtns.length === 2
+  && candBtns[0].getAttribute('aria-checked') === 'true'
+  && candBtns[0].textContent.includes('当前'));
+candBtns[1]?.click();
+check('E3 兜底态点选照常回调 onPick', JSON.stringify(candPicked) === '["icu"]');
+
 /* ---------------- 输出关键 DOM 结构 ---------------- */
 console.log('\n== 关键 DOM 结构 ==\n');
 console.log('--- A. .toolgroup 聚合组（全成功 · 折叠） ---');

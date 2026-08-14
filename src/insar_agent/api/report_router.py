@@ -1,10 +1,16 @@
-"""方法章节草稿端点(报告面板「生成方法章节草稿」按钮的数据源)。
+"""报告端点族(报告面板各生成按钮的数据源)。
 
 POST /api/report/draft {session, run_id?} →
   {run_id, draft, llm_polish, facts_used, saved}
 POST/GET /api/report/caption(body/query:session, figure, run_id?)→ 双语图注的
   生成/读取(report/captions.py);图件定位与 sidecar 读取按 /api/figures 同口径,
   生成结果落盘图件旁 <name>.caption.json。
+POST /api/report/full {session, run_id?} → 一键完整报告(report/assemble.py):
+  拼装 Markdown 全文 → 落盘 run 工作目录 report_full.md →
+  {ok, run_id, path, markdown, saved};全链确定性(不触 LLM),缺素材如实
+  占位(模拟 run 首部强制警示);落盘失败不阻塞响应(saved=false,path=null)。
+  run 非终态不 409(与 /api/repro-bundle 的交付纪律不同):完整报告的占位
+  纪律就是为中途态设计的,结果章节会如实写「run 未完成,不可用」。
 
 纪律:
   - 会话归属校验与 api/app.py 的 resolve_run 同口径,在本路由内自行实现
@@ -36,6 +42,7 @@ from insar_agent.core.fsio import atomic_write_text
 from insar_agent.core.ledger import export_provenance
 from insar_agent.core.store import Store
 from insar_agent.report import captions
+from insar_agent.report.assemble import FULL_REPORT_FILENAME, assemble_full_report
 from insar_agent.report.draft import build_facts, draft_methods
 from insar_agent.report.results import RESULTS_FILENAME, build_result_facts, draft_results
 
@@ -158,5 +165,31 @@ def create_report_router(store: Store, home: Path, *,
             raise HTTPException(404, "尚未生成图注")
         return {"run_id": run["run_id"], "figure": target.name, "zh": data["zh"],
                 "en": data["en"], "llm_polish": bool(data.get("llm_polish"))}
+
+    # ---- 一键完整报告(append 块:确定性拼装,不触 LLM;/api/report/full) ----
+    @router.post("/api/report/full")
+    def report_full(body: DraftBody):
+        """拼装完整报告并落盘 report_full.md;错误语义与本路由其他端点一致
+        (404 = run 不存在/不属于该会话);缺素材占位在拼装层,端点不 409。"""
+        run = _resolve_run(store, body.session, body.run_id)
+        markdown = assemble_full_report(store, home, body.session, run["run_id"],
+                                        contract=contract)
+        saved = False
+        if run["workspace"]:  # 落盘失败不阻塞响应(_save_draft 同语义,文件名不同)
+            try:
+                ws = Path(run["workspace"])
+                ws.mkdir(parents=True, exist_ok=True)
+                atomic_write_text(ws / FULL_REPORT_FILENAME, markdown)
+                saved = True
+            except OSError:
+                saved = False
+        return {
+            "ok": True,
+            "run_id": run["run_id"],
+            # path 只回工作区相对名(端点族纪律:不外泄磁盘绝对路径)
+            "path": FULL_REPORT_FILENAME if saved else None,
+            "markdown": markdown,
+            "saved": saved,
+        }
 
     return router

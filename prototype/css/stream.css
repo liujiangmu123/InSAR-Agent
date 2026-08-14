@@ -69,6 +69,31 @@
 }
 .u-msg .body code { background: rgba(255, 255, 255, .22); }
 
+/* 流式回复（0814B §1.4，stream.js agentMsgStream）：
+   流式/标废阶段是未解析的纯文本，pre-wrap 保住换行；
+   终帧 finalize 替换为 renderPart 节点后类名移除，回到与非流式一致的排版 */
+.a-msg.is-streaming .body,
+.a-msg.is-aborted .body { white-space: pre-wrap; word-break: break-word; }
+
+/* 打字光标：::after 纯装饰（空 content 不进可访问树），
+   prefers-reduced-motion 由 tokens.css 全局降级为静止 */
+.a-msg.is-streaming .body::after {
+  content: ''; display: inline-block;
+  width: 2px; height: 1em; margin-left: 2px;
+  vertical-align: -.15em; background: var(--accent);
+  animation: sayCaret 1s step-end infinite;
+}
+@keyframes sayCaret { 50% { opacity: 0 } }
+
+/* 标废（say.abort / 停止 / 断流）：半截内容如实保留但整体淡化，
+   中断标注用辅助色斜体 —— 与定稿回复在视觉上明确区分，不冒充完整回复
+   （--text-2/--text-3 为既有已审计文本色对，深浅主题自适配） */
+.a-msg.is-aborted .body { color: var(--text-2); }
+.a-msg.is-aborted .say-abort {
+  display: inline-block; margin-left: 6px;
+  font-size: var(--fs-xs); font-style: italic; color: var(--text-3);
+}
+
 /* 思考：左侧竖线 + 斜体，默认折叠为一行 */
 .think {
   border-left: 2px solid var(--think); padding-left: 12px;

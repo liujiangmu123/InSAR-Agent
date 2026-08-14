@@ -7,7 +7,9 @@
    ④ fillSelect:种子回显(已保存)/ 完整清单并入 / 选中保持 / 识图过滤 / 缺席补项;
    ⑤ 面板状态机 · 未存配置:下拉禁用占位 → 获取后启用;
    ⑥ 面板状态机 · 已存配置:打开即回显 → 获取无缝并入 → 改选保持 → 保存联动 chip;
-   ⑦ 重开面板以服务端为准回显最新保存值;已存模型不在清单时补「(已保存)」项。
+   ⑦ 重开面板以服务端为准回显最新保存值;已存模型不在清单时补「(已保存)」项;
+   ⑧ 自主循环配置(契约 §8):normCycles 纯函数、开关/周期上限回显与保存载荷、
+     留空 = null(保留旧值)、越界输入客户端夹取、服务端回执回写控件。
    放在 prototype/ 根目录:check_frontend.py 只发现该层的 *.check.mjs。
    只依赖 node 内建能力,零 npm 依赖。
    ============================================================ */
@@ -420,6 +422,59 @@ check('已存模型已从清单下线 → 补「(已保存)」项并保持选中
 dlg.querySelector('.llmset-x').click();
 check('全程无 /api/llm/test 真实调用(验证只走 UI 状态逻辑)',
   calls.every((c) => !c.url.includes('/api/llm/test')));
+
+/* ---------------- ⑧ 自主循环配置(agent_loop / agent_max_cycles,契约 §8) ---------------- */
+console.log('\n== ⑧ 自主循环配置 ==');
+check('normCycles:合法值整数化原样', L.normCycles('6') === 6 && L.normCycles(3) === 3
+  && L.normCycles('7.9') === 7);
+check('normCycles:越界夹进 1..12 闭区间', L.normCycles('0') === 1
+  && L.normCycles('99') === 12 && L.normCycles(-3) === 1);
+check('normCycles:空/空白/非数 → null(= 服务端保留旧值)',
+  L.normCycles('') === null && L.normCycles('  ') === null
+  && L.normCycles('abc') === null && L.normCycles(null) === null);
+
+// 旧后端形态:config 不带循环两键 → 控件维持 HTML 缺省(开 + 6)
+chip.click();
+await tick(); await tick();
+dlg = DOC.querySelector('.llmset');
+check('config 缺两键 → 开关默认勾选、周期上限默认 6',
+  F('agent_loop').checked === true && F('agent_max_cycles').value === '6');
+check('控件语义:checkbox + number[min=1][max=12]',
+  F('agent_loop').getAttribute('type') === 'checkbox'
+  && F('agent_max_cycles').getAttribute('type') === 'number'
+  && F('agent_max_cycles').getAttribute('min') === '1'
+  && F('agent_max_cycles').getAttribute('max') === '12');
+dlg.querySelector('.llmset-x').click();
+
+// 服务端带两键 → 打开即回显
+routes.config = { ...routes.config, agent_loop: false, agent_max_cycles: 9 };
+chip.click();
+await tick(); await tick();
+dlg = DOC.querySelector('.llmset');
+check('回显:agent_loop=false → 开关不勾选', F('agent_loop').checked === false);
+check('回显:agent_max_cycles=9 → 数字框为 9', F('agent_max_cycles').value === '9');
+
+// 保存:开关布尔上行;越界输入先夹到 12;服务端回执回写控件
+F('agent_loop').checked = true;
+F('agent_max_cycles').value = '99';
+routes.saveView = { ...routes.saveView, agent_loop: true, agent_max_cycles: 12 };
+F('save').click();
+await tick(); await tick();
+let loopPosts = calls.filter((c) => c.method === 'POST' && c.url.endsWith('/api/llm/config'));
+let loopBody = loopPosts[loopPosts.length - 1].body;
+check('保存载荷:agent_loop 上行布尔 true', loopBody.agent_loop === true);
+check('保存载荷:越界 99 已夹到 12 再上行', loopBody.agent_max_cycles === 12);
+check('保存回执回写:数字框 = 服务端回执 12', F('agent_max_cycles').value === '12');
+
+// 数字框留空 → 上行 null(保留旧值);回执现值回写控件
+F('agent_max_cycles').value = '';
+F('save').click();
+await tick(); await tick();
+loopPosts = calls.filter((c) => c.method === 'POST' && c.url.endsWith('/api/llm/config'));
+loopBody = loopPosts[loopPosts.length - 1].body;
+check('数字框留空 → 上行 null(服务端保留旧值)', loopBody.agent_max_cycles === null);
+check('留空保存后数字框回到服务端现值', F('agent_max_cycles').value === '12');
+dlg.querySelector('.llmset-x').click();
 
 /* ---------------- 三态文案表(评审用) ---------------- */
 console.log('\n== 常驻 chip 三态文案表 ==');

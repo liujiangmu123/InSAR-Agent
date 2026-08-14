@@ -626,7 +626,10 @@ def test_no_cors_headers_same_origin_posture(client):
 
 def test_health_and_error_bodies_are_json(client):
     assert client.get("/api/health").headers["content-type"].startswith("application/json")
-    r = client.post("/api/abort", json={"session": "demo"})
+    # 断言演进注记(集成波次 P2):abort 不带 run_id 且会话无 run 已改为 202
+    # (会话级取消受理),不再是 404 —— 改用显式 ghost run_id 保住本用例的
+    # 原意图「错误响应体必须是结构化 JSON」(显式 run_id 的 404 口径不变)
+    r = client.post("/api/abort", json={"session": "demo", "run_id": "no-such-run"})
     assert r.status_code == 404
     assert r.headers["content-type"].startswith("application/json")
     _detail_of(r)

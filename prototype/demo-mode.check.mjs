@@ -354,6 +354,15 @@ check('C5 runPipeline 走 mock:step.start/step.end(exit 0)齐全',
 check('C6 runPipeline 收尾 result + report(结果卡/报告卡有数据可画)',
   pipeEvs.some((e) => e.t === 'result') && pipeEvs.some((e) => e.t === 'report'));
 
+// C6b 界面诚实化(0814B W6):runPipeline 首次失败切换(独立实例走 catch 路径)
+// 也要与 runTurn/runConverse 同款 warn note 先行 —— 回退后的事件全是假的,必须先声明
+const API_PIPE = await import('./js/backend.sse.js?instance=pipe');
+const pipeFirst = await collect(API_PIPE.runPipeline([9], new API_PIPE.Cancel()));
+check('C6b runPipeline 首次失败切换:「已切换到本地演示模式」warn note 先行',
+  pipeFirst[0]?.t === 'note' && pipeFirst[0]?.tone === 'warn'
+  && /切换到本地演示模式/.test(pipeFirst[0]?.text || '')
+  && pipeFirst.some((e) => e.t === 'step.start' && e.stepId === 9));
+
 // 第 8 步 ERA5 degrade 剧情:专家模式停链,degrade 事件收尾
 const pipe8 = await collect(API_HTTP.runPipeline([8], new API_HTTP.Cancel()));
 check('C7 第 8 步降级剧情:degrade 事件到达且专家模式停链(最后一个事件)',
@@ -481,16 +490,15 @@ check('E6 THRESHOLDS 5 项(3 项 PENDING)→ evidenceCeiling 封顶 audited(2)',
   && evidenceCeiling().level === 2);
 check('E7 LADDER 六级证据阶梯完整', LADDER.length === 6 && LADDER[5] === 'publishable');
 
-// figures.js 保留的边界:聊天演示流(stream.js resultCard/openLightbox)
-// 与 tspoint 真实渲染(timeSeriesSvg 画真实数据 / mapSvg 选点底图)仍消费;
-// dock 面板(gallery/files/audit/report/term/trace)已全部不再 import figures.js
-check('E8 figures:IMAGES 4 张(vel/ts/ifg/coh)供聊天演示流 openLightbox 消费',
-  Figures.IMAGES.length === 4
-  && JSON.stringify(Figures.IMAGES.map((i) => i.id)) === JSON.stringify(['vel', 'ts', 'ifg', 'coh'])
-  && Figures.IMAGES.every((i) => i.name && i.title && i.step));
-check('E9 figures:figureSvg/mapSvg/timeSeriesSvg 渲染器产出可嵌入 SVG',
-  /^<svg/.test(Figures.figureSvg('vel'))
-  && /^<svg/.test(Figures.mapSvg(null, { hidePoints: true, markers: [{ x: 10, y: 10, color: '#f00', label: 'P1' }], note: 'n' }))
+// figures.js 界面诚实化(0814B W6):演示图资产(IMAGES/POINTS/DATES/
+// velSvg/ifgSvg/cohSvg)已删除,仅剩零数据空壳保持 stream.js 死代码
+// (W3 并行删除中)的 import 绑定可解析;tspoint 真实渲染仍消费
+// timeSeriesSvg(画真实数据)/ mapSvg(点击画布,点位由调用方传入)
+check('E8 figures:演示图资产已清除 —— IMAGES/POINTS/DATES 空壳零数据,figureSvg 恒空串',
+  Figures.IMAGES.length === 0 && Figures.POINTS.length === 0 && Figures.DATES.length === 0
+  && Figures.figureSvg('vel') === '' && Figures.figureSvg('ts') === '');
+check('E9 figures:tspoint 在用的 mapSvg/timeSeriesSvg 渲染器产出可嵌入 SVG',
+  /^<svg/.test(Figures.mapSvg(null, { markers: [{ x: 10, y: 10, color: '#f00', label: 'P1' }], note: 'n' }))
   && /^<svg/.test(Figures.timeSeriesSvg({ dates: ['06-10', '06-22'], series: [{ name: 'A', ts: [0, 1], color: '#f00' }] })));
 
 check('E10 envdata:TERM_LOGS/TRACE/cmdSh 演示常量已删除(终端/轨迹无假数据可用)',

@@ -16,9 +16,13 @@
   4. 事件类型注册表:events.py 可产生的 type 集合与前端处理分支集合求差,
      差集必须与已知豁免清单完全一致(新增漂移会被拦截):
        后端有/前端无:step.stage(阶段推进,UI 静默忽略)、
-                      handler_error(监听器错误隔离,当前后端也无调用点);
-       前端有/后端无:tool.progress、budget(mock 演示专用,后端尚未产生 —— 
-                      按纪律不硬造,仅登记)。
+                      handler_error(监听器错误隔离,当前后端也无调用点)、
+                      agent.cycle(自主循环周期账 —— app.js 静默丢弃,由
+                      agentloop.js 自建 SSE 订阅渲染,不走 consume 分发);
+       前端有/后端无:tool.progress、budget(mock 演示专用,后端尚未产生 ——
+                      按纪律不硬造,仅登记);
+       过渡豁免:say.delta/say.abort(0814B 流式帧,W2 后端工厂与 W3 前端
+                      分支并行落地 —— 见 STREAMING_LANDING 注释)。
 """
 
 from __future__ import annotations
@@ -47,6 +51,8 @@ SRC_DIR = ROOT / "src" / "insar_agent"
 FRONTEND_REQUIRED: dict[str, set[str]] = {
     "thinking": {"title", "body"},                    # Stream.thinking
     "say": {"parts"},                                 # Stream.agentMsg(renderPart)
+    "say.delta": {"text"},                            # liveSay 追加(0814B §1.3,W3)
+    "say.abort": {"reason"},                          # liveSay 标废(半截回复如实标注)
     "ask": {"prompt", "fields"},                      # consume() ask 分支
     "plan": {"items"},                                # Stream.planPanel:items[{n,text,st}]
     "tool.start": {"id", "verb", "cmd", "label", "open"},
@@ -56,6 +62,7 @@ FRONTEND_REQUIRED: dict[str, set[str]] = {
     "step.start": {"stepId"},
     "step.end": {"stepId", "exit"},
     "step.stage": {"stepId", "stage"},                # 前端暂不消费,登记形状防漂移
+    "agent.cycle": {"n", "max", "action"},            # agentloop.js 进度条读取的字段
     "overall": {"pct"},
     "candidates": {"stepId"},
     "note": {"tone", "text"},
@@ -70,8 +77,12 @@ FRONTEND_REQUIRED: dict[str, set[str]] = {
 }
 
 # 注册表差集豁免清单(变更须同步改这里与文件头说明)
-BACKEND_ONLY = {"step.stage", "handler_error"}
+BACKEND_ONLY = {"step.stage", "handler_error", "agent.cycle"}
 FRONTEND_ONLY = {"tool.progress", "budget"}
+# 流式帧(0814B §1.3):后端工厂(W2)与前端分支(W3)并行落地,两态都合法 ——
+# W3 未合入时按「后端有/前端无」临时豁免;合入后进入双侧交集,自动退出差集。
+# 集成完成后本清单应为空集(验证波次可收紧回精确断言)。
+STREAMING_LANDING = {"say.delta", "say.abort"}
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +151,8 @@ def test_factories_satisfy_frontend_required_fields():
     samples = [
         ev.thinking("标题", "正文"),
         ev.say(["你好", {"code": "x"}]),
+        ev.say_delta("正在生成的增量"),
+        ev.say_abort("truncated"),
         ev.ask("请补充:", [{"key": "scenario", "label": "场景", "options": ["quake"]}]),
         ev.plan([{"n": 1, "text": "探测", "st": "d"}]),
         ev.tool_start("s6", "[06/11]", "snaphu --method mcf", "解缠"),
@@ -148,6 +161,7 @@ def test_factories_satisfy_frontend_required_fields():
         ev.step_start(6),
         ev.step_end(6, 0),
         ev.step_stage(6, "PREPARED"),
+        ev.agent_cycle(1, 6, "search_data"),
         ev.overall(50),
         ev.candidates(6),
         ev.note("warn", "提示"),
@@ -421,9 +435,12 @@ def test_event_type_registry_diff_is_exactly_documented():
     backend = _backend_types()
     frontend = _frontend_types()
     # 双向差集必须与文件头登记的豁免清单完全一致 —— 任何一侧新增类型而
-    # 另一侧未跟上(或未登记豁免)都会在此失败
-    assert backend - frontend == BACKEND_ONLY, (
-        f"后端有/前端无 漂移: {backend - frontend} != {BACKEND_ONLY}")
+    # 另一侧未跟上(或未登记豁免)都会在此失败。流式帧按 STREAMING_LANDING
+    # 过渡豁免:W3 的 app.js 分支未合入/已合入两态都精确合法,不放过其他漂移。
+    diff = backend - frontend
+    assert diff in (BACKEND_ONLY, BACKEND_ONLY | STREAMING_LANDING), (
+        f"后端有/前端无 漂移: {diff} != {BACKEND_ONLY}"
+        f"(流式帧过渡豁免仅限 {STREAMING_LANDING})")
     assert frontend - backend == FRONTEND_ONLY, (
         f"前端有/后端无 漂移: {frontend - backend} != {FRONTEND_ONLY}")
     # 契约注册表本身必须覆盖两侧全部类型

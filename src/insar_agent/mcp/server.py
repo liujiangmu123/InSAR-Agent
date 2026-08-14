@@ -6,7 +6,9 @@
     message 自带下一步指引(启动后端 / 换工具 / 轮询);
   - 回合是 NDJSON 流,但 MCP 工具必须快进快出:plan_run 消费到规划结束
     (规划无重计算,秒级),execute_run 只观察受理窗口即断开 —— 后端契约
-    保证断开不取消 run,宿主随后用 insar_run_status 轮询(events_hint 明示)。
+    保证断开不取消 run,宿主随后用 insar_run_status 轮询(events_hint 明示);
+    insar_converse 消费自主循环回合到收束(say/note),消费上限
+    INSAR_MCP_CONVERSE_TIMEOUT(默认 180s),超限断开同样不取消回合。
 
 运行:python -m insar_agent.mcp(需可选依赖组 [mcp];后端须已启动)。
 """
@@ -42,6 +44,8 @@ mcp = MCPServer(
         "insar_plan_run 用自然语言发起规划(返回计划摘要)→ insar_execute_run 触发执行"
         "(立即返回受理,不等完成)→ insar_run_status 轮询到终态 → insar_get_provenance /"
         " insar_list_figures 取溯源与图件;执行中可用 insar_intervene 干预。"
+        "也可用 insar_converse 让代理在一个回合内自主跑多个周期"
+        "(搜数据/查环境/定计划;执行仍需用户确认,不会被循环自动触发)。"
         "前置条件:InSAR 后端已启动(python -m insar_agent.api.app,"
         "基址由环境变量 INSAR_API_BASE 指定,默认 http://127.0.0.1:8873)。"
     ),
@@ -84,6 +88,49 @@ def _digest_turn(events: list[dict]) -> dict[str, Any]:
         elif t == "candidates":
             digest["decision_step"] = e.get("stepId")
     return digest
+
+
+def _digest_converse(events: list[dict], *, finished: bool = True) -> dict[str, Any]:
+    """自主循环回合的事件流 → 返回素材(周期账/结论/工具摘要/确认卡)。
+
+    事件契约(docs/LOOP-CONTRACT.md §1):agent.cycle 每周期一条;say = 正常
+    收束,note = 预算耗尽/取消/降级收尾 —— 以最后一个 say/note 为回合终止
+    事件(中途的告警 note 不是收尾);tool.end 的 summary 是周期内工具结果。
+
+    finished=False(deadline 截断的流)没有可信的终止事件:最后收到的 say/note
+    只是「断开前的最后一条」,把中途告警 note 当收尾会误导宿主(ended_by="note"
+    且 truncated=False,P2-9)—— 截断时一律不认终止事件,由调用方如实报 truncated。
+    """
+    cycles = [{"n": e.get("n"), "action": e.get("action", "")}
+              for e in events if e.get("t") == "agent.cycle"]
+    says: list[str] = []
+    tool_summaries: list[str] = []
+    problems: list[str] = []
+    questions: list[dict] = []
+    for e in events:
+        t = e.get("t")
+        if t == "say":
+            says.extend(_say_texts(e))
+        elif t == "tool.end" and e.get("summary"):
+            tool_summaries.append(str(e["summary"]))
+        elif t == "note" and e.get("tone") == "bad":
+            problems.append(e.get("text", ""))
+        elif t == "ask":
+            questions.append({"prompt": e.get("prompt", ""),
+                              "fields": e.get("fields", [])})
+    terminal = (next((e for e in reversed(events) if e.get("t") in ("say", "note")),
+                     None) if finished else None)
+    reply_parts = list(says)
+    if terminal is not None and terminal.get("t") == "note":
+        reply_parts.append(terminal.get("text", ""))  # 收尾语跟在正文之后
+    return {
+        "reply": "\n".join(p for p in reply_parts if p),
+        "ended_by": terminal.get("t") if terminal else None,
+        "cycles": cycles,
+        "tool_summaries": tool_summaries,
+        "problems": problems,
+        "questions": questions,
+    }
 
 
 def _compact_events(events: list[dict], limit: int = 20) -> list[dict]:
@@ -405,6 +452,73 @@ async def insar_run_status(
         return {"run": _run_brief(run), "terminal": terminal, "counts": counts,
                 "current": current, "failures": failures, "steps": steps,
                 "hint": hint}
+    return await _guarded(impl())
+
+
+# ---------------- 自主循环回合(契约 §10) ----------------
+
+@mcp.tool(
+    name="insar_converse",
+    annotations=ToolAnnotations(title="发起 InSAR 自主循环回合", read_only_hint=False,
+                                destructive_hint=False, idempotent_hint=False,
+                                open_world_hint=False),
+)
+async def insar_converse(
+    session_id: Annotated[str, Field(description="会话 id(来自 insar_create_session"
+                                                 " / insar_list_sessions)")],
+    text: Annotated[str, Field(
+        description="自然语言的回合目标,如「检查 Ridgecrest 的数据情况并把处理计划准备好」",
+        min_length=1)],
+    max_cycles: Annotated[int, Field(
+        description="本回合的周期上限(1-12,默认 6):每周期一个白名单动作,"
+                    "耗尽则如实收尾(note)",
+        ge=1, le=12)] = 6,
+) -> dict:
+    """发起自主循环回合:代理逐周期自主选动作(搜数据/查环境/定计划/调参…)直到收束。
+
+    使用时机:想让代理自主推进多步侦察/筹备工作(盘点数据 → 探测环境 → 生成
+    计划)而不想逐工具编排时;单步规划直接用 insar_plan_run 即可。执行绝不会
+    被循环自动触发:execute 动作只产生确认卡(见 questions),真正执行仍走
+    insar_execute_run。需要后端 2026-08-14 及以上版本(缺端点会报错并给升级指引)。
+
+    返回 JSON:
+      {session_id, reply, ended_by, cycles: [{n, action}], tool_summaries,
+       problems, questions, truncated, stream_finished, next}
+    - reply 是回合结论(say 正常收束 / note 收尾语);ended_by = say|note|null;
+    - cycles 是逐周期账目(第 n 周期做了什么动作),tool_summaries 是周期内
+      工具执行的结果摘要,problems 是坏消息(tone=bad 的 note),
+      questions 是确认卡/提问(把 prompt 转述给用户决策);
+    - truncated=true 表示消费达上限(INSAR_MCP_CONVERSE_TIMEOUT,默认 180s)
+      被打断且未见结论 —— 回合在后端继续推进(断开不取消),按 next 指引轮询。
+    """
+    async def impl() -> dict:
+        events, finished = await backend.converse(session_id, text, max_cycles)
+        digest = _digest_converse(events, finished=finished)
+        truncated = not finished and digest["ended_by"] is None
+        if truncated:
+            next_hint = ("回合超出消费上限被断开,但仍在后端继续推进(断开不取消):"
+                         "稍后用 insar_run_status(run_id) 轮询执行进展(run_id 见 "
+                         "insar_plan_run / insar_execute_run 的返回),或调大环境变量 "
+                         "INSAR_MCP_CONVERSE_TIMEOUT 后重试")
+        elif digest["questions"]:
+            next_hint = ("回合产生了确认卡/提问(见 questions):把内容转述给用户决策;"
+                         "执行永远不会未经用户确认自动开始")
+        elif digest["ended_by"] == "note":
+            next_hint = ("回合以 note 收尾(预算耗尽/取消/降级,见 reply):"
+                         "可拆小目标或提高 max_cycles 后重试")
+        elif digest["ended_by"] == "say":
+            next_hint = ("回合正常收束(结论见 reply);需要执行计划时走 "
+                         "insar_execute_run,查看运行进展用 insar_run_status")
+        else:
+            next_hint = ("回合结束但未见 say/note 终止事件(后端异常?):"
+                         "检查后端日志,或改用 insar_plan_run 的分步流程")
+        return {
+            "session_id": session_id,
+            **digest,
+            "truncated": truncated,
+            "stream_finished": finished,
+            "next": next_hint,
+        }
     return await _guarded(impl())
 
 

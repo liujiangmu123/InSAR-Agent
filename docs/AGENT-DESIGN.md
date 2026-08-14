@@ -4,7 +4,7 @@
 > 依据：`docs/DESIGN.md`（产品与 novelty 定稿）+ 四轮源码级竞品审计。
 > 所有借鉴点标注 `仓库/文件:行号`，所有「未实现」标注为设计空白。
 > 2026-08-12：并入 `reference/AGENT_PRODUCTS_LEARNING.md`（11 仓库产品层 / harness 层 / 定向工具对标）的十条修正（absorb-E~P）。
-> 最后更新：2026-08-12
+> 最后更新：2026-08-14（自主循环波次修订：§2 分层图、§3.3 约束一/约束四、§3.5 五职责、§8.4；循环设计全文另立 `docs/AGENT-LOOP.md`，上一版 2026-08-12）
 
 ---
 
@@ -239,7 +239,7 @@ aiida-workgraph 实现了这个，但走 RabbitMQ RPC（`aiida-workgraph/src/aii
 │         task_id 唯一句柄，LLM 永不接触文件系统路径                  │
 ├──────────────────────────────────────────────────────────────────┤
 │ Brain   ← 可整层删除，删掉后退化为手动流水线，结果完全正确           │
-│         intent / select / classify_failure / narrate 四职责         │
+│         intent / select / triage / narrate / cycle 五职责           │
 │         只做候选集内选择题，绝不生成命令或代码                       │
 ├──────────────────────────────────────────────────────────────────┤
 │ Loop    agent 主循环。事件驱动，非 while+tool_call                 │
@@ -396,7 +396,7 @@ class Driver:
 
 ### 3.3 LLM 调用的四个约束
 
-**约束一：一次只问一个决策。** 依据 `DESIGN.md:373-374`：社区记录 Ollama 7b/14b/32b 一律「第二个工具永不执行」。竞品虽然允许一次多个 tool_calls（`agent.py:1473`、`planner.py:549`），但我们的 LLM 不调工具 —— 它只回答选择题，所以天然单步。
+**约束一：单周期单决策，回合可多周期。**（2026-08-14 波次修订，原「一次只问一个决策」）每周期 LLM 仍只输出一个候选集内选择或一个白名单动作（闭集 10 项，见 `docs/AGENT-LOOP.md §3`），周期间由确定性循环驱动器（`loop/driver.py` 的 `converse_loop`）衔接，模型从不自行串接下一步；周期上限、同签名熔断与预算按本节约束二/约束四与 `docs/AGENT-LOOP.md §5` 执行。原依据（`DESIGN.md §8.3`：社区记录 Ollama 7b/14b/32b 一律「第二个工具永不执行」）不再用于禁止回合内多周期，保留为「本地小模型默认关闭自主循环」的开关条件。竞品虽然允许一次多个 tool_calls（`agent.py:1473`、`planner.py:549`），但我们的 LLM 不调工具 —— 单周期内它只回答一个选择题。
 
 **约束二：终止条件必须显式且分类。** 竞品都不读 `finish_reason`（已核实两处均无）。我们的终止条件：
 
@@ -421,7 +421,7 @@ class Driver:
 **约束四：上下文预算。** 两个竞品都没有 compaction（已核实）。InSAR_Agent 全量重发（`agent.py:1420-1425`），且 `query_slc` 返回值含 footprints geojson（`agent.py:842-862`），几十景就顶爆上下文。
 
 我们的策略：
-- **决策请求不带历史** —— 每次选择题是独立的结构化请求，只含「当前步骤 + 候选集 + 环境事实 + 上游摘要」。这从根上消除了历史膨胀。
+- **决策请求不带对话历史**（2026-08-14 波次修订）—— 每次选择题仍是独立的结构化请求，只含「当前步骤 + 候选集 + 环境事实 + 上游摘要」；自主循环的 `cycle` 决策额外追加本回合已完成周期的结构化摘要（动作 + 结果状态，每条 ≤300 字，非原始日志），并纳入 compaction 预算（`loop/budget.py` 的 `clip_summary`）。对话历史仍然不进任何决策请求，历史膨胀从根上消除。
 - **对话历史单独维护**，仅用于 intent 与 narrate，按 `agentic-swmm/agentic_swmm/agent/prompts.py:182-200` 的字符预算裁剪。
 - **日志绝不进 LLM 上下文** —— 先用确定性代码切片（`DESIGN.md:384-386`：RULER / context rot 研究）。`triage.py` 只收「错误行 ±5 行」的窗口。
 
@@ -442,7 +442,7 @@ InSAR_Agent 提示词里有整节 "ABSOLUTE ANTI-FABRICATION"（`agent.py:31-38`
 
 系统提示词目标 **< 3 KB**，不含任何反幻觉说教 —— 幻觉在结构上不可能发生。
 
-### 3.5 Brain 层四职责与降级路径
+### 3.5 Brain 层五职责与降级路径
 
 | 职责 | 输入 | 输出 | 失败降级 |
 |---|---|---|---|
@@ -450,8 +450,9 @@ InSAR_Agent 提示词里有整节 "ABSOLUTE ANTI-FABRICATION"（`agent.py:31-38`
 | `select` | 候选集 + 环境事实 | `{choice: int, reason: str}` | 取 registry 声明的 `recommend: true` |
 | `triage` | 错误窗口（±5 行） | `{class: Literal[...], action: Literal[...]}` | 标 `unknown` 停链问人 |
 | `narrate` | provenance JSON | 方法章节 Markdown | 用模板填空 |
+| `cycle` | 回合目标 + 周期摘要 + 环境事实 | `{action \| say}` 闭集（`CycleResult`） | 停在当前周期，note 收尾转人工 |
 
-**四个都能降级到无 LLM 路径。** 这就是 `DESIGN.md:233` 那条约束的实现：把 `brain/` 整层删掉，系统退化成手动可插拔流水线，仍完全可用、结果完全正确。
+**五个都能降级到无 LLM 路径。** 这就是 `DESIGN.md:233` 那条约束的实现：把 `brain/` 整层删掉，系统退化成手动可插拔流水线，仍完全可用、结果完全正确。（`cycle` 为 2026-08-14 波次新增：自主循环的逐周期决策，动作白名单与聊天回合的 `converse` 单步动作决策共用同一套校验纪律，设计全文见 `docs/AGENT-LOOP.md`。）
 
 ---
 
@@ -1689,7 +1690,7 @@ InSAR_Agent 静默降级（`agent.py:1063`）的做法在教学与论文场景�
 | 不做 | 原因 |
 |---|---|
 | LLM 生成命令行/代码 | `DESIGN.md:348` 硬约束 |
-| LLM 自由多步规划 | BFCL v4 数据：本地 14B 端到端仅 41%（`DESIGN.md:353-360`） |
+| LLM 开放式自由规划（任意命令/任意工具序列） | 原「LLM 自由多步规划」，2026-08-14 波次精确化：受约束的自主循环（动作白名单闭集 + 周期上限 + 熔断 + 审批门内置，见 `docs/AGENT-LOOP.md`）是支持的；BFCL v4 数据（本地 14B 端到端仅 41%，`DESIGN.md:353-360`）保留为「本地小模型默认关闭自主循环」的开关条件 |
 | LLM 检索日志 | context rot（`DESIGN.md:384-386`） |
 | 引入 Snakemake/Prefect/Dagster/LangGraph/redun | `DESIGN.md:406-425`（LangGraph resume 从节点开头重跑是决定性的） |
 | 未鉴权的文件读接口 | 竞品致命安全问题（`DESIGN.md:548-551`），我们主打数据不出域 |

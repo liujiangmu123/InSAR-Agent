@@ -17,6 +17,7 @@ venv/
 .pytest_tmp/
 .bench_tmp/
 .ruff_cache/
+.hypothesis/
 *.egg-info/
 
 # 数据与产物（体积大，不入库；锚定根目录,勿误伤 src/insar_agent/data/ 源码包）

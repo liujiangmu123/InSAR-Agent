@@ -112,7 +112,7 @@ test('timeSeriesSvg 扩展:idx 并集轴定位曲线可缺历元', () => {
   assert.ok(svg.includes('points="54.0,'));                // idx=0 → 轴首
 });
 
-test('mapSvg 扩展:markers/note 渲染,hidePoints 隐藏演示点,默认行为不变', () => {
+test('mapSvg:markers/note 渲染;演示点位已随假图资产删除(0814B W6)', () => {
   const svg = mapSvg(null, {
     hidePoints: true,
     markers: [{ x: 150, y: 85, color: '#2563eb', label: 'P1' }],
@@ -121,7 +121,10 @@ test('mapSvg 扩展:markers/note 渲染,hidePoints 隐藏演示点,默认行为�
   assert.ok(svg.includes('class="mk"'));
   assert.ok(svg.includes('>P1</text>'));
   assert.ok(svg.includes('覆盖 35.40°—36.00°N'));
-  assert.ok(!svg.includes('class="pt"'));                  // 演示点位已隐藏
-  const legacy = mapSvg('A');                              // 旧签名向后兼容
-  assert.ok(legacy.includes('class="pt"') && legacy.includes('data-on="1"'));
+  assert.ok(!svg.includes('class="pt"'));                  // 演示点位不复存在
+  // 旧签名(选中演示点)保持可调用,但绝不再渲染演示点位 —— 界面诚实化:
+  // POINTS 假点位已删除,点位只能由调用方(tspoint 真实取数)经 markers 传入
+  const legacy = mapSvg('A');
+  assert.ok(/^<svg/.test(legacy));
+  assert.ok(!legacy.includes('class="pt"') && !legacy.includes('data-on="1"'));
 });

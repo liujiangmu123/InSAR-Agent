@@ -107,6 +107,13 @@ export function stepsSuffix(steps) {
   return parts.length ? ` · ${parts.join(' ')}` : '';
 }
 
+/** run 的「模拟」后缀(界面诚实化,0814B W6):/api/runs 的 simulated 标记
+    (引擎缺失下的合成执行,证据封顶 runnable)在条目文案里如实标出;
+    字段缺失/为假 → 空串,真实 run 的文案逐字节不变。 */
+export function simSuffix(run) {
+  return run && run.simulated ? ' · 模拟' : '';
+}
+
 /** fork 谱系树:扁平清单 → 缩进展示序列 [{run, depth}]。
     根(无父/父不在清单,例如父已被清理)按 created_at 倒序;子链挂在
     parent 之下同样倒序,depth = 父 + 1。坏数据成环时每行至多出现一次。 */
@@ -142,12 +149,12 @@ export function buildRunTree(runs) {
   return out;
 }
 
-/** 下拉条目文案:谱系缩进(全角空格 + └)+「最新 · 」前缀 + 时间戳(状态·统计)。 */
+/** 下拉条目文案:谱系缩进(全角空格 + └)+「最新 · 」前缀 + 时间戳(状态·模拟标记·统计)。 */
 export function optionLabel(node, latestId = null) {
   const r = node.run;
   const indent = node.depth ? '\u3000'.repeat(node.depth - 1) + '└ ' : '';
   const head = r.run_id === latestId ? '最新 · ' : '';
-  return `${indent}${head}${runStamp(r.run_id)}(${r.status || '?'}${stepsSuffix(r.steps)})`;
+  return `${indent}${head}${runStamp(r.run_id)}(${r.status || '?'}${simSuffix(r)}${stepsSuffix(r.steps)})`;
 }
 
 /* ============================================================
@@ -202,7 +209,7 @@ export function mountRunSwitch(host, { root = null, onSwitch = null } = {}) {
   return host;
 }
 
-/** 正常形态:一行紧凑下拉 + 历史态徽标;历史态追加只读提示行。 */
+/** 正常形态:一行紧凑下拉 + 模拟/历史态徽标;历史态追加只读提示行。 */
 function bar(runs, onSwitch) {
   const latestId = runs[0].run_id;         // 服务端按 created_at 倒序,首条即最新
   const active = activeRunId();
@@ -216,18 +223,25 @@ function bar(runs, onSwitch) {
     },
   },
     h('option', { value: '', selected: !active || undefined },
-      `最新 · ${runStamp(latestId)}(${runs[0].status || '?'}${stepsSuffix(runs[0].steps)})`),
+      `最新 · ${runStamp(latestId)}(${runs[0].status || '?'}${simSuffix(runs[0])}${stepsSuffix(runs[0].steps)})`),
     ...buildRunTree(runs).map((node) => h('option', {
       value: node.run.run_id,
       selected: node.run.run_id === active || undefined,
     }, optionLabel(node, latestId))));
 
+  // 当前展示的 run(选中历史 run 或最新)带 simulated 标记 → 「模拟」徽章
+  // (界面诚实化,0814B W6:演示执行的产物不冒充真实运行,样式随既有徽章)
+  const shown = (active && runs.find((r) => r.run_id === active)) || runs[0];
   const row = h('div', {
     class: 'field runswitch',
     style: { display: 'flex', alignItems: 'center', gap: '7px', margin: '2px 0 8px' },
   },
     h('label', { style: { flexShrink: '0', margin: '0' } }, 'run'),
     sel,
+    shown?.simulated ? h('span', {
+      class: 'tag is-stale', style: { flexShrink: '0' },
+      title: '模拟执行:引擎缺失时的合成产物,证据级封顶 runnable,不构成科学证据',
+    }, '模拟') : null,
     active ? h('span', { class: 'tag is-stale', style: { flexShrink: '0' } }, '历史 · 只读') : null);
 
   const note = active ? h('p', {

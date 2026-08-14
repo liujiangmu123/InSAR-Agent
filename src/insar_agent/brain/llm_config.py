@@ -25,9 +25,31 @@ DEFAULT_BASE_URL = "https://tokenrhythm.studio/v1"
 
 _ALLOWED_KEYS = ("base_url", "api_key", "chat_model", "vision_model")
 
+#: 自主循环缺省值(LOOP-CONTRACT §8):开关默认开,单回合周期上限默认 6(闭区间 1..12)
+AGENT_LOOP_DEFAULT = True
+AGENT_MAX_CYCLES_DEFAULT = 6
+AGENT_MAX_CYCLES_MIN = 1
+AGENT_MAX_CYCLES_MAX = 12
+
 
 def config_path(home: Path) -> Path:
     return Path(home) / _FILENAME
+
+
+def _agent_fields(raw: dict) -> dict:
+    """自主循环两键(agent_loop / agent_max_cycles)的值域过滤。
+
+    类型与区间都合法才收,否则整键丢弃(读取时 = 回默认;保存时 = 保留旧值)。
+    注意 bool 是 int 的子类:agent_max_cycles=true 这类形态必须拒绝。
+    """
+    out: dict = {}
+    if isinstance(raw.get("agent_loop"), bool):
+        out["agent_loop"] = raw["agent_loop"]
+    v = raw.get("agent_max_cycles")
+    if (isinstance(v, int) and not isinstance(v, bool)
+            and AGENT_MAX_CYCLES_MIN <= v <= AGENT_MAX_CYCLES_MAX):
+        out["agent_max_cycles"] = v
+    return out
 
 
 def load_llm_config(home: Path) -> dict:
@@ -39,8 +61,10 @@ def load_llm_config(home: Path) -> dict:
         return {}
     if not isinstance(raw, dict):
         return {}
-    return {k: raw[k] for k in _ALLOWED_KEYS
-            if isinstance(raw.get(k), str) and raw[k].strip()}
+    cfg = {k: raw[k] for k in _ALLOWED_KEYS
+           if isinstance(raw.get(k), str) and raw[k].strip()}
+    cfg.update(_agent_fields(raw))  # 非法/越界的循环键在此被剔除(= 未配置)
+    return cfg
 
 
 def save_llm_config(home: Path, updates: dict) -> dict:
@@ -50,9 +74,20 @@ def save_llm_config(home: Path, updates: dict) -> dict:
         v = updates.get(k)
         if isinstance(v, str) and v.strip():
             cfg[k] = v.strip()
+    cfg.update(_agent_fields(updates))  # 循环两键同语义:合法值覆盖,None/非法保留旧值
     Path(home).mkdir(parents=True, exist_ok=True)
     atomic_write_text(config_path(home), json.dumps(cfg, ensure_ascii=False, indent=2))
     return cfg
+
+
+def agent_loop_settings(home: Path) -> dict:
+    """自主循环设置(/api/converse 缺省周期数与循环开关的数据源,LOOP-CONTRACT §8)。
+
+    与 load_llm_config 同哲学:文件缺失/损坏、键缺失、类型或区间非法一律回默认,绝不抛。
+    """
+    cfg = load_llm_config(home)
+    return {"enabled": cfg.get("agent_loop", AGENT_LOOP_DEFAULT),
+            "max_cycles": cfg.get("agent_max_cycles", AGENT_MAX_CYCLES_DEFAULT)}
 
 
 def mask_key(key: str) -> str:

@@ -13,6 +13,7 @@
 | `docs/FEATURES-2026-08-13.md` | 2026-08-13 波次交付清单(功能/入口/一句话,含已知缺口) |
 | `docs/DESIGN.md` | 产品定稿:novelty、11 步 × 方法矩阵、桥梁地图、竞品分析 |
 | `docs/AGENT-DESIGN.md` | 架构定稿:七条硬约束 → 分层/五阶段执行器/指纹/SQLite/UI |
+| `docs/AGENT-LOOP.md` | 自主循环设计定稿(2026-08-14 波次):动机/事件契约/状态机/终止闭集/红线/降级矩阵 |
 | `docs/VALIDATION-isce2-wsl.md` | 最新实测:ISCE2 WSL 全链(ALOS Baja 同震对,2026-08-12 跑通) |
 | `reference/AGENT_PRODUCTS_LEARNING.md` | codex/gemini-cli/OpenHands/cline + snakemake/dvc 定向调研(absorb-E~P) |
 | `reference/COMPARISON_LEARNING.md` | redun/aiida/agentic-swmm 等对照学习(absorb-A~D) |
@@ -34,8 +35,14 @@
 - **干预队列三语义**:steer(当前步后生效)/ follow_up(run 结束后)/ next_run(下次规划);
   KILL 即时响应;运行中投递消息必须显式声明语义(HTTP 400 兜底)。
 - **run fork(参数试探分支)**:改第 6 步方法 → 1-5 步零重算复用父 run 产物,6-11 重跑。
-- **Brain 可整层拔除**:intent/select/triage/narrate 全部有无-LLM 降级路径;
+- **Brain 可整层拔除**:intent/select/triage/narrate/cycle 全部有无-LLM 降级路径;
   LLM 只做候选集内选择题(枚举索引),越界拒绝,截断整体拒绝,润色不许动数字。
+- **受约束的自主循环**(2026-08-14 波次):一个回合内 Agent 连续多周期工作——
+  单周期单决策,动作白名单闭集,周期上限(默认 6,可调 1-12)+同签名熔断+审批门内置;
+  execute 永远只产生确认卡绝不自启流水线;brain 拔除/无密钥时整回合退回单步路径
+  (设计 `docs/AGENT-LOOP.md`,用法 [§3.14](docs/USER-GUIDE.md#314-自主循环与联网检索);
+  守护测试 `tests/test_api_loop*.py`、`tests/test_brain_cycle.py`、`tests/test_net_search.py`、
+  `tests/test_subtasks.py` 等本波测试组,单步零回归由 `tests/test_converse.py` 锁死)。
 - **诚实模拟模式**:引擎缺失(本机无 WSL)时可走合成执行演示全流程,
   日志/产物/账本全程显式标注 simulated,证据封顶 runnable。
 
@@ -105,6 +112,8 @@ python -m http.server 8000              # 浏览器开 http://127.0.0.1:8000
 | `INSAR_ALLOW_SIMULATED` | 引擎缺失时允许模拟执行 | `1` |
 | `INSAR_LLM_BASE_URL` / `INSAR_LLM_API_KEY` / `INSAR_LLM_MODEL` | LLM(OpenAI 兼容);不配 = brain 禁用,手动流水线 | 无 |
 | `INSAR_LLM_FALLBACK_*` | 单跳备用路由 | 无 |
+| `INSAR_TAVILY_KEY` | 自主循环联网检索:配置后网页检索优先走 Tavily(net 层) | 无(用免密钥端点) |
+| `INSAR_ASF_SEARCH_BASE` / `INSAR_WEBSEARCH_BASE` / `INSAR_TAVILY_BASE` | 覆盖 ASF/网页/Tavily 检索基址(net 层;测试用它指向本地 mock 保持离线) | ASF / DuckDuckGo / Tavily 官方端点 |
 | `INSAR_TEST_TIME_FACTOR` | 仅测试:时序判定窗放宽系数(高负载并行开发用 3;产品超时语义不受影响) | `1` |
 
 ## MCP server(Claude Desktop / Cursor 接入)
@@ -133,7 +142,8 @@ src/insar_agent/
 ├── runtime/     作业目录契约(local/wsl)/双超时日志流/五阶段执行器/产物发现/环境探测
 ├── audit/       contract.yaml 阈值台账/run_ok 双判定/指标重解析/六级证据阶梯
 ├── brain/       LLM 门面(可拔除):intent/select/triage/narrate
-├── loop/        事件驱动 driver/事件总线(监听隔离)/上下文预算
+├── loop/        自主循环核心:事件驱动 driver(单步 turn + 多周期 converse_loop)/事件总线(监听隔离)/上下文预算/子任务池
+├── net/         联网检索薄层(纯 stdlib):ASF 归档检索/网页检索/并行扇出;只出查询词,凭据不进日志
 ├── engines/     薄封装零决策:mintpy(--dostep) / isce2 / snaphu / pystamps / hyp3 / simulate
 │   └── bridges/ prep_isce(官方)+ isce2_to_pystamps(Phase 6,诚实接口边界)
 ├── report/      run.sh 等价命令 / 方法章节模板

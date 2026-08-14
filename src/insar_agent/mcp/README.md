@@ -71,6 +71,7 @@ python -m insar_agent.mcp            # 2) MCP server(stdio;宿主通常自动拉
 | `insar_list_sessions` | 只读 | 列出会话(可含已归档) |
 | `insar_create_session` | 写 | 新建会话;可带 `scenario` 提示(quake/permafrost/landslide/stripmap_coseismic) |
 | `insar_plan_run` | 写 | 自然语言发起规划回合,返回计划摘要(步骤/方法/问题/待补问题) |
+| `insar_converse` | 写 | 自主循环回合:代理逐周期自主选动作(搜数据/查环境/定计划…)直到收束,返回结论 + 周期账 + 工具摘要;execute 只产生确认卡,绝不自动执行(需后端 ≥ 2026-08-14) |
 | `insar_execute_run` | 写 | 触发执行,受理即返回(不阻塞等完成),附 `events_hint` |
 | `insar_run_status` | 只读 | 步骤状态矩阵 + 当前阶段 + 失败摘要;`terminal=true` 即终态 |
 | `insar_intervene` | 写(破坏性) | PAUSE / PLAY(RESUME)/ KILL / RESET / SKIP / SET_METHOD / SET_PARAMS;闭集校验错误由后端透传 |
@@ -92,6 +93,23 @@ python -m insar_agent.mcp            # 2) MCP server(stdio;宿主通常自动拉
 5. 终态 `done` → `insar_get_provenance(run_id)` 汇报方法与参数,
    `insar_list_figures(run_id)` 给出结果图链接。
 
+### 自主循环形态(后端 ≥ 2026-08-14)
+
+> 用户:「检查一下 Ridgecrest 的数据情况,把处理计划准备好」
+
+不想逐工具编排时,把整个侦察/筹备目标交给 `insar_converse(session_id, text,
+max_cycles=6)`:代理在一个回合内自主跑多个周期(每周期一个白名单动作,如
+搜数据 → 查环境 → 定计划),`say` 正常收束、预算耗尽走 `note` 收尾。返回
+`reply`(结论)、`cycles`(逐周期账目 `{n, action}`)、`tool_summaries`
+(周期内工具结果摘要)与 `questions`(确认卡/提问)。纪律与边界:
+
+- **执行不会被循环自动触发**:循环里的 execute 动作只产生确认卡(进
+  `questions`,转述给用户),真正执行仍走 `insar_execute_run`;
+- 消费上限 `INSAR_MCP_CONVERSE_TIMEOUT`(默认 180s):超限断开并置
+  `truncated=true`(断开不取消,回合在后端继续),按 `next` 指引轮询;
+- 旧后端没有 `POST /api/converse` 端点:报错自带升级指引,可先用
+  `insar_plan_run` + `insar_execute_run` 分步替代。
+
 ## 环境变量
 
 | 变量 | 含义 | 默认 |
@@ -100,6 +118,7 @@ python -m insar_agent.mcp            # 2) MCP server(stdio;宿主通常自动拉
 | `INSAR_MCP_HTTP_TIMEOUT` | 单次 HTTP 请求超时(秒) | `30` |
 | `INSAR_MCP_PLAN_TIMEOUT` | 规划回合流的消费上限(秒) | `120` |
 | `INSAR_MCP_ACCEPT_WINDOW` | 执行回合的受理观察窗(秒) | `3` |
+| `INSAR_MCP_CONVERSE_TIMEOUT` | 自主循环回合流的消费上限(秒) | `180` |
 
 ## 错误面与边界
 

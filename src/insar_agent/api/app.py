@@ -213,6 +213,26 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
+class UIStaticFiles(StaticFiles):
+    """静态 UI 挂载的瘦身层(界面诚实化,0814B W6)。
+
+    prototype/ 里的历史演示资产 —— *-demo.html(fail-demo/setup-demo 等
+    纯写死示意数据的独立演示页)与旧版 UI 快照 v2-backup/ —— 不得从生产
+    端口(8873)对外服务,命中一律 404;其余路径行为与 StaticFiles 完全
+    一致。文件本体保留在源码树:check 套件(fail-demo.check.mjs 等)与
+    文档仍按文件读取。
+    """
+
+    async def get_response(self, path: str, scope):
+        # StaticFiles.get_path 产出 os.path.normpath 结果,Windows 下是
+        # 反斜杠分隔的相对路径 —— 先归一再判定
+        norm = path.replace("\\", "/")
+        leaf = norm.rsplit("/", 1)[-1]
+        if norm == "v2-backup" or norm.startswith("v2-backup/") or leaf.endswith("-demo.html"):
+            raise HTTPException(404, "Not Found")
+        return await super().get_response(path, scope)
+
+
 def _host_is_loopback(host: str) -> bool:
     """host 是否回环:localhost 或 127.0.0.0/8、::1 等回环 IP。"""
     if host.strip().lower() == "localhost":
@@ -302,9 +322,65 @@ def check_session_id(session_id: str) -> str:
     return sid
 
 
+def check_turn_text(text: str) -> str:
+    """校验回合 text 可编码 UTF-8;孤代理(只能经原始字节体注入)直接 400。
+
+    流式端点的教训(B11 上报,P1):回合内任何事件回显 text 时,NDJSON 行在
+    响应编码层 encode('utf-8') 爆炸 —— ndjson 泵的异常保护只包住生成器迭代,
+    包不住其后的响应编码,真实 socket 下表现为开流后裸断连。必须挡在开流前
+    (check_session_id 的孤代理守卫同款)。"""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        raise HTTPException(400, "text 不合法:含无法编码为 UTF-8 的码位(孤代理)")
+    return text
+
+
+def default_max_cycles(home: Path) -> int:
+    """/api/converse 的缺省周期上限:读 llm_config.agent_loop_settings(B10)。
+
+    B10 与本端点并行开发:函数可能尚不存在(ImportError/AttributeError 一律回
+    契约默认 6,LOOP-CONTRACT §7);已存在时其契约保证返回 1..12,这里仍复核
+    一次 —— 缺省通道给出的值绝不能反过来被端点自己的 1..12 校验拒绝。
+    """
+    try:
+        from insar_agent.brain.llm_config import agent_loop_settings
+        value = agent_loop_settings(home).get("max_cycles", 6)
+    except (ImportError, AttributeError):
+        return 6
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 12:
+        return value
+    return 6
+
+
+def agent_loop_enabled(home: Path) -> bool:
+    """自主循环开关(llm.json 的 agent_loop 键;/api/converse 的唯一消费者)。
+
+    与 default_max_cycles 同款防御:配置面缺失/异常一律回默认开
+    (LOOP-CONTRACT §8:agent_loop 默认 true)。
+    """
+    try:
+        from insar_agent.brain.llm_config import agent_loop_settings
+        return bool(agent_loop_settings(home).get("enabled", True))
+    except (ImportError, AttributeError):
+        return True
+
+
 class TurnBody(BaseModel):
     session: str
     text: str
+
+
+class ConverseBody(BaseModel):
+    """POST /api/converse(LOOP-CONTRACT §7)。
+
+    max_cycles 故意收宽松类型(object):越界与非整数统一由端点手工校验成
+    400 带候选说明,不让 pydantic 的 422 分裂错误口径;None = 缺省,
+    走 default_max_cycles(B10 配置面,未就绪时 6)。
+    """
+    session: str
+    text: str
+    max_cycles: object = None
 
 
 class PipelineBody(BaseModel):
@@ -375,7 +451,7 @@ def create_app(home: Path | None = None) -> FastAPI:
             custom_encoder={float: lambda v: v if math.isfinite(v) else None})
         return JSONResponse(status_code=422, content=safe)
 
-    app.include_router(create_setup_router(home))  # 环境向导(/api/setup/*,settings.json 与 DB 同目录)
+    app.include_router(create_setup_router(home))  # 环境向导(/api/setup/*,settings 与 DB 同目录)
     from insar_agent.brain.provider import set_usage_sink
     from insar_agent.brain.usage import UsageLedger
     usage_ledger = UsageLedger(db, home=home)  # LLM 用量账本:每次调用的 token/成本流水(计费中转站)
@@ -389,9 +465,11 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
     app.include_router(create_artifacts_router(store))  # 产物清单(/api/artifacts,文件面板数据源)
     app.include_router(create_doctor_router(home))  # 一键体检(/api/doctor,面向排障的秒级只读深检)
-    from insar_agent.api.data_router import create_data_router; app.include_router(create_data_router(store))  # 点位时序数据
+    from insar_agent.api.data_router import create_data_router
+    app.include_router(create_data_router(store))  # 点位时序数据
     app.include_router(create_diag_router(home))  # 诊断包一键导出(/api/diagnostics*)
-    from insar_agent.api.install_router import create_install_router; app.include_router(create_install_router())  # 安装助手(/api/install/*,只出方案,绝不代跑安装)
+    from insar_agent.api.install_router import create_install_router
+    app.include_router(create_install_router())  # 安装助手(/api/install/*,只出方案,绝不代跑安装)
     from insar_agent.api.data_catalog_router import create_data_catalog_router  # 数据集清单
     app.include_router(create_data_catalog_router(home))  # /api/datasets*(文件面板「数据集」区)
     from insar_agent.api.recommend_router import create_recommend_router  # 处理路线推荐
@@ -403,21 +481,40 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_advisor_router(store, home))  # 下一步建议(/api/advise,run 终态建议卡)
     from insar_agent.api.memory_router import create_memory_router
     app.include_router(create_memory_router(store))  # 跨会话记忆(/api/memory*,记忆面板数据源)
+    try:
+        from insar_agent.api.export_router import create_export_router
+    except ImportError:  # W4(导出)并行开发中:router 未落地时惰性跳过,合入即自动点亮
+        pass             # (default_max_cycles 的防御性 import 先例)
+    else:
+        app.include_router(create_export_router(store, home))  # 产物导出(/api/export*,W4)
+
+    # 会话 → 建 brain 时的 LLM 路由指纹:LLMRoute 是冻结数据类(按值比较),
+    # 元组含 base_url/model/api_key —— 界面改 llm.json 的任一项(含只换密钥)
+    # 都要在下一次 driver_of 时体现,否则缓存的旧 Driver 会一直持旧路由(已知坑)
+    brain_routes_fp: dict[str, tuple] = {}
 
     def driver_of(session_id: str) -> Driver:
         check_session_id(session_id)  # 边界校验:id 将成为目录名(见模块头注释)
+        # LLM 路由:workspace/llm.json(界面可配)优先,环境变量兜底;
+        # 都未配置 = brain 禁用,系统退化为手动流水线(§3.5 铁律)
+        from insar_agent.brain.llm_config import routes_from_config
+        fp = tuple(routes_from_config(home))
         with drivers_lock:
-            if session_id not in drivers:
+            driver = drivers.get(session_id)
+            if driver is None:
                 ws = home / "sessions" / session_id
-                # LLM 路由:workspace/llm.json(界面可配)优先,环境变量兜底;
-                # 都未配置 = brain 禁用,系统退化为手动流水线(§3.5 铁律)
-                from insar_agent.brain.llm_config import routes_from_config
-                drivers[session_id] = Driver(
+                driver = Driver(
                     store, workspace=ws,
-                    brain=Brain(LLMProvider(routes_from_config(home))),
+                    brain=Brain(LLMProvider(list(fp))),
                     allow_simulated=os.environ.get("INSAR_ALLOW_SIMULATED", "1") == "1")
+                drivers[session_id] = driver
                 store.create_session(session_id, session_id)
-            return drivers[session_id]
+            elif brain_routes_fp.get(session_id) != fp:
+                # 路由变了:原地替换 brain,绝不重建 Driver —— driver.bus 上挂着
+                # SSE 订阅者,重建会把订阅者留在死总线上,后续事件全部收不到
+                driver.brain = Brain(LLMProvider(list(fp)))
+            brain_routes_fp[session_id] = fp
+            return driver
 
     # 运行队列:全局串行调度(并发=1,对齐本机重计算管控),startup 恢复 pending
     run_queue = RunQueue(store)
@@ -577,6 +674,7 @@ def create_app(home: Path | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(409, str(exc))
         drivers.pop(session_id, None)  # 工作区路径即将失效,丢弃缓存的 driver
+        brain_routes_fp.pop(session_id, None)
         moved = retire_workspace(session_id)
         return {"ok": True, "purged": True, "workspace_moved_to": moved}
 
@@ -623,8 +721,7 @@ def create_app(home: Path | None = None) -> FastAPI:
         # WSL 引擎环境探测:发行版可达时并入(面板显示带 (wsl) 后缀的引擎)。
         # 纯查询、失败静默 —— 没装 WSL 的机器该端点行为不变。
         try:
-            from insar_agent.runtime.wsl_probe import (merge_wsl_probe,
-                                                       probe_wsl_engines_cached)
+            from insar_agent.runtime.wsl_probe import merge_wsl_probe, probe_wsl_engines_cached
 
             wsl_result = probe_wsl_engines_cached(timeout=30.0)  # TTL 缓存,与向导共享
             if wsl_result.get("ok"):
@@ -649,8 +746,10 @@ def create_app(home: Path | None = None) -> FastAPI:
           run 是否存在;会话不存在或还没有 run → 空清单(与 /api/state
           「无 run 不 404」一致,前端以此隐藏切换器)。
         - 排序:created_at 倒序(store.list_runs 的 SQL 排序,最新在前)。
-        - 每条附 parent_run_id(fork 谱系)与步骤终态统计
-          (total|done|skipped|failed),不含 intent/tool_versions 等大字段。
+        - 每条附 parent_run_id(fork 谱系)、simulated 标记(演示模式合成
+          执行,前端 run 切换器据此渲染「模拟」徽章 —— 界面诚实化,0814B W6)
+          与步骤终态统计(total|done|skipped|failed),不含 intent/
+          tool_versions 等大字段。
         - 纯读端点:不走 driver_of,不为未知会话创建目录/会话行。
         - 可选 limit/cursor/status 走键集分页/过滤(store.list_runs_page);
           全不传时与老响应逐字节一致,next_cursor 字段仅在带 limit 时出现。
@@ -674,6 +773,7 @@ def create_app(home: Path | None = None) -> FastAPI:
                 "created_at": run["created_at"],
                 "status": run["status"],
                 "scenario": run["scenario"],
+                "simulated": bool(run["simulated"]),
                 "steps": {"total": len(steps), **counts},
             })
         extra = {"next_cursor": page["next_cursor"]} if limit is not None else {}
@@ -697,7 +797,38 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.post("/api/turn")
     def turn(body: TurnBody):
+        check_turn_text(body.text)  # 孤代理挡在开流前(先于 driver_of,不落目录)
         return ndjson(driver_of(body.session).turn(body.session, body.text))
+
+    @app.post("/api/converse")
+    def converse(body: ConverseBody):
+        """自主循环回合(LOOP-CONTRACT §7):NDJSON 流,逐周期吐 agent.cycle。
+
+        校验全部挡在开流前(流式响应一旦开始就无法再改状态码,同 /api/pipeline
+        的教训):max_cycles 先于 driver_of —— 被拒请求不为新 session 落目录;
+        session 校验与 /api/turn 同款(driver_of → check_session_id)。
+        停止不设新端点:复用 POST /api/abort 的 control 位,循环在周期边界响应。
+
+        调用形状:契约 §4 的 converse_loop(text) 是省写,B1 落地签名与 turn
+        同形(首参 session_id,driver.py 签名注记);text 用关键字传参 ——
+        并行单元的宽容桩(*args/**kwargs 形态)按 kwargs 取 text 不会错位。
+        """
+        if body.max_cycles is None:
+            max_cycles = default_max_cycles(home)
+        elif (isinstance(body.max_cycles, bool) or not isinstance(body.max_cycles, int)
+                or not 1 <= body.max_cycles <= 12):
+            raise HTTPException(
+                400, "max_cycles 不合法:须为 1-12 的整数(缺省走模型设置 "
+                     f"agent_max_cycles,未配置为 6),收到 {body.max_cycles!r}")
+        else:
+            max_cycles = body.max_cycles
+        check_turn_text(body.text)  # 孤代理挡在开流前(/api/turn 同款守卫)
+        if not agent_loop_enabled(home):
+            # 面板承诺(llmsettings.js):关闭自主循环后回合退化为单步问答 ——
+            # 与 brain 缺 cycle 的降级闸门同一归宿:turn 语义,零 agent.cycle 事件
+            return ndjson(driver_of(body.session).turn(body.session, body.text))
+        return ndjson(driver_of(body.session).converse_loop(
+            body.session, text=body.text, max_cycles=max_cycles))
 
     @app.post("/api/pipeline")
     def pipeline(body: PipelineBody):
@@ -722,8 +853,18 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.post("/api/abort")
     def abort(body: PipelineBody):
-        run = resolve_run(body.session, body.run_id)  # 404 覆盖不存在/不属于该会话
-        driver_of(body.session).request_cancel(run["run_id"])
+        # 显式 run_id:404 覆盖不存在/不属于该会话(口径不变);run_id 缺省且
+        # 会话无任何 run 时不再 404 —— converse 回合不产生 run,取消意图置
+        # driver 的会话级 token(同进程),converse_loop 在周期边界消费
+        run = resolve_run(body.session, body.run_id, required=body.run_id is not None)
+        if run is None:
+            # 未知会话不物化(P2-12):下方 driver_of 会建会话行 + 工作区目录,
+            # 「取消一个不存在的会话」不该有任何副作用 —— /api/message 同口径 404
+            if store.get_session(body.session) is None:
+                raise HTTPException(404, f"会话 {body.session} 不存在")
+            driver_of(body.session).request_session_cancel(body.session)
+        else:
+            driver_of(body.session).request_cancel(run["run_id"])
         return JSONResponse({"accepted": True}, status_code=202)
 
     # ---------------- 消息与干预 ----------------
@@ -1096,8 +1237,8 @@ def create_app(home: Path | None = None) -> FastAPI:
         else:
             media = _IMAGE_MEDIA_TYPES.get(Path(art["path"]).suffix.lower())
         if media is None:
-            raise HTTPException(
-                400, f"仅支持图像类产物({'/'.join(sorted(e.lstrip('.') for e in _IMAGE_MEDIA_TYPES))})")
+            exts = "/".join(sorted(e.lstrip(".") for e in _IMAGE_MEDIA_TYPES))
+            raise HTTPException(400, f"仅支持图像类产物({exts})")
         if not target.is_file():
             raise HTTPException(404, "no artifact file")
         return FileResponse(target, media_type=media)
@@ -1129,7 +1270,8 @@ def create_app(home: Path | None = None) -> FastAPI:
     # ---------------- 静态 UI ----------------
 
     if PROTOTYPE_DIR.exists():
-        app.mount("/", StaticFiles(directory=str(PROTOTYPE_DIR), html=True), name="ui")
+        # UIStaticFiles:演示页(*-demo.html)与 v2-backup/ 一律 404(界面诚实化)
+        app.mount("/", UIStaticFiles(directory=str(PROTOTYPE_DIR), html=True), name="ui")
 
     # 安全响应头(最外层包裹,对含静态 UI 在内的全部响应生效;
     # CSP 表按落盘 HTML 启动时算一次,见 scan_ui_csp)

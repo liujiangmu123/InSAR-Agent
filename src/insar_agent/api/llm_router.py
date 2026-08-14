@@ -16,14 +16,24 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from insar_agent.brain.llm_config import (DEFAULT_BASE_URL, load_llm_config,
-                                          mask_key, routes_from_config,
-                                          save_llm_config,
-                                          vision_route_from_config)
-from insar_agent.brain.provider import (BrainUnavailable, LLMProvider, LLMRoute,
-                                        describe_image_stream, list_models)
+from insar_agent.brain.llm_config import (
+    DEFAULT_BASE_URL,
+    agent_loop_settings,
+    load_llm_config,
+    mask_key,
+    routes_from_config,
+    save_llm_config,
+    vision_route_from_config,
+)
+from insar_agent.brain.provider import (
+    BrainUnavailable,
+    LLMProvider,
+    LLMRoute,
+    describe_image_stream,
+    list_models,
+)
 from insar_agent.brain.usage import UsageLedger
 
 
@@ -32,6 +42,10 @@ class LLMConfigBody(BaseModel):
     api_key: str | None = None
     chat_model: str | None = None
     vision_model: str | None = None
+    # 自主循环(LOOP-CONTRACT §8)。None = 不改;越界由 pydantic 挡成 422,
+    # 与本路由 /usage 的 Query(ge/le) 及 POST /config 既有的 pydantic 类型校验同风格。
+    agent_loop: bool | None = None
+    agent_max_cycles: int | None = Field(default=None, ge=1, le=12)
 
 
 class ModelsBody(BaseModel):
@@ -66,6 +80,7 @@ def _config_view(home: Path) -> dict:
     env_routes = [r for r in routes_from_config(home)
                   if not file_ready or r.model != cfg.get("chat_model")]
     source = "file" if file_ready else ("env" if env_routes else "none")
+    loop = agent_loop_settings(home)  # 缺失/损坏回默认,回显永远是合法值
     return {
         "configured": bool(routes_from_config(home)),
         "source": source,
@@ -73,6 +88,8 @@ def _config_view(home: Path) -> dict:
         "chat_model": cfg.get("chat_model", ""),
         "vision_model": cfg.get("vision_model", ""),
         "api_key_masked": mask_key(cfg.get("api_key", "")),
+        "agent_loop": loop["enabled"],
+        "agent_max_cycles": loop["max_cycles"],
     }
 
 

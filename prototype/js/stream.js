@@ -4,9 +4,8 @@
      user / agent / thinking / tool_call / plan / ask / result / note
    长任务不再抢占全屏，日志流在 tool_call 条目内滚动。
    ============================================================ */
-import { h, txt, icon, frag, mmss, hhmm, replay, toast } from './dom.js';
-import { S, LADDER, def_, st_, STEP_DEFS } from './state.js';
-import { figureNode, figureSvg, IMAGES, POINTS, DATES, timeSeriesSvg } from './figures.js';
+import { h, txt, icon, frag, mmss, hhmm, toast } from './dom.js';
+import { S, def_, st_ } from './state.js';
 
 let host = null;
 let autoScroll = true;
@@ -191,6 +190,86 @@ export function typingIndicator() {
     h('div', { class: 'av' }, 'IA'),
     h('div', { class: 'body' }, h('div', { class: 'typing' }, h('i'), h('i'), h('i')))));
   return () => node.remove();
+}
+
+/* ============================================================
+   流式回复气泡（0814B §1.4）：say.delta 增量渲染
+     append   纯文本追加（单文本节点，不进任何解析器），近底部才跟随滚动
+              （follow 内建判定：用户上滚阅读时不抢滚动）；
+     finalize 终帧 say 到达：renderPart 节点整体替换增量文本（以定稿为准，
+              替换后与非流式 agentMsg 排版完全一致）；
+     abort    截断/停止/断流：半截内容如实保留 + 淡化中断标注，
+              绝不把未定稿文本冒充完整回复。
+   气泡类：is-streaming（打字光标 ::after 纯装饰）/ is-aborted（标废态）。
+   ============================================================ */
+export function agentMsgStream() {
+  const text = txt('');   // 单文本节点增量追加：纯文本语义，天然免注入
+  const body = h('div', { class: 'body' }, text);
+  const el = push(h('div', { class: 'a-msg turn rise is-streaming' },
+    h('div', { class: 'av' }, 'IA'), body));
+  let closed = false;   // finalize/abort 后手柄失效，迟到的 append 静默丢弃
+
+  const api = {
+    el,
+    append(chunk) {
+      if (closed) return api;
+      text.data += String(chunk ?? '');
+      follow();
+      return api;
+    },
+    finalize(nodes) {
+      if (closed) return api;
+      closed = true;
+      el.classList.remove('is-streaming');
+      body.replaceChildren(...nodes);
+      follow();
+      return api;
+    },
+    abort(label = '(回复中断,内容不完整)') {
+      if (closed) return api;
+      closed = true;
+      el.classList.remove('is-streaming');
+      el.classList.add('is-aborted');
+      body.appendChild(h('span', { class: 'say-abort' }, label));
+      follow();
+      return api;
+    },
+  };
+  return api;
+}
+
+/* ============================================================
+   liveSay 状态机（0814B §1.4，纯逻辑，node 单测见 tests/js/say_stream.test.mjs）
+   一次流式回复的生命周期：say.delta 开流/追加 → 终帧二选一
+   （say 定稿 / say.abort 标废）→ 回合结束兜底 abort。
+   只有这三个入口能关闭状态；note 等其他事件不经状态机，穿行不打断。
+   open 注入气泡工厂：生产环境缺省 agentMsgStream，单测传假手柄。
+   ============================================================ */
+export function createLiveSay(open = agentMsgStream) {
+  let cur = null;   // 当前流式气泡手柄；null = 无进行中的流式回复
+
+  return {
+    active: () => cur !== null,
+    /** say.delta：首个增量开流，后续追加到同一气泡。 */
+    delta(chunk) {
+      if (!cur) cur = open();
+      cur.append(chunk);
+    },
+    /** say 终帧：有流 → 整体替换并关闭，返回 true；
+        无流 → 返回 false（调用方按非流式路径原样渲染）。 */
+    finalize(nodes) {
+      if (!cur) return false;
+      cur.finalize(nodes);
+      cur = null;
+      return true;
+    },
+    /** say.abort 终帧 / 停止 / 回合结束兜底：半截标废并关闭；
+        无流时是无害空操作（幂等，可放心放进 finally）。 */
+    abort(label) {
+      cur?.abort(label);
+      cur = null;
+    },
+  };
 }
 
 /* ============================================================
@@ -567,7 +646,10 @@ export function askApproval({ title, rows, danger = false, actions, family = nul
    ============================================================ */
 export function candidateSet({ stepId, onPick }) {
   const def = def_(stepId);
-  const st = st_(stepId);
+  // 空镜像守卫（P1-6，浏览器实测）：新会话首回合 candidates 事件先于 /api/state
+  // 的镜像同步到达，st_() 无条目 —— 以注册表默认方法兜底，决策卡照常渲染
+  // （app.js 的 candidates 分支只守卫了 def_()）。
+  const st = st_(stepId) || { method: def.method };
   const opts = h('div', { class: 'opts', role: 'radiogroup', 'aria-label': `${def.name}方法候选` });
 
   const buttons = def.methods.map((m) => {
@@ -798,153 +880,13 @@ export function failureCard({ stepId, failClass, title, detail, options = [] }) 
 }
 
 /* ============================================================
-   结果卡
+   灯箱（仅剩关闭入口）
+   演示假卡 resultCard/reportCard/provenanceCard 与假图入口 openLightbox
+   已删除（0814B W3：R3 勘察确认全前端零调用方，写死的 −182mm/+96.5mm
+   等示意 KPI 不允许再有代码路径能画出来）。closeLightbox 保留：
+   index.html 的 #lightbox 遮罩/关闭钮/Esc 仍接线到它（app.js）。
    ============================================================ */
-export function resultCard({ onFile, onFigure }) {
-  const rows = [
-    ['products/velocities/vel_ridgecrest_2019.png', 'FIGURE'],
-    ['products/timeseries/ts_ridgecrest.png', 'FIGURE'],
-    ['provenance.json', 'PROVENANCE'],
-  ];
-  const tbody = h('tbody', null, ...rows.map(([p, kind]) => h('tr', {
-    tabindex: '0', role: 'button',
-    onclick: () => onFile(p),
-    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFile(p); } },
-  },
-    h('td', { class: 'mono' }, p.split('/').pop()),
-    h('td', { class: 'mono' }, st_(kind === 'PROVENANCE' ? 11 : 10)?.fingerprint || ''),
-    h('td', null, h('span', { class: 'tag is-ok' }, icon('check'), '有效')))));
-
-  return push(h('div', { class: 'result turn rise' },
-    h('div', { class: 'hd' }, icon('chart'), '结果 · 同震位移场（LOS）',
-      h('span', { class: 'grow' }), h('span', { class: 'sub' }, 'mintpy_sbas → step(20190706) → velocity.h5')),
-    h('div', { class: 'bd' },
-      h('button', { class: 'figure', type: 'button', onclick: () => onFigure('vel') },
-        h('div', { class: 'cap' }, icon('image'), 'vel_ridgecrest_2019.png',
-          h('span', { class: 'mono' }, '600 dpi · 2.4 MB'),
-          h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--accent)', fontWeight: '600' } },
-            '查看大图', icon('expand'))),
-        figureNode('vel')),
-      h('div', { class: 'kpis' },
-        h('div', { class: 'kpi' }, h('div', { class: 'v', style: { color: 'var(--bad)' } }, '−182'),
-          h('div', { class: 'k' }, '断层西侧同震位移 (mm)')),
-        h('div', { class: 'kpi' }, h('div', { class: 'v', style: { color: 'var(--accent)' } }, '+96.5'),
-          h('div', { class: 'k' }, '断层东侧同震位移 (mm)')),
-        h('div', { class: 'kpi' }, h('div', { class: 'v', style: { color: 'var(--ok)' } }, '0.86'),
-          h('div', { class: 'k' }, 'GNSS 相关系数 r')),
-        h('div', { class: 'kpi' }, h('div', { class: 'v' }, '1.69M'),
-          h('div', { class: 'k' }, '有效像元数')),
-      ),
-      h('table', { class: 'grid' },
-        h('thead', null, h('tr', null,
-          h('th', null, '产物'), h('th', null, '指纹'), h('th', null, '状态'))),
-        tbody),
-      h('p', { style: { fontSize: '11px', color: 'var(--text-3)', marginTop: '6px' } },
-        '点击产物行 → 右侧文件面板预览 · 点击图件 → 全屏查看 · 位移量、耗时等数值为演示示意值，不可引用'),
-      // 降级发生过 → 结果卡显式下调证据级别并说明原因（§4.12：降级不是静默的）
-      ...S.degraded.map((g) => h('div', { class: 'downgrade' }, icon('warn'),
-        h('span', null,
-          `本次运行第 ${g.stepId} 步发生降级：`,
-          h('code', null, g.from), ' → ', h('code', null, g.to),
-          `（${g.failClass || 'service_down'}${g.reason ? ` · ${g.reason}` : ''}），证据级别下调至 `,
-          h('b', null, LADDER[S.evidenceLevel]), '。'))),
-      h('div', { class: 'xcheck' }, icon('check'),
-        h('span', null, '交叉验证 ', h('b', null, 'PS/SBAS 一致性 0.92'),
-          ' — 阈值 0.85 尚未标定（PENDING），当前仅作 warning 不硬 gate')),
-    )));
-}
-
-/* ============================================================
-   报告卡
-   ============================================================ */
-export function reportCard({ onExport, onFigures }) {
-  return push(h('div', { class: 'result turn rise' },
-    h('div', { class: 'hd' }, icon('doc'), '报告 · 论文方法草稿（2.3 节）',
-      h('span', { class: 'grow' }), h('span', { class: 'sub' }, 'provenance → narrate · 可编辑')),
-    h('div', { class: 'bd' },
-      h('div', { class: 'draft' },
-        h('h4', null, '2.3 InSAR 时序形变分析'),
-        h('p', null, '本研究使用 Sentinel-1 降轨影像（path 71，2019-06-10 — 2019-08-15，' +
-          '7 个获取日期），经 ASF HyP3 生成 11 个小基线干涉对，Goldstein 滤波（α=0.4）后' +
-          '采用 SNAPHU MCF 方法解缠',
-          h('span', { class: 'cite' }, '〔prov-6〕'),
-          '。时序反演使用 MintPy 小基线集方法，误差校正依次移除 ERA5 对流层延迟、' +
-          '固体潮与 DEM 误差。形变模型采用阶跃函数 step(20190706)，以刻画 Mw 7.1 主震同震位移。'),
-        h('p', null, '断层西侧同震 LOS 位移达 −182 ± 12 mm，东侧 +97 ± 9 mm（',
-          h('span', { class: 'mono' }, 'vel_ridgecrest_2019.png'),
-          h('span', { class: 'cite' }, '〔prov-10〕'),
-          '），与 GNSS 站 P580 的相关系数为 0.86',
-          h('span', { class: 'cite' }, '〔prov-11〕'), '。'),
-        h('div', { class: 'boundary' },
-          h('b', null, '证据边界（X, not Y）：'),
-          '本文报告的是', h('b', null, '处理链贯通性与量级一致性'), '，',
-          h('b', null, '非'), '经标定的形变产品；12 天重访采样', h('b', null, '不足以'),
-          '分离同震与震后早期形变；PS/SBAS 一致性阈值 0.85 ',
-          h('b', null, '尚未标定'), '（status: PENDING），故交叉验证当前只产出 warning、不作硬 gate。',
-          ...(S.degraded.length ? [
-            '第 8 步大气校正因 ERA5 服务不可用', h('b', null, '降级'),
-            '为 tropo_height_corr，证据级别上限从 validated 降至 checked（§4.12 降级矩阵，已写入 provenance）。',
-          ] : []),
-          '当前证据级别：', h('b', null, LADDER[S.evidenceLevel]),
-          '，validated 与 calibrated 均属 next-milestone scope。')),
-      h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' } },
-        h('button', { class: 'btn btn-pri', type: 'button', onclick: () => onExport('md') },
-          icon('doc'), '导出方法草稿 .md'),
-        h('button', { class: 'btn btn-gho', type: 'button', onclick: () => onExport('json') }, '导出 provenance.json'),
-        h('button', { class: 'btn btn-gho', type: 'button', onclick: () => onExport('sh') }, '导出 run.sh'),
-        h('button', { class: 'btn btn-gho', type: 'button', onclick: onFigures }, icon('image'), '预览图表')),
-    )));
-}
-
-/* ============================================================
-   证据链卡（provenance 摘要）
-   ============================================================ */
-export function provenanceCard(stepId, fromMethod, toMethod) {
-  const def = def_(stepId);
-  const st = st_(stepId);
-  const rows = [
-    ['变更', frag(h('span', { style: { color: 'var(--accent)' } }, def.name), ' · method: ',
-      h('span', { class: 'mono' }, fromMethod), ' → ',
-      h('span', { class: 'mono', style: { color: 'var(--stale)' } }, toMethod))],
-    ['指纹', frag(h('span', { class: 'mono' }, st.fingerprint), ' ',
-      h('span', { style: { color: 'var(--stale)' } }, '（已重算）'))],
-    ['参数', h('span', { class: 'mono' }, JSON.stringify(st.params))],
-    ['工具', h('span', { class: 'mono' }, 'SNAPHU 2.0.7 · MintPy 1.6.4 · ISCE2 2.6.5 · Python 3.11')],
-    ['环境', h('span', { class: 'mono' }, 'WSL2 Ubuntu 24.04 · conda env sha 4f21…9ac3')],
-    ['git', h('span', { class: 'mono' }, 'HEAD 08471c2 · clean')],
-    ['时间', h('span', { class: 'mono' }, new Date().toISOString())],
-  ];
-  return push(h('details', { class: 'plan turn rise', open: true },
-    h('summary', null, h('span', { class: 'cv' }, icon('chevron')),
-      h('span', { class: 'ttl' }, 'Provenance · 变更证据链'),
-      h('span', { class: 'grow' }),
-      h('span', { class: 'frac' }, '谁 · 何时 · 用什么 · 产出什么')),
-    h('div', { class: 'tree', style: { margin: '9px 12px', borderRadius: 'var(--r-sm)' } },
-      ...rows.map(([k, v]) => h('div', { class: 'ln' },
-        h('span', { class: 'k' }, k), h('span', { class: 'v' }, v))))));
-}
-
-/* ============================================================
-   灯箱
-   ============================================================ */
-let lbReturnFocus = null;   // 打开灯箱前的焦点元素，关闭时归还
-
-export function openLightbox(figId, { onDock }) {
-  const meta = IMAGES.find((i) => i.id === figId);
-  const lb = document.getElementById('lightbox');
-  lb.querySelector('.t').textContent = meta?.name || figId;
-  lb.querySelector('.s').textContent = `${meta?.title || ''} · ${meta?.meta || ''}`;
-  lb.querySelector('.canvas').replaceChildren(figureNode(figId));
-  lb.hidden = false;
-  lbReturnFocus = document.activeElement;
-  const dockBtn = lb.querySelector('[data-act="dock"]');
-  dockBtn.onclick = () => { lb.hidden = true; onDock(figId); };
-  lb.querySelector('[data-act="close"]').focus();
-}
-
 export function closeLightbox() {
   const lb = document.getElementById('lightbox');
   if (lb) lb.hidden = true;
-  if (lbReturnFocus?.isConnected) lbReturnFocus.focus?.();
-  lbReturnFocus = null;
 }

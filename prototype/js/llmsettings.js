@@ -1,4 +1,6 @@
 /* LLM 模型设置面板:填密钥 → 获取模型 → 选模型(对话/识图)→ 测试 → 保存。
+ * 兼管自主循环配置(LOOP-CONTRACT §8):「自主循环」开关 + 周期上限(1-12),
+ * 与模型配置同走 GET/POST /api/llm/config(agent_loop / agent_max_cycles 两键)。
  *
  * 安全纪律:密钥只上行(POST /api/llm/config),永不回显全文——输入框留空
  * 表示沿用服务端已存密钥(占位符展示掩码);模型列表/测试都由服务端持钥出网。
@@ -15,6 +17,16 @@ function priceLabel(m) {
   if (m.price_in == null) return "";
   const cur = m.currency === "CNY" ? "¥" : (m.currency ? m.currency + " " : "");
   return ` · ${cur}${m.price_in}/${m.price_out} 每百万`;
+}
+
+/* 周期上限输入规整:整数化并夹进 1..12 闭区间;空串/非数返回 null
+ * (POST 语义与密钥留空一致:null = 服务端保留旧值)。 */
+export function normCycles(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(12, Math.max(1, Math.trunc(n)));
 }
 
 /* 下拉渲染:空选项 + 模型清单(识图下拉只留 vision 模型),current 保持选中;
@@ -144,6 +156,15 @@ export function chipView(cfg) {
       <button type="button" class="btn" name="testVision">测试识图</button>
       <span class="llmset-note" name="testNote" role="status" aria-live="polite"></span>
     </div>
+    <div class="llmset-row">
+      <input type="checkbox" name="agent_loop" id="llmsetLoopOn" checked>
+      <label for="llmsetLoopOn">自主循环(单回合内多周期自主推进)</label>
+    </div>
+    <label>循环周期上限(1-12,每周期一次模型决策)
+      <input type="number" name="agent_max_cycles" min="1" max="12" step="1" value="6">
+    </label>
+    <p class="llmset-hint">关闭自主循环后回合退化为单步问答;执行类操作永远只产生
+      确认卡,不会被循环绕过。</p>
   </div>
   <footer>
     <span class="llmset-note" name="saveNote" role="status" aria-live="polite"></span>
@@ -182,6 +203,12 @@ export function chipView(cfg) {
       f("base_url").value = cfg.base_url || "";
       if (cfg.api_key_masked) {
         f("api_key").placeholder = `${cfg.api_key_masked}(留空 = 沿用)`;
+      }
+      // 自主循环两键回显:服务端只回合法值(缺失/损坏已回默认);
+      // 旧后端不带这两键时维持 HTML 缺省(开 + 6)。
+      f("agent_loop").checked = cfg.agent_loop !== false;
+      if (Number.isInteger(cfg.agent_max_cycles)) {
+        f("agent_max_cycles").value = String(cfg.agent_max_cycles);
       }
       dlg.dataset.chatModel = cfg.chat_model || "";
       dlg.dataset.visionModel = cfg.vision_model || "";
@@ -227,6 +254,9 @@ export function chipView(cfg) {
         api_key: f("api_key").value.trim() || null, // 空 = 服务端保留旧值
         chat_model: f("chat_model").value || dlg.dataset.chatModel || null,
         vision_model: f("vision_model").value || dlg.dataset.visionModel || null,
+        agent_loop: !!f("agent_loop").checked,
+        // 越界输入先夹进 1..12 再上行(服务端同样校验);空 = null = 保留旧值
+        agent_max_cycles: normCycles(f("agent_max_cycles").value),
       };
       const view = await saveConfig(body);
       dlg.dataset.chatModel = view.chat_model || "";
@@ -234,6 +264,11 @@ export function chipView(cfg) {
       f("api_key").value = "";
       if (view.api_key_masked) {
         f("api_key").placeholder = `${view.api_key_masked}(留空 = 沿用)`;
+      }
+      // 以服务端回执为准回写循环控件(旧后端不回这两键则维持现状)
+      if ("agent_loop" in view) f("agent_loop").checked = view.agent_loop !== false;
+      if (Number.isInteger(view.agent_max_cycles)) {
+        f("agent_max_cycles").value = String(view.agent_max_cycles);
       }
       // 广播最新配置视图(不含密钥全文),常驻 chip 监听后即时刷新
       document.dispatchEvent(new CustomEvent("llm:config-changed", { detail: view }));

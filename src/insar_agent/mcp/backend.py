@@ -31,7 +31,15 @@ _STARTUP_HINT = (
 
 
 class BackendError(RuntimeError):
-    """后端访问失败的归一化异常;message 面向宿主 LLM,须自带下一步指引。"""
+    """后端访问失败的归一化异常;message 面向宿主 LLM,须自带下一步指引。
+
+    status:触发异常的 HTTP 状态码(非 HTTP 层失败为 None),供调用方按状态
+    细化指引 —— 如旧后端缺自主循环端点时把 404/405 换成升级提示。
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 # ---------------- 配置(环境变量,调用时读取) ----------------
@@ -56,6 +64,13 @@ def accept_window() -> float:
     """执行回合的受理观察窗(秒):窗口内收集早期事件判断受理与否,
     到点即断开(run 在后端继续)。INSAR_MCP_ACCEPT_WINDOW 可调。"""
     return float(os.environ.get("INSAR_MCP_ACCEPT_WINDOW", "3"))
+
+
+def converse_deadline() -> float:
+    """自主循环回合流的消费上限(秒):回合含多周期 LLM 决策与只读工具,
+    比单步规划长;超限断开(后端契约:断开不取消回合)。
+    INSAR_MCP_CONVERSE_TIMEOUT 可调。"""
+    return float(os.environ.get("INSAR_MCP_CONVERSE_TIMEOUT", "180"))
 
 
 # ---------------- 客户端生命周期 ----------------
@@ -127,7 +142,8 @@ async def request(method: str, path: str, **kwargs: Any) -> Any:
     except httpx.HTTPError as exc:
         _raise_normalized(exc)
     if resp.status_code >= 400:
-        raise BackendError(f"后端拒绝(HTTP {resp.status_code}):{_detail_of(resp)}")
+        raise BackendError(f"后端拒绝(HTTP {resp.status_code}):{_detail_of(resp)}",
+                           status=resp.status_code)
     return resp.json()
 
 
@@ -144,13 +160,20 @@ async def consume_ndjson(path: str, body: dict, *, deadline_s: float,
     """
     events: list[dict] = []
     finished = False
+    # read 超时按本次消费上限放宽(per-request 覆盖,共享 client 的默认超时不动):
+    # 自主循环周期间的 LLM 决策静默期可达数分钟,共享 client 的 30s read timeout
+    # 会在相邻事件的间隙误杀长回合(P1-3)—— deadline 才是消费的唯一上限,
+    # 由外层 asyncio.timeout 承载;connect/write/pool 保持 http_timeout()。
+    timeout = httpx.Timeout(http_timeout(), read=max(deadline_s, http_timeout()))
     try:
         async with asyncio.timeout(deadline_s):
-            async with client().stream("POST", path, json=body) as resp:
+            async with client().stream("POST", path, json=body,
+                                       timeout=timeout) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
                     raise BackendError(
-                        f"后端拒绝(HTTP {resp.status_code}):{_detail_of(resp)}")
+                        f"后端拒绝(HTTP {resp.status_code}):{_detail_of(resp)}",
+                        status=resp.status_code)
                 async for line in resp.aiter_lines():
                     if not line.strip():
                         continue
@@ -167,6 +190,37 @@ async def consume_ndjson(path: str, body: dict, *, deadline_s: float,
     except httpx.HTTPError as exc:
         _raise_normalized(exc)
     return events, finished
+
+
+# ---------------- 自主循环回合(契约 §10) ----------------
+
+#: 旧后端(< 2026-08-14)没有自主循环端点时的升级指引
+_CONVERSE_UPGRADE_HINT = (
+    "InSAR 后端版本过旧:自主循环端点 POST /api/converse 缺失,"
+    "需要 2026-08-14 及以上版本。请更新代码后重启后端"
+    "(python -m insar_agent.api.app);升级前可改用 insar_plan_run + "
+    "insar_execute_run 的分步流程。"
+)
+
+
+async def converse(session_id: str, text: str, max_cycles: int) -> tuple[list[dict], bool]:
+    """POST /api/converse 发起自主循环回合,消费 NDJSON 事件流到回合结束。
+
+    回合以 say(正常收束)或 note(预算耗尽/取消/降级收尾)终止,终止后流
+    自然关闭(与 plan_run 消费 /api/turn 同款语义:不设提前停止条件,中途的
+    告警 note 不会被误当收尾)。返回 (events, finished):finished=False 表示
+    deadline(INSAR_MCP_CONVERSE_TIMEOUT)打断 —— 回合在后端继续推进,
+    断开不取消。旧后端没有该端点:404/405 归一化为带升级指引的 BackendError。
+    """
+    try:
+        return await consume_ndjson(
+            "/api/converse",
+            {"session": session_id, "text": text, "max_cycles": max_cycles},
+            deadline_s=converse_deadline())
+    except BackendError as exc:
+        if exc.status in (404, 405):
+            raise BackendError(_CONVERSE_UPGRADE_HINT, status=exc.status) from exc
+        raise
 
 
 # ---------------- run → session 解析 ----------------

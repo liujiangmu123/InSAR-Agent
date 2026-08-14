@@ -96,7 +96,6 @@ export const S = {
   selectedStep: null,             // 流水线面板选中步；null=未选（无计划时面板显示空态）
   selectedFile: null,
   selectedPoint: 'A',
-  webSite: 'asf',
   busy: false,                    // agent 是否正在产出
   steps: new Map(),               // id → { state, method, params, stale, fingerprint, startedAt, elapsed }
                                   //   state: pending|running|done|failed|stale|interrupted|orphaned（§7.8 四态）
@@ -119,8 +118,13 @@ export function setDiskFree(gb) {
 export const LADDER = ['runnable', 'checked', 'audited', 'calibrated', 'validated', 'publishable'];
 
 /**
- * 质量门阈值台账。source 取值 upstream_default | literature | local_calibration。
- * status=PENDING 的阈值只产出 warning，不作硬 gate —— 见 AGENT-DESIGN §4.13。
+ * 质量门阈值台账 —— 本地常量仅作离线回落(离线示意)。
+ * 界面诚实化(0814B W6):权威台账是服务端 /api/env 的 thresholds
+ * (audit/contract.py 的合同数据,经 setServerThresholds 落进来);
+ * 本常量只在后端不可达时兜底,消费方(dock.js ceilingNote / env 面板
+ * 演示回落)须标注「离线示意」。source 取值 upstream_default |
+ * literature | local_calibration;status=PENDING 只产出 warning,
+ * 不作硬 gate —— 见 AGENT-DESIGN §4.13。
  */
 export const THRESHOLDS = [
   { key: 'esd_coherence_threshold', value: 0.85, source: 'upstream_default', status: 'OK',
@@ -135,16 +139,36 @@ export const THRESHOLDS = [
     ref: '待查文献' },
 ];
 
+/** 服务端阈值台账镜像(/api/env thresholds);null = 尚未取到,回落本地常量。 */
+let serverThresholds = null;
+
+/** 环境面板取到 /api/env 后落库(dock.js envView 接线);空/坏载荷不覆盖。 */
+export function setServerThresholds(rows) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  serverThresholds = rows.map((r) => ({ ...r }));
+  emit('thresholds');
+}
+
+/** 当前生效的阈值台账:服务端优先,离线回落本地常量(source 供 UI 标注)。 */
+export function activeThresholds() {
+  return serverThresholds
+    ? { rows: serverThresholds, source: 'server' }
+    : { rows: THRESHOLDS, source: 'local' };
+}
+
 /**
  * 证据阶梯上限：只要还有 PENDING 阈值，就不能声称 validated；
  * 发生过降级（§4.12 降级矩阵）则进一步封顶到 checked。
  * 这条自我约束让证据边界自动生成而非手写（AGENT-DESIGN §4.13）。
+ * 阈值取 activeThresholds():服务端台账优先,离线才用本地常量推导,
+ * 返回值随附 source 供消费方标注「离线示意」。
  */
 export function evidenceCeiling() {
-  const pending = THRESHOLDS.filter((t) => t.status === 'PENDING');
+  const { rows, source } = activeThresholds();
+  const pending = rows.filter((t) => String(t.status).toUpperCase() === 'PENDING');
   let level = pending.length ? 2 : 4;                  // 2=audited, 4=validated
   if (S.degraded.length) level = Math.min(level, 1);   // 1=checked（降级代价，§4.12）
-  return { level, pending, degraded: S.degraded };
+  return { level, pending, degraded: S.degraded, source };
 }
 
 /* ============================================================
@@ -163,13 +187,22 @@ function sessionSub(row) {
   return `${mode} · 建于 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** 会话显示名兜底（P2-16，浏览器实测）：name 缺失/空白时退回 id，两者都无信息
+ *  时给「未命名会话」。字面 "null"/"undefined" 只可能来自字符串插值事故（实测
+ *  曾有以 "null" 为 id 物化的会话，侧栏与副标题原样渲染 "null"），按空名处置。 */
+export function sessionDisplayName(rawName, id) {
+  const pick = (v) => (typeof v === 'string' && v.trim()
+    && v !== 'null' && v !== 'undefined' ? v : null);
+  return pick(rawName) || pick(id) || '未命名会话';
+}
+
 /** /api/sessions 行（{session_id,name,mode,created_at,archived,…}）→ 侧栏条目。 */
 export function setSessions(rows) {
   SESSIONS.length = 0;
   for (const r of rows || []) {
     const id = r && (r.session_id || r.id);
     if (!id) continue;
-    const entry = { id, name: r.name || id, sub: sessionSub(r), tone: 'idle' };
+    const entry = { id, name: sessionDisplayName(r.name, id), sub: sessionSub(r), tone: 'idle' };
     if (r.archived) entry.archived = r.archived;   // 软删除时间戳（splitArchived 依据）
     SESSIONS.push(entry);
   }
