@@ -1,0 +1,8 @@
+node_modules/
+.vitest/
+*.tsbuildinfo
+
+# 技能:唯一真相源是仓库根的 skills/ 与 registry/scenario_packs/(启动器直接 --skill 指过去)。
+# skills/ 下只有手写的 00-insar-agent 入库;scripts/sync-skills.mjs --copy 生成的副本忽略。
+skills/*
+!skills/00-insar-agent/

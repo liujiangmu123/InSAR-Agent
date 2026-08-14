@@ -487,6 +487,8 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_advisor_router(store, home))  # 下一步建议(/api/advise,run 终态建议卡)
     from insar_agent.api.memory_router import create_memory_router
     app.include_router(create_memory_router(store))  # 跨会话记忆(/api/memory*,记忆面板数据源)
+    from insar_agent.api.bridge_router import create_bridge_router
+    app.include_router(create_bridge_router(store, home, contract))  # pi 扩展数据面(/api/monitor,/api/mode)
     try:
         from insar_agent.api.export_router import create_export_router
     except ImportError:  # W4(导出)并行开发中:router 未落地时惰性跳过,合入即自动点亮
