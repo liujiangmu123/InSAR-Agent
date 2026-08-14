@@ -1,0 +1,1145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InSAR Agent</title>
+<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.css"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--side:#0c1e3a;--side-w:220px;--right-w:320px;--blue:#3b82f6;--blue-d:#1e40af;--bg:#f8fafc;--text:#1e293b;--text2:#64748b;--border:#e2e8f0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;height:100vh;display:flex;color:var(--text);background:var(--bg)}
+
+/* ── 左侧栏（豆包风格）── */
+.side{width:var(--side-w);background:var(--side);color:#e2e8f0;display:flex;flex-direction:column;flex-shrink:0}
+.side .brand{padding:18px 16px;display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700}
+.side .brand .dot{width:8px;height:8px;border-radius:50%;background:#22c55e}
+.side nav{padding:4px 8px}
+.side nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;font-size:13px;color:#94a3b8;text-decoration:none;cursor:pointer;transition:all .15s}
+.side nav a:hover{background:rgba(255,255,255,.07);color:#e2e8f0}
+.side nav a.active{background:rgba(59,130,246,.18);color:#60a5fa}
+.side .divider{height:1px;background:rgba(255,255,255,.08);margin:4px 12px}
+.side .section-label{font-size:11px;color:#475569;padding:14px 16px 6px;letter-spacing:.5px}
+.side .projects{flex:1;overflow-y:auto;padding:0 8px}
+.side .proj{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:12px;color:#94a3b8;cursor:pointer;transition:all .15s;position:relative}
+.side .proj:hover{background:rgba(255,255,255,.07)}
+.side .proj.active{color:#60a5fa;background:rgba(59,130,246,.12)}
+.side .proj .acts{display:none;gap:2px;flex-shrink:0}
+.side .proj:hover .acts{display:flex}
+.side .proj .act{width:22px;height:22px;border-radius:4px;border:none;background:transparent;color:#64748b;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.side .proj .act:hover{background:rgba(255,255,255,.12);color:#e2e8f0}
+.side .proj .act.del:hover{background:rgba(239,68,68,.25);color:#f87171}
+.side .proj .edit-inline{flex:1;background:rgba(255,255,255,.1);border:1px solid var(--blue);border-radius:4px;color:#e2e8f0;font-size:12px;padding:2px 6px;outline:none;min-width:0}
+.side .bottom{padding:12px;border-top:1px solid rgba(255,255,255,.08);display:flex;gap:8px}
+.side .bottom button{flex:1;padding:8px;border:1px dashed rgba(255,255,255,.15);border-radius:8px;background:transparent;color:#64748b;font-size:12px;cursor:pointer;transition:all .15s}
+.side .bottom button:hover{border-color:var(--blue);color:var(--blue)}
+
+/* ── 中间（豆包风格）── */
+.mid{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border)}
+.mid-header{padding:12px 20px;border-bottom:1px solid var(--border);text-align:center;font-size:14px;color:var(--text2);font-weight:500}
+
+/* 首页问候+标签 */
+.hero{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 60px;overflow-y:auto}
+.hero.hidden{display:none}
+.hero h1{font-size:26px;font-weight:600;margin-bottom:8px;color:var(--text)}
+.hero h1 .hl{color:var(--blue)}
+.hero .sub{font-size:14px;color:var(--text2);margin-bottom:28px}
+.chips{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;max-width:640px}
+.chip{padding:8px 16px;border:1px solid var(--border);border-radius:20px;font-size:13px;color:var(--text2);cursor:pointer;transition:all .15s;white-space:nowrap}
+.chip:hover{border-color:var(--blue);color:var(--blue);background:#eff6ff}
+
+/* 对话 */
+.chat{flex:1;overflow-y:auto;padding:16px 40px;display:flex;flex-direction:column;gap:10px}
+.chat.hidden{display:none}
+.msg{max-width:92%;padding:10px 14px;border-radius:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;font-size:14px}
+.msg.user{align-self:flex-end;background:var(--blue);color:#fff}
+.msg.agent{align-self:flex-start;background:#fff;border:1px solid var(--border)}
+.msg.agent table{width:100%;border-collapse:collapse;margin:6px 0;font-size:13px}
+.msg.agent table th,.msg.agent table td{border:1px solid var(--border);padding:5px 8px;text-align:left}
+.msg.agent table th{background:#f1f5f9;font-weight:600}
+.msg.agent h1{font-size:18px;margin:8px 0 4px}
+.msg.agent h2{font-size:15px;margin:8px 0 4px}
+.msg.agent h3{font-size:14px;margin:6px 0 3px}
+.msg.agent ul,.msg.agent ol{padding-left:18px;margin:4px 0}
+.msg.agent li{margin:2px 0}
+.msg.agent code{background:#f1f5f9;padding:1px 4px;border-radius:3px;font-size:12px;font-family:'Consolas','Courier New',monospace}
+.msg.agent pre{background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:8px 12px;overflow-x:auto;font-size:12px;margin:6px 0}
+.msg.agent pre code{background:none;padding:0}
+.msg.agent strong{font-weight:600}
+.msg.agent em{font-style:italic}
+.msg.agent hr{border:none;border-top:1px solid var(--border);margin:8px 0}
+.msg.agent blockquote{border-left:3px solid var(--blue);padding:4px 10px;margin:6px 0;color:var(--text2);background:#f8fafc;border-radius:0 4px 4px 0}
+.msg.agent a{color:var(--blue);text-decoration:underline}
+.msg.agent p{margin:4px 0}
+.msg.tool{align-self:flex-start;background:#f0fdf4;color:#166534;font-size:12px;border-left:3px solid #22c55e;padding-left:11px}
+.msg.thinking{align-self:flex-start;background:#fffbeb;color:#92400e;font-size:12px;border-left:3px solid #f59e0b;padding-left:11px;font-style:italic}
+.msg.error{align-self:center;background:#fef2f2;color:#b91c1c;font-size:12px;max-width:90%}
+.loading{display:flex;align-items:center;gap:6px;color:var(--text2);font-size:13px;padding:4px 0}
+.loading .spinner{width:14px;height:14px;border:2px solid var(--blue);border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 底部输入区（豆包风格） */
+.input-bar{padding:0 40px 20px}
+.input-box{border:1px solid var(--border);border-radius:14px;background:#fff;overflow:hidden;transition:border .15s}
+.input-box:focus-within{border-color:var(--blue)}
+.input-box .row1{display:flex;align-items:center;padding:0 4px}
+.input-box .row1 input{flex:1;padding:12px 14px;border:none;outline:none;font-size:14px;background:transparent}
+.input-box .row1 .send-btn{width:36px;height:36px;border-radius:10px;border:none;background:var(--blue);color:#fff;font-size:16px;cursor:pointer;margin:2px;transition:background .15s;display:flex;align-items:center;justify-content:center}
+.input-box .row1 .send-btn:hover{background:var(--blue-d)}
+.input-box .row1 input:disabled{opacity:.5;cursor:not-allowed}
+.input-box .row1 .send-btn:disabled{opacity:.3;cursor:not-allowed}
+.tools-bar{display:flex;align-items:center;gap:4px;padding:6px 12px;border-top:1px solid var(--border);overflow-x:auto}
+.tool-btn{padding:4px 10px;border-radius:6px;border:none;background:transparent;font-size:12px;color:var(--text2);cursor:pointer;white-space:nowrap;transition:all .15s;display:flex;align-items:center;gap:4px}
+.tool-btn:hover{background:#f1f5f9;color:var(--text)}
+.tool-btn .badge{background:#ef4444;color:#fff;font-size:9px;padding:1px 5px;border-radius:8px;font-weight:600}
+
+/* ── 右侧栏 ── */
+.right{width:var(--right-w);background:#fff;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+.right .map-wrap{height:260px;background:#e0e7ff;position:relative;border-bottom:1px solid var(--border)}
+.right .map-wrap #map{width:100%;height:100%}
+.right .map-ctrl{position:absolute;top:8px;right:8px;display:flex;gap:4px;z-index:1000}
+.right .map-ctrl button{padding:4px 8px;border-radius:6px;border:1px solid #ccc;background:rgba(255,255,255,.9);font-size:11px;cursor:pointer}
+.right .map-ctrl button.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+.right .rsec{padding:14px 16px;border-bottom:1px solid var(--border)}
+.right .rsec h3{font-size:13px;font-weight:600;margin-bottom:8px}
+.right .rsec ul{list-style:none;font-size:12px;color:var(--text2);line-height:1.8}
+.right .rsec li::before{content:'— ';color:#cbd5e1}
+.right .rtpl{flex:1;overflow-y:auto;padding:14px 16px}
+.right .rtpl h3{font-size:13px;font-weight:600;margin-bottom:10px}
+.tpl-tag{display:inline-block;padding:6px 12px;border:1px solid var(--border);border-radius:20px;font-size:12px;color:var(--text2);cursor:pointer;margin:0 6px 8px 0;transition:all .15s}
+.tpl-tag:hover{border-color:var(--blue);color:var(--blue);background:#eff6ff}
+.right .rinfo{padding:14px 16px;font-size:12px;color:var(--text2);line-height:1.6}
+.right .rinfo .lbl{font-weight:600;color:var(--text);display:block;margin-bottom:2px}
+
+/* ── Pipeline 进度条 ── */
+.pipeline-stepper{display:none;padding:10px 16px;border-bottom:1px solid var(--border);background:#fff}
+.pipeline-stepper.show{display:block}
+.pipeline-steps{display:flex;align-items:flex-start;justify-content:space-between;gap:2px}
+.pstep{display:flex;flex-direction:column;align-items:center;flex:1;position:relative;min-width:0}
+.pstep .dot{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0;transition:all .3s;position:relative;z-index:1}
+.pstep .dot.pending{background:#cbd5e1;color:#94a3b8}
+.pstep .dot.running{background:#3b82f6;animation:pulse 1.2s ease-in-out infinite}
+.pstep .dot.completed{background:#22c55e}
+.pstep .dot.failed{background:#ef4444}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.4)}50%{box-shadow:0 0 0 6px rgba(59,130,246,0)}}
+.pstep .label{font-size:10px;color:#94a3b8;margin-top:4px;text-align:center;line-height:1.2;transition:color .3s}
+.pstep .label.running{color:#3b82f6;font-weight:600}
+.pstep .label.completed{color:#22c55e}
+.pstep .label.failed{color:#ef4444}
+.pstep .line{position:absolute;top:11px;left:50%;width:100%;height:2px;background:#cbd5e1;z-index:0}
+.pstep:last-child .line{display:none}
+.pstep .line.completed{background:#22c55e}
+.pstep .line.running{background:#3b82f6}
+.pipeline-info{font-size:10px;color:var(--text2);text-align:center;margin-top:6px;min-height:14px}
+
+/* ── 全屏处理进展 overlay ── */
+.processing-overlay{position:fixed;inset:0;background:rgba(15,23,42,.85);z-index:9000;display:flex;align-items:center;justify-content:center;flex-direction:column;backdrop-filter:blur(6px)}
+.processing-overlay.hidden{display:none}
+.processing-panel{background:#1e293b;border-radius:16px;padding:32px 40px;max-width:580px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.5);border:1px solid #334155}
+.processing-panel h2{font-size:20px;color:#f1f5f9;margin:0 0 6px;display:flex;align-items:center;gap:8px}
+.processing-panel h2 .spinner{width:18px;height:18px;border:2px solid #3b82f6;border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite}
+.processing-panel .subtitle{font-size:13px;color:#94a3b8;margin-bottom:24px}
+.processing-panel .close-btn{position:absolute;top:16px;right:20px;width:32px;height:32px;border-radius:50%;border:none;background:rgba(255,255,255,.08);color:#94a3b8;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.processing-panel .close-btn:hover{background:rgba(239,68,68,.25);color:#f87171}
+.psteps-big{display:flex;align-items:center;gap:0;margin-bottom:20px;position:relative}
+.pstep-big{flex:1;display:flex;flex-direction:column;align-items:center;position:relative}
+.pstep-big .dot-big{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;position:relative;z-index:1;transition:all .4s;border:3px solid}
+.pstep-big .dot-big.pending{background:#334155;border-color:#475569;color:#64748b}
+.pstep-big .dot-big.running{background:rgba(59,130,246,.2);border-color:#3b82f6;color:#60a5fa;animation:pulse-big 1.2s ease-in-out infinite}
+.pstep-big .dot-big.completed{background:#22c55e;border-color:#22c55e;color:#fff}
+.pstep-big .dot-big.failed{background:#ef4444;border-color:#ef4444;color:#fff}
+@keyframes pulse-big{0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.5)}50%{box-shadow:0 0 0 12px rgba(59,130,246,0)}}
+.pstep-big .label-big{font-size:12px;color:#64748b;margin-top:8px;text-align:center;transition:color .4s}
+.pstep-big .label-big.running{color:#60a5fa;font-weight:600}
+.pstep-big .label-big.completed{color:#22c55e}
+.pstep-big .label-big.failed{color:#ef4444}
+.pstep-big .line-big{position:absolute;top:18px;left:50%;width:100%;height:3px;background:#334155;z-index:0;transition:background .4s}
+.pstep-big:last-child .line-big{display:none}
+.pstep-big .line-big.completed{background:#22c55e}
+.pstep-big .line-big.running{background:#3b82f6}
+.pinfo-big{text-align:center;color:#94a3b8;font-size:13px;margin-bottom:20px;min-height:20px}
+.pinfo-big .highlight{color:#60a5fa;font-weight:600}
+.panel-actions{display:flex;justify-content:center;gap:12px}
+.panel-actions button{padding:10px 24px;border-radius:10px;border:1px solid #334155;background:transparent;color:#94a3b8;font-size:13px;cursor:pointer;transition:all .15s}
+.panel-actions button:hover{background:rgba(255,255,255,.06);color:#e2e8f0}
+.panel-actions button.primary{background:#3b82f6;border-color:#3b82f6;color:#fff}
+.panel-actions button.primary:hover{background:#2563eb}
+
+/* ── 处理中 悬浮返回按钮 ── */
+.re-entry-btn{position:fixed;bottom:24px;right:24px;z-index:8000;display:none;align-items:center;gap:8px;padding:10px 18px;background:#1e293b;border:1px solid #3b82f6;border-radius:12px;color:#e2e8f0;font-size:13px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:all .15s;animation:pulse-big 2s ease-in-out infinite}
+.re-entry-btn:hover{background:#1e3a5f;border-color:#60a5fa}
+.re-entry-btn .dot-live{width:10px;height:10px;border-radius:50%;background:#22c55e;animation:pulse 1.2s ease-in-out infinite}
+
+/* ── 调试面板（开发者专用，Ctrl+Shift+D 切换）── */
+.debug-toggle{position:fixed;bottom:24px;left:24px;z-index:8000;width:32px;height:32px;border-radius:50%;border:1px solid #475569;background:#1e293b;color:#64748b;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:.5;transition:all .15s}
+.debug-toggle:hover{opacity:1;color:#94a3b8;border-color:#3b82f6}
+.debug-panel{position:fixed;bottom:0;left:0;right:0;height:240px;z-index:7999;background:rgba(15,23,42,.97);border-top:1px solid #334155;display:none;flex-direction:column;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:11px}
+.debug-panel.show{display:flex}
+.debug-header{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;background:#1e293b;border-bottom:1px solid #334155}
+.debug-header span{color:#94a3b8;font-size:12px}
+.debug-header button{background:transparent;border:none;color:#64748b;font-size:16px;cursor:pointer;padding:2px 8px;border-radius:4px}
+.debug-header button:hover{background:rgba(255,255,255,.06);color:#e2e8f0}
+.debug-lines{flex:1;overflow-y:auto;padding:6px 14px;line-height:1.6}
+.debug-lines .dline{color:#94a3b8;white-space:pre-wrap;word-break:break-all}
+.debug-lines .dline.dim{color:#475569}
+
+@media(max-width:1100px){.right{display:none}}
+@media(max-width:700px){.side{display:none}.chat,.input-bar{padding-left:16px;padding-right:16px}}
+</style>
+</head>
+<body>
+<!-- 左侧栏 -->
+<aside class="side">
+  <div class="brand"><span class="dot"></span>InSAR Agent</div>
+  <nav>
+    <a class="active" data-act="home" onclick="newSession()">💬 新对话</a>
+    <a data-act="query">🔍 数据查询</a>
+    <a data-act="submit">📤 作业提交</a>
+    <a data-act="status">📊 状态监控</a>
+    <a data-act="download">⬇️ 数据下载</a>
+    <a data-act="clip">✂️ 裁剪处理</a>
+    <a data-act="mintpy">📈 MintPy时序</a>
+  </nav>
+  <div class="divider"></div>
+  <nav>
+    <a href="/upload">📦 结果入库</a>
+    <a href="/download" target="_blank">⬇️ 文件下载</a>
+  </nav>
+  <div class="section-label">历史记录</div>
+  <div class="projects" id="projects"></div>
+  <div class="bottom">
+    <button onclick="newSession()">+ 新建对话</button>
+  </div>
+</aside>
+
+<!-- 中间 -->
+<div class="mid">
+  <div class="mid-header">InSAR Agent · 新对话</div>
+
+  <!-- 首页 -->
+  <div class="hero" id="hero">
+    <h1>有什么我能帮你的吗？</h1>
+    <p class="sub">输入中文指令，我会帮你完成 InSAR 数据处理全流程</p>
+    <div class="chips" id="heroChips"></div>
+  </div>
+
+  <!-- 对话区 -->
+  <div class="chat hidden" id="chat"></div>
+
+  <!-- 输入区 -->
+  <div class="input-bar">
+    <div class="input-box">
+      <div class="row1">
+        <input type="text" id="input" placeholder="发消息..." autofocus onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doSend()}">
+        <button class="send-btn" id="sendBtn" onclick="doSend()">➤</button>
+      </div>
+      <div class="tools-bar">
+        <button class="tool-btn" onclick="fill('查询')">🔍 数据查询</button>
+        <button class="tool-btn" onclick="fill('提交')">📤 作业提交</button>
+        <button class="tool-btn" onclick="fill('检查job状态')">📊 状态监控</button>
+        <button class="tool-btn" onclick="fill('下载')">⬇️ 数据下载</button>
+        <button class="tool-btn" onclick="fill('裁剪')">✂️ 裁剪处理</button>
+        <button class="tool-btn" onclick="fill('跑MintPy时序分析')">📈 MintPy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 右侧栏 -->
+<div class="right">
+  <div class="map-wrap">
+    <div id="map"></div>
+    <div class="map-ctrl"><button class="on">矢量范围</button><button>网格渲染</button></div>
+  </div>
+  <div class="pipeline-stepper" id="pipelineStepper">
+    <div class="pipeline-steps">
+      <div class="pstep" data-step="1_submit">
+        <div class="line"></div>
+        <div class="dot pending">1</div>
+        <div class="label">提交</div>
+      </div>
+      <div class="pstep" data-step="2_status">
+        <div class="line"></div>
+        <div class="dot pending">2</div>
+        <div class="label">状态</div>
+      </div>
+      <div class="pstep" data-step="3_download">
+        <div class="line"></div>
+        <div class="dot pending">3</div>
+        <div class="label">下载</div>
+      </div>
+      <div class="pstep" data-step="4_unzip">
+        <div class="line"></div>
+        <div class="dot pending">4</div>
+        <div class="label">解压</div>
+      </div>
+      <div class="pstep" data-step="5_clip">
+        <div class="line"></div>
+        <div class="dot pending">5</div>
+        <div class="label">裁剪</div>
+      </div>
+    </div>
+    <div class="pipeline-info" id="pipelineInfo"></div>
+  </div>
+  <div class="rsec">
+    <h3>核心输入模式</h3>
+    <ul>
+      <li>输入地名+时间：如「查询北京2023年升轨」</li>
+      <li>Path/Frame直接提交：如「对Path 89 Frame 106提交」</li>
+      <li>全流程一键：如「对成都降轨跑完整流程」</li>
+    </ul>
+  </div>
+  <div class="rtpl">
+    <h3>问题模板</h3>
+    <div id="tplTags"></div>
+  </div>
+  <div class="rinfo" id="rinfo"><span class="lbl">处理结果</span><p>完成全流程后，速度场、时间序列等结果将显示在此处。</p></div>
+</div>
+
+<!-- ── 全屏处理进展 overlay ── -->
+<div class="processing-overlay hidden" id="processingOverlay">
+  <div class="processing-panel" style="position:relative">
+    <button class="close-btn" onclick="closeProcessingOverlay()" title="返回聊天">×</button>
+    <h2><span class="spinner" id="poSpinner"></span>InSAR 处理进展</h2>
+    <div class="subtitle" id="poSubtitle">准备中...</div>
+    <div class="psteps-big" id="poSteps">
+      <div class="pstep-big" data-step="1_submit">
+        <div class="line-big"></div><div class="dot-big pending">1</div><div class="label-big">提交</div>
+      </div>
+      <div class="pstep-big" data-step="2_status">
+        <div class="line-big"></div><div class="dot-big pending">2</div><div class="label-big">状态</div>
+      </div>
+      <div class="pstep-big" data-step="3_download">
+        <div class="line-big"></div><div class="dot-big pending">3</div><div class="label-big">下载</div>
+      </div>
+      <div class="pstep-big" data-step="4_unzip">
+        <div class="line-big"></div><div class="dot-big pending">4</div><div class="label-big">解压</div>
+      </div>
+      <div class="pstep-big" data-step="5_clip">
+        <div class="line-big"></div><div class="dot-big pending">5</div><div class="label-big">裁剪</div>
+      </div>
+    </div>
+    <div class="pinfo-big" id="poInfo">等待管道启动...</div>
+    <div class="panel-actions">
+      <button class="primary" onclick="cancelPipeline()" id="poCancelBtn">⏹ 取消任务</button>
+      <button onclick="closeProcessingOverlay()">返回聊天</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 处理中悬浮按钮 ── -->
+<button class="re-entry-btn" id="reEntryBtn" onclick="openProcessingOverlay()" title="查看处理进度">
+  <span class="dot-live"></span>处理中...
+</button>
+
+<!-- ── 调试面板（开发者专用）── -->
+<button class="debug-toggle" id="debugToggle" title="调试面板 (Ctrl+Shift+D)">◉</button>
+<div class="debug-panel" id="debugPanel">
+  <div class="debug-header">
+    <span>🔧 Pipeline Debug</span>
+    <div style="display:flex;align-items:center;gap:8px">
+      <button onclick="cancelPipeline()" style="font-size:11px;color:#ef4444">⏹ 取消</button>
+      <button onclick="toggleDebugPanel()">×</button>
+    </div>
+  </div>
+  <div class="debug-lines" id="debugLines">
+    <div class="dline dim">等待 pipeline 启动...</div>
+  </div>
+</div>
+
+<script src="https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+const hero=document.getElementById('hero'),chatDiv=document.getElementById('chat'),input=document.getElementById('input'),btn=document.getElementById('sendBtn');
+const projectsDiv=document.getElementById('projects');
+let history=[],streamDone=true,map=null,marker=null;
+let _abortController=null;
+
+async function loadSessions(){
+  try{
+    const resp=await fetch('/api/sessions');
+    const data=await resp.json();
+    if(data.status!=='ok')return;
+    projectsDiv.innerHTML='';
+    const sessions=data.sessions||[];
+    if(!sessions.length){projectsDiv.innerHTML='<div style="padding:12px;color:#475569;font-size:12px;text-align:center">暂无历史记录</div>';return}
+    for(const s of sessions){
+      const d=new Date(s.mtime*1000);
+      const timeStr=d.toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'})+' '+d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
+      const div=document.createElement('div');
+      div.className='proj'+(s.is_current?' active':'');
+      div.title=s.title;
+      div.innerHTML='<span class="proj-title" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(s.title)+'</span>'+
+        '<span style="color:#475569;font-size:10px;flex-shrink:0">'+timeStr+'</span>'+
+        '<span class="acts"><button class="act" title="重命名" onclick="event.stopPropagation();startRename(\''+s.sid+'\',this)">✏</button><button class="act del" title="删除" onclick="event.stopPropagation();deleteSession(\''+s.sid+'\')">✕</button></span>';
+      div.addEventListener('click',()=>{if(s.is_current)return;switchSession(s.sid)});
+      projectsDiv.appendChild(div);
+    }
+  }catch(e){}
+}
+function escapeHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function renderMarkdown(text){
+  var out=text;
+  out=out.replace(/```(\w*)\n?([\s\S]*?)```/g,function(_,lang,code){return '<pre><code>'+code.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</code></pre>'});
+  out=out.replace(/`([^`\n]+)`/g,'<code>$1</code>');
+  out=out.replace(/\*\*\*(.+?)\*\*\*/g,'<strong><em>$1</em></strong>');
+  out=out.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  out=out.replace(/\*(.+?)\*/g,'<em>$1</em>');
+  var lines=out.split('\n'),res=[],inTable=false,inList=false;
+  for(var i=0;i<lines.length;i++){
+    var l=lines[i],h;
+    if(l.match(/^<h[1-3]>/)||l.match(/^<blockquote/)||l.match(/^<(pre|hr|code)>/)){res.push(l);continue}
+    if(i+1<lines.length&&l.match(/^\|.*\|$/)&&lines[i+1].match(/^\|[\s\-:|]+\|$/)){
+      res.push('<table><thead><tr>');
+      var hdr=l.split('|').slice(1,-1);
+      for(var j=0;j<hdr.length;j++)res.push('<th>'+hdr[j].trim()+'</th>');
+      res.push('</tr></thead><tbody>');
+      i++;inTable='tbody';continue;
+    }
+    if(inTable&&l.match(/^\|.*\|$/)){
+      var cells=l.split('|').slice(1,-1);
+      res.push('<tr>');
+      for(var j=0;j<cells.length;j++)res.push('<td>'+cells[j].trim()+'</td>');
+      res.push('</tr>');continue;
+    }
+    if(inTable&&!l.match(/^\|.*\|$/)){res.push('</'+inTable+'>');res.push('</table>');inTable=false}
+    h=l.match(/^### (.+)/);if(h){res.push('<h3>'+h[1]+'</h3>');continue}
+    h=l.match(/^## (.+)/);if(h){res.push('<h2>'+h[1]+'</h2>');continue}
+    h=l.match(/^# (.+)/);if(h){res.push('<h1>'+h[1]+'</h1>');continue}
+    if(l.match(/^&gt; (.+)/)){res.push('<blockquote>'+l.slice(5)+'</blockquote>');continue}
+    if(l.match(/^-{3,}$/)){res.push('<hr>');continue}
+    if(l.match(/^\d+\.\s/)){if(!inList||inList!='ol'){res.push('<ol>');inList='ol'};res.push('<li>'+l.replace(/^\d+\.\s/,'')+'</li>');continue}
+    if(l.match(/^[-*+]\s/)){if(!inList||inList!='ul'){res.push('<ul>');inList='ul'};res.push('<li>'+l.replace(/^[-*+]\s/,'')+'</li>');continue}
+    if(inList){res.push('</'+inList+'>');inList=false}
+    if(l.trim())res.push('<p>'+l+'</p>');
+  }
+  if(inTable){res.push('</'+inTable+'>');res.push('</table>')}
+  if(inList)res.push('</'+inList+'>');
+  return res.join('\n');
+}
+
+async function switchSession(sid){
+  const resp=await fetch('/api/sessions/'+sid+'/load',{method:'POST'});
+  const data=await resp.json();
+  if(data.status==='ok'){location.reload()}
+}
+
+async function newSession(){
+  try{
+    const resp=await fetch('/api/sessions/new',{method:'POST'});
+    const data=await resp.json();
+    if(data.status==='ok'){location.reload()}
+  }catch(e){}
+}
+
+function startRename(sid, btn){
+  const proj=btn.closest('.proj');
+  const titleSpan=proj.querySelector('.proj-title');
+  const oldTitle=titleSpan.textContent;
+  const acts=proj.querySelector('.acts');
+  acts.style.display='none';
+  const input=document.createElement('input');
+  input.className='edit-inline';input.value=oldTitle;input.setAttribute('data-sid',sid);
+  titleSpan.replaceWith(input);
+  input.focus();input.select();
+  input.addEventListener('keydown',async(e)=>{
+    if(e.key==='Enter'){const t=input.value.trim();if(t&&t!==oldTitle){await renameSession(sid,t)}input.blur()}
+    else if(e.key==='Escape'){cancelRename(input,oldTitle,acts)}
+  });
+  input.addEventListener('blur',async()=>{
+    const t=input.value.trim();
+    if(t&&t!==oldTitle){await renameSession(sid,t)}
+    cancelRename(input,t||oldTitle,acts);
+  });
+}
+
+function cancelRename(input, title, acts){
+  const span=document.createElement('span');
+  span.className='proj-title';
+  span.style.cssText='flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  span.textContent=title;
+  input.replaceWith(span);
+  if(acts)acts.style.display='';
+}
+
+async function renameSession(sid, title){
+  try{
+    const resp=await fetch('/api/sessions/'+sid+'/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})});
+    const data=await resp.json();
+    if(data.status!=='ok'){alert('重命名失败: '+data.message)}
+  }catch(e){alert('重命名失败')}
+}
+
+async function deleteSession(sid){
+  if(!confirm('确定删除这条对话记录？此操作不可恢复。'))return;
+  try{
+    const resp=await fetch('/api/sessions/'+sid,{method:'DELETE'});
+    const data=await resp.json();
+    if(data.status==='ok'){loadSessions()}
+    else{alert('删除失败: '+data.message)}
+  }catch(e){alert('删除失败')}
+}
+
+/* ── 地图 ── */
+function initMap(){try{map=L.map('map',{zoomControl:false,attributionControl:false}).setView([35.86,104.19],4);L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',{subdomains:'1234',maxZoom:18}).addTo(map);setTimeout(()=>map.invalidateSize(),300)}catch(e){console.warn('Map init failed',e)}}
+try{initMap()}catch(e){}
+function updateMap(lon,lat,name){if(!map)return;if(marker)marker.remove();map.setView([lat,lon],6);marker=L.marker([lat,lon]).addTo(map).bindPopup(name).openPopup()}
+
+/* ── 消息 ── */
+function addMsg(role,text,isHtml){
+  if(!chatDiv.classList.contains('hidden')){
+    // 已在对话模式
+  } else {
+    hero.classList.add('hidden');chatDiv.classList.remove('hidden');
+  }
+  const d=document.createElement('div');d.className='msg '+role;
+  if(isHtml){d.innerHTML=text}else{d.textContent=text}
+  chatDiv.appendChild(d);chatDiv.scrollTop=chatDiv.scrollHeight;return d
+}
+function addLoading(){const d=document.createElement('div');d.className='loading';d.innerHTML='<span class="spinner"></span>Agent 正在处理...';d.id='loading-indicator';chatDiv.appendChild(d);chatDiv.scrollTop=chatDiv.scrollHeight}
+function removeLoading(){const el=document.getElementById('loading-indicator');if(el)el.remove()}
+function fill(t){input.value=t;input.focus()}
+
+/* ── 加载历史会话 ── */
+loadSessions();
+loadCurrentHistory();
+
+async function loadCurrentHistory(){
+  try{
+    const resp=await fetch('/api/sessions/current');
+    const data=await resp.json();
+    if(data.status!=='ok')return;
+    if(data.history&&data.history.length){
+      const msgs=data.history;
+      hero.classList.add('hidden');chatDiv.classList.remove('hidden');
+      for(const m of msgs){
+        if(m.role==='user'){addMsg('user',m.content);history.push(m)}
+        else if(m.role==='assistant'){
+          if(m.content&&!m.tool_calls)addMsg('agent',renderMarkdown(m.content),true);
+          history.push(m);
+        }
+        else if(m.role==='tool'){
+          var label = '';
+          try{var t=JSON.parse(m.content);label=t.error?'⚠ '+t.error:''}catch(e){}
+          if(label) addMsg('tool', label);
+          history.push(m);
+        }
+        else if(m.role==='system'){
+          history.push(m);
+        }
+      }
+    }
+    if(data.ui_events&&data.ui_events.length){
+      for(const e of data.ui_events){
+        if(e.type==='pipeline_done')continue;
+        handleUI(e);
+      }
+    }
+    _restoreDebugLines();
+    _startPipelineStream();
+    _restorePipelineState();
+  }catch(e){}
+}
+
+/* ── 随机标签池 ── */
+const tagPool=[
+  '查询北京2024年升轨SLC数据','成都2023年降轨数据有哪些','洛阳2022年VV极化升轨',
+  '对Path 89 Frame 106提交InSAR','检查job状态并下载','下载那批数据后解压',
+  '裁剪到公共重叠区再跑MintPy','跑MintPy时序分析',
+  '武汉2023年全年升轨数据','西安附近有没有SLC数据',
+  '昆明2024年降轨查询','查询深圳2022-2024年SLC',
+  '哈尔滨2023年Ascending数据','对Path 142 Frame 108提交',
+  '当前任务状态怎么样','下载完成的产品并解压',
+  '把裁剪后的数据跑MintPy','SBAS的max_neighbors怎么选',
+  '相位解缠用什么方法','MintPy smallbaselineApp怎么配置',
+  'InSAR大气改正有哪些方法','PS和SBAS有什么区别'
+];
+function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+function renderTags(){
+  const shuffled=shuffle([...tagPool]);
+  const heroChips=document.getElementById('heroChips');
+  if(heroChips){heroChips.innerHTML=shuffled.slice(0,8).map(t=>`<span class="chip">${t}</span>`).join('');heroChips.addEventListener('click',e=>{const t=e.target.closest('.chip');if(!t)return;chipSend(t.textContent)})}
+  const tplTags=document.getElementById('tplTags');
+  if(tplTags){tplTags.innerHTML=shuffled.slice(8,16).map(t=>`<span class="tpl-tag">${t}</span>`).join('');tplTags.addEventListener('click',e=>{const t=e.target.closest('.tpl-tag');if(!t)return;chipSend(t.textContent)})}
+}
+renderTags();
+
+/* ── 标签点击 → 直接发送 ── */
+function chipSend(text){if(!streamDone)return;input.value=text;doSend()}
+document.querySelectorAll('.side nav a').forEach(a=>{a.addEventListener('click',()=>{if(a.dataset.act==='home')return;document.querySelectorAll('.side nav a').forEach(x=>x.classList.remove('active'));a.classList.add('active');input.focus()})});
+
+/* ── 实时 UI 更新 ── */
+function handleUI(obj){
+  if(obj.type==='aoi'){
+    if(obj.geojson_url){
+      fetch(obj.geojson_url).then(function(r){return r.json()}).then(function(gj){
+        setBoundaryGeoJSON(gj);
+        if(map){
+          if(map._boundaryLayer)map.removeLayer(map._boundaryLayer);
+          map._boundaryLayer = L.geoJSON(gj, {
+            style: {color:'#3b82f6', weight:2, fillColor:'#3b82f6', fillOpacity:0.08}
+          }).addTo(map);
+          try{map.fitBounds(map._boundaryLayer.getBounds())}catch(e){}
+        }
+      }).catch(function(e){console.error('GeoJSON load error',e)});
+    } else if(obj.lon&&obj.lat){
+      updateMap(obj.lon, obj.lat, obj.label||'AOI');
+    }
+    addMsg('tool','📍 '+obj.label+' '+((obj.lon&&obj.lat)?'('+obj.lon.toFixed(2)+','+obj.lat.toFixed(2)+')':''));
+  }
+  else if(obj.type==='slc_result'){
+    console.log('SLC_RESULT:', 'keys='+Object.keys(obj).join(','), 'fp='+(obj.footprints?obj.footprints.length:0), 'stacks='+(obj.stacks?obj.stacks.length:0));
+    if(obj.footprints){console.log('first fp:', JSON.stringify(obj.footprints[0]).substring(0,200))}
+    var mapId = 'chatmap_' + Date.now() + '_slc';
+    var stacks = obj.stacks || [];
+    var fpList = obj.footprints || [];
+    var html = '<div style="font-size:13px;font-weight:600;margin-bottom:6px">📡 SLC 数据查询 ('+obj.total+'景)</div>';
+    html += '<div id="'+mapId+'" style="height:450px;border-radius:8px;border:1px solid #333;margin-bottom:6px"></div>';
+    var colors = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#f97316','#14b8a6','#e11d48'];
+    var pathColor = {};
+    var ci = 0;
+    fpList.forEach(function(fp){
+      if(!pathColor[fp.path]){ pathColor[fp.path] = colors[ci % colors.length]; ci++; }
+    });
+    stacks.forEach(function(s,i){
+      var c = pathColor[s.path] || colors[0];
+      var dir = s.flight_direction || '';
+      if(dir==='ASCENDING')dir='升';else if(dir==='DESCENDING')dir='降';else dir='-';
+      html += '<div style="font-size:12px;padding:3px 0;border-bottom:1px solid #1e293b"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+escapeHtml(c)+';margin-right:6px"></span>'+dir+' Path '+s.path+' F'+s.frame+' | '+s.count+'景'+(s.anomaly_count?' <span style=\"color:#f59e0b\">异常:'+s.anomaly_count+'</span>':'')+' | '+(s.start_date||s.start||'')+'~'+(s.end_date||s.end||'')+'</div>';
+    });
+    addMsg('agent', html, true);
+    if(fpList.length){
+      var slcOverlays = fpList.map(function(fp, i){
+        var c = pathColor[fp.path] || colors[i % colors.length];
+        return {geojson: fp.geojson, name: 'P'+fp.path+'F'+fp.frame, path: fp.path, frame: fp.frame, color: c};
+      });
+      setTimeout(function(){ createChatMap(mapId, slcOverlays); }, 100);
+    }
+  }
+  else if(obj.type==='job_submitted'){addMsg('tool','✅ 已提交 '+obj.total_pairs+' 对，预估 '+obj.estimated_cost+' credits');}
+  else if(obj.type==='pipeline_done'){addMsg('tool','🎉 pipeline 完成，裁剪数据: '+obj.clipped_dir);if(obj.task_id){setTimeout(function(){doSend('auto_pipeline 已完成 (task_id='+obj.task_id+')');}, 1000);}}
+  else if(obj.type==='mintpy_done'){if(obj.success){var dl=obj.zip_url?'<br><a href="'+obj.zip_url+'" style="color:#3b82f6;font-weight:600">📥 下载 MintPy 结果 (ZIP)</a>':'';addMsg('tool','✅ MintPy 完成: '+obj.output_count+'个输出文件, 耗时'+obj.elapsed_minutes+'分钟'+dl,true);setTimeout(function(){doSend('MintPy 处理完成 (task_id='+obj.task_id+')');}, 1000);}else{addMsg('tool','❌ MintPy 失败: '+(obj.error||'未知错误'));}}
+  else if(obj.type==='mintpy_config'){addMsg('tool','📋 MintPy 配置已生成: '+obj.config_path+'\n请检查配置并确认运行');}
+  else if(obj.type==='catalog_results'){
+    var mapId = 'chatmap_' + Date.now() + '_cat';
+    var html = '<div style="font-size:13px;font-weight:600;margin-bottom:8px">📦 找到 '+obj.total+' 个已有结果</div>';
+    html += '<div id="'+mapId+'" style="height:420px;border-radius:8px;border:1px solid #333;margin-bottom:8px"></div>';
+    var matches = obj.matches || [];
+    var overlays = obj.overlays || [];
+    var colors = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#f97316','#14b8a6','#e11d48'];
+    // Build path→color map from overlays, consistent with map polygons
+    var pathColor = {};
+    var ci = 0;
+    overlays.forEach(function(o){
+      if(o.path && !pathColor[o.path]){ pathColor[o.path] = colors[ci % colors.length]; ci++; }
+    });
+    // Assign colors to overlays (for map)
+    overlays.forEach(function(o){ if(o.path) o.color = pathColor[o.path]; });
+    // Render text list with same colors
+    matches.forEach(function(m,i){
+      var c = (m.path && pathColor[m.path]) || colors[i % colors.length];
+      html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #1e293b">'+
+        '<div style="width:14px;height:14px;border-radius:2px;border:2px solid '+escapeHtml(c)+';background:'+escapeHtml(c)+'33;flex-shrink:0"></div>'+
+        '<span style="flex:1;font-size:13px">'+escapeHtml(m.name||'')+'</span>'+
+        '<span style="font-size:11px;color:#94a3b8">P'+(m.path||'')+' F'+(m.frame||'')+'</span>';
+      if(m.date_start) html += '<span style="font-size:10px;color:#64748b">'+m.date_start+'~'+m.date_end+'</span>';
+      html += '</div>';
+    });
+    addMsg('agent', html, true);
+    if(overlays.length) setTimeout(function(){ createChatMap(mapId, overlays); }, 100);
+  }
+  else if(obj.type==='view_result'){
+    var html = '<div style="font-size:13px;font-weight:600;margin-bottom:8px">📊 ' + escapeHtml(obj.entry_name) + ' (Path ' + obj.path + ' Frame ' + obj.frame + ')</div>';
+    if(obj.date_start) html += '<div style="font-size:11px;color:#94a3b8;margin-bottom:8px">📅 ' + obj.date_start + ' ~ ' + obj.date_end + '</div>';
+    if(obj.cum_url){
+      var cid = 'cumimg_'+obj.entry_id;
+      html += '<div style="margin-bottom:6px"><div style="font-size:11px;color:#94a3b8;margin-bottom:2px" id="cumlabel_'+obj.entry_id+'">累计形变图（点击任意点查看该点时序曲线）</div>'+
+        '<img id="'+cid+'" data-entry="'+obj.entry_id+'" data-tspath="'+escapeHtml(obj.ts_path||'')+'" data-velpath="'+escapeHtml(obj.vel_path||'')+'" src="'+obj.cum_url+'" style="max-width:100%;border-radius:6px;border:1px solid #333;cursor:crosshair"></div>'+
+        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px" id="cumslider_'+obj.entry_id+'">'+
+        '<input type="range" min="1" max="1" value="1" style="flex:1;accent-color:#3b82f6" disabled>'+
+        '<span style="font-size:11px;color:#94a3b8;white-space:nowrap;min-width:90px;text-align:right">加载中...</span></div>'+
+        '<div id="tsplot_'+obj.entry_id+'" style="margin-top:4px"></div>';
+    }
+    if(obj.velocity_url){
+      html += '<div style="margin-bottom:6px;position:relative"><div style="font-size:11px;color:#94a3b8;margin-bottom:2px">平均形变速率</div>'+
+        '<img id="velimg_'+obj.entry_id+'" data-velpath="'+escapeHtml(obj.vel_path||'')+'" src="'+obj.velocity_url+'" style="max-width:100%;border-radius:6px;border:1px solid #333;cursor:crosshair">'+
+        '<div id="veltip_'+obj.entry_id+'" style="position:absolute;top:30px;left:10px;background:rgba(0,0,0,.75);color:#fff;font-size:11px;padding:3px 6px;border-radius:4px;pointer-events:none;display:none;z-index:10"></div></div>';
+    }
+    if(obj.timeseries_url){
+      html += '<div><div style="font-size:11px;color:#94a3b8;margin-bottom:2px">平均累计形变时序</div>'+
+        '<img src="'+obj.timeseries_url+'" style="max-width:100%;border-radius:6px;border:1px solid #333"></div>';
+    }
+    var div = addMsg('agent', html, true);
+    setTimeout(function(){
+      var img = div.querySelector('img[data-entry][data-tspath]');
+      if(!img)return;
+      var entryId = img.getAttribute('data-entry');
+      var tsPath = img.getAttribute('data-tspath');
+      var velPath = img.getAttribute('data-velpath');
+      var cumBaseUrl = img.src.replace(/[?&]step=\d+/,'');
+      var hdfRows = 0, hdfCols = 0, allDates = [], numSteps = 0;
+      var preloaded = {};
+
+      function preloadStep(step){
+        if(preloaded[step])return;
+        var u = cumBaseUrl + (cumBaseUrl.indexOf('?')>=0?'&':'?') + 'step=' + step;
+        var pi = new Image(); pi.src = u; preloaded[step] = pi;
+      }
+      function updateImage(step){
+        var dateStr = allDates.length>step ? allDates[step] : ('#'+(step+1));
+        var labelEl = document.getElementById('cumlabel_'+entryId);
+        if(labelEl) labelEl.textContent = '累计形变图（'+dateStr+'）';
+        if(preloaded[step]){ img.src = preloaded[step].src; }
+        else { img.src = cumBaseUrl + (cumBaseUrl.indexOf('?')>=0?'&':'?') + 'step=' + step; }
+        preloadStep(step+1); preloadStep(step-1);
+      }
+
+      if(tsPath && cumBaseUrl.indexOf('cumulative-map')>=0){
+        fetch('/api/timeseries/info?path='+encodeURIComponent(tsPath)).then(function(r){return r.json()}).then(function(d){
+          if(d.status!=='ok'||!d.num_dates)return;
+          hdfRows = d.rows || 0; hdfCols = d.cols || 0; numSteps = d.num_dates; allDates = d.dates || [];
+          var sliderWrap = div.querySelector('#cumslider_'+entryId);
+          if(!sliderWrap)return;
+          var slider = sliderWrap.querySelector('input');
+          var label = sliderWrap.querySelector('span');
+          slider.max = numSteps; slider.value = numSteps; slider.disabled = false;
+          var lastDate = allDates.length>=numSteps ? allDates[numSteps-1] : ('#'+numSteps);
+          label.textContent = lastDate;
+          var labelEl = div.querySelector('#cumlabel_'+entryId);
+          if(labelEl) labelEl.textContent = '累计形变图（'+lastDate+'）';
+          var timer = null;
+          slider.addEventListener('input', function(){
+            var step = parseInt(slider.value)-1;
+            var dateStr = allDates.length>step ? allDates[step] : ('#'+(step+1));
+            label.textContent = dateStr;
+            if(timer) clearTimeout(timer);
+            timer = setTimeout(function(){ updateImage(step); }, 150);
+          });
+          slider.addEventListener('change', function(){
+            if(timer){ clearTimeout(timer); timer = null; }
+            updateImage(parseInt(slider.value)-1);
+          });
+          preloadStep(numSteps-1); preloadStep(numSteps-2);
+        });
+      }
+
+      img.addEventListener('click', function(e){
+        if(!tsPath || !hdfCols || !hdfRows) return;
+        var rect = img.getBoundingClientRect();
+        var xRatio = (e.clientX - rect.left) / rect.width;
+        var yRatio = (e.clientY - rect.top) / rect.height;
+        var row = Math.floor(yRatio * img.naturalHeight);
+        var col = Math.floor(xRatio * img.naturalWidth);
+        if(row < 0 || row >= hdfRows || col < 0 || col >= hdfCols) return;
+        var plotDiv = document.getElementById('tsplot_'+entryId);
+        if(plotDiv) plotDiv.innerHTML = '<div style="font-size:12px;color:#94a3b8;padding:8px">⏳ 加载像素 ('+row+', '+col+') 时序...</div>';
+        var url = '/api/timeseries/pixel-plot?path='+encodeURIComponent(tsPath)+'&row='+row+'&col='+col;
+        if(velPath) url += '&vel_path='+encodeURIComponent(velPath);
+        var tsImg = new Image();
+        tsImg.onload = function(){
+          if(plotDiv){ plotDiv.innerHTML = '<div style="font-size:11px;color:#94a3b8;margin-bottom:2px">像素 ('+row+', '+col+') 累计形变时序</div>'; plotDiv.appendChild(tsImg); }
+          tsImg.style.maxWidth='100%'; tsImg.style.borderRadius='6px'; tsImg.style.border='1px solid #333';
+        };
+        tsImg.onerror = function(){ if(plotDiv) plotDiv.innerHTML = '<div style="color:#f87171;font-size:12px">加载失败</div>' };
+        tsImg.src = url;
+      });
+      // Hover tooltip on velocity image (scoped to this message's div)
+      var velImg = div.querySelector('img[data-velpath]');
+      var velTip = div.querySelector('#veltip_'+entryId);
+      if(velImg && velTip && velPath){
+        var velHoverTimer = null;
+        velImg.addEventListener('mousemove', function(e){
+          var rect = velImg.getBoundingClientRect();
+          var xR = (e.clientX - rect.left) / rect.width;
+          var yR = (e.clientY - rect.top) / rect.height;
+          var imgX = Math.floor(xR * velImg.naturalWidth);
+          var imgY = Math.floor(yR * velImg.naturalHeight);
+          velTip.style.left = (e.clientX - rect.left + 12) + 'px';
+          velTip.style.top = (e.clientY - rect.top - 20) + 'px';
+          velTip.style.display = 'block';
+          velTip.textContent = '('+imgY+','+imgX+') ...';
+          if(velHoverTimer) clearTimeout(velHoverTimer);
+          velHoverTimer = setTimeout(function(){
+            fetch('/api/tiff/pixel?path='+encodeURIComponent(velPath)+'&row='+imgY+'&col='+imgX)
+              .then(function(r){return r.json()}).then(function(d){
+                if(d.value !== undefined && d.value !== null){
+                  velTip.textContent = '('+d.row+','+d.col+') '+d.label;
+                } else {
+                  velTip.textContent = '('+d.row+','+d.col+') NoData';
+                }
+              }).catch(function(){ velTip.textContent = '('+imgY+','+imgX+') ?'; });
+          }, 100);
+        });
+        velImg.addEventListener('mouseleave', function(){
+          if(velHoverTimer) clearTimeout(velHoverTimer);
+          velTip.style.display = 'none';
+        });
+      }
+    }, 100);
+  }
+  else if(obj.type==='pipeline_progress'){
+    updatePipelineStep(obj.step, obj.status, obj.text||'');
+  }
+  else if(obj.type==='analysis_done'){
+    if(obj.success){
+      var adl=obj.zip_url?'<br><a href="'+obj.zip_url+'" style="color:#3b82f6;font-weight:600">📥 下载形变分析结果 (ZIP)</a>':'';
+      var sum=[];
+      if(obj.funnel_count!=null) sum.push(obj.funnel_count+'个沉降漏斗');
+      if(obj.velocity_min_mm_yr!=null) sum.push('最大速率'+obj.velocity_min_mm_yr+'mm/yr');
+      if(obj.cumulative_max_mm!=null) sum.push('最大累计'+obj.cumulative_max_mm+'mm');
+      if(obj.volume_loss_km3!=null) sum.push('体积损失'+obj.volume_loss_km3+'km³');
+      if(obj.accelerated_count!=null) sum.push(obj.accelerated_count+'个加速漏斗');
+      addMsg('tool','✅ 形变分析完成: '+sum.join(', ')+adl,true);
+    } else {
+      addMsg('tool','❌ 形变分析失败: '+(obj.error||'未知错误'));
+    }
+  }
+}
+
+/* ── Pipeline 进度更新 ── */
+var _pipelineSteps = ['1_submit','2_status','3_download','4_unzip','5_clip'];
+var _poVisible = false;
+var _pipelineActive = false;
+var _pipelineFailed = false;
+var _pipelineSource = null;
+var _pipelineWatchdogId = null;
+var _pipelineLastEventTime = 0;
+
+function _resetPipelineWatchdog(){
+  if(_pipelineWatchdogId) clearTimeout(_pipelineWatchdogId);
+  _pipelineLastEventTime = Date.now();
+  _pipelineWatchdogId = setTimeout(function(){
+    if(_pipelineActive && (Date.now() - _pipelineLastEventTime > 600000)){
+      _pipelineFailed = true;
+      _pipelineActive = false;
+      _updateReEntryBtn('failed');
+    }
+  }, 600000);
+}
+
+function _clearPipelineWatchdog(){
+  if(_pipelineWatchdogId){ clearTimeout(_pipelineWatchdogId); _pipelineWatchdogId = null; }
+}
+
+function _startPipelineStream(){
+  if(_pipelineSource){
+    try{ _pipelineSource.close(); }catch(e){}
+    _pipelineSource = null;
+  }
+  _pipelineSource = new EventSource('/api/pipeline/stream');
+  _pipelineSource.addEventListener('pipeline_progress', function(e){
+    var obj = JSON.parse(e.data);
+    if(obj.type === 'pipeline_progress'){
+      updatePipelineStep(obj.step, obj.status, obj.text||'');
+      _resetPipelineWatchdog();
+    }
+  });
+  _pipelineSource.addEventListener('debug', function(e){
+    var obj = JSON.parse(e.data);
+    _addDebugLine(obj.text||'');
+  });
+  _pipelineSource.addEventListener('ui_update', function(e){
+    var obj = JSON.parse(e.data);
+    handleUI(obj);
+  });
+  _pipelineSource.addEventListener('done', function(){
+    _pipelineSource.close();
+    _pipelineSource = null;
+    _pipelineActive = false;
+    _clearPipelineWatchdog();
+  });
+  _pipelineSource.addEventListener('error', function(){
+    _pipelineSource.close();
+    _pipelineSource = null;
+    if(_pipelineFailed){
+      _updateReEntryBtn('failed');
+    } else if(_pipelineActive){
+      _updateReEntryBtn('running');
+    } else {
+      _updateReEntryBtn('completed');
+    }
+  });
+  _pipelineSource.onerror = function(){ /* keep-alive */ };
+}
+
+function closeProcessingOverlay(){
+  _poVisible = false;
+  var po = document.getElementById('processingOverlay');
+  if(po) po.classList.add('hidden');
+}
+
+function openProcessingOverlay(){
+  _poVisible = true;
+  var po = document.getElementById('processingOverlay');
+  if(po) po.classList.remove('hidden');
+}
+
+async function _restorePipelineState(){
+  try{
+    var resp = await fetch('/api/pipeline/status');
+    var data = await resp.json();
+    if(data.status !== 'ok') return;
+    var steps = data.steps || {};
+    var hasRunning = false, hasFailed = false;
+    for(var k in steps){
+      var s = steps[k];
+      updatePipelineStep(k, s.status, s.text||'');
+      if(s.status === 'running') hasRunning = true;
+      if(s.status === 'failed') hasFailed = true;
+    }
+    if(hasRunning){ _updateReEntryBtn('running'); _resetPipelineWatchdog(); }
+    else if(hasFailed) _updateReEntryBtn('failed');
+  }catch(e){}
+}
+
+function _updateReEntryBtn(state){
+  var re = document.getElementById('reEntryBtn');
+  if(!re) return;
+  var dot = re.querySelector('.dot-live');
+  if(state === 'running'){
+    re.style.display = 'flex';
+    re.innerHTML = '<span class="dot-live"></span>处理中...';
+  } else if(state === 'failed'){
+    re.style.display = 'flex';
+    if(dot) dot.style.background = '#ef4444';
+    re.innerHTML = '<span class="dot-live" style="background:#ef4444;animation:none"></span>处理暂停';
+  } else if(state === 'completed'){
+    setTimeout(function(){
+      re.style.display = 'none';
+    }, 5000);
+  }
+}
+
+function updatePipelineStep(step, status, text){
+  if(step === 'mintpy' || step === 'analysis'){
+    var info = document.getElementById('pipelineInfo');
+    if(info){
+      if(status === 'running'){ info.textContent = (step==='analysis'?'🔵 形变分析: ':'🔵 MintPy: ') + text; _pipelineActive=true; _startPipelineStream(); _updateReEntryBtn('running'); _resetPipelineWatchdog(); }
+      else if(status === 'completed'){ info.textContent = (step==='analysis'?'✅ 形变分析: ':'✅ MintPy: ') + text; _pipelineActive=false; _updateReEntryBtn('completed'); _clearPipelineWatchdog(); }
+      else if(status === 'failed'){ info.textContent = (step==='analysis'?'❌ 形变分析: ':'❌ MintPy: ') + text; _pipelineFailed=true; _pipelineActive=false; _updateReEntryBtn('failed'); _clearPipelineWatchdog(); }
+    }
+    return;
+  }
+  var stepIdx = _pipelineSteps.indexOf(step);
+  if(stepIdx < 0) return;
+
+  if(status === 'running'){
+    _pipelineActive = true;
+    _pipelineFailed = false;
+    _startPipelineStream();
+    _updateReEntryBtn('running');
+    _resetPipelineWatchdog();
+  } else if(status === 'failed'){
+    _pipelineFailed = true;
+    _pipelineActive = false;
+    _updateReEntryBtn('failed');
+    _clearPipelineWatchdog();
+  } else if(status === 'completed' && stepIdx === _pipelineSteps.length - 1){
+    _pipelineFailed = false;
+    _pipelineActive = false;
+    _updateReEntryBtn('completed');
+    _clearPipelineWatchdog();
+  }
+
+  // Sidebar stepper
+  // Sidebar stepper
+  var stepper = document.getElementById('pipelineStepper');
+  if(stepper){
+    stepper.classList.add('show');
+    var allSteps = stepper.querySelectorAll('.pstep');
+    var infoEl = document.getElementById('pipelineInfo');
+    _updateStepDOM(allSteps, stepIdx, status, text, infoEl);
+  }
+
+  // Fullscreen overlay — always update DOM, show state when opened
+  var po = document.getElementById('processingOverlay');
+  if(!po) return;
+  var poSteps = document.getElementById('poSteps').querySelectorAll('.pstep-big');
+  var poInfo = document.getElementById('poInfo');
+  var poSubtitle = document.getElementById('poSubtitle');
+  var poSpinner = document.getElementById('poSpinner');
+  _updateStepDOM(poSteps, stepIdx, status, text, poInfo);
+  if(poSubtitle){
+    if(status === 'running') poSubtitle.textContent = '正在执行: ' + text;
+    else if(status === 'completed') poSubtitle.textContent = '步骤完成';
+  }
+  if(poSpinner){
+    poSpinner.style.display = (status === 'running') ? '' : 'none';
+  }
+  // All done or cancelled → auto-hide
+  if((status === 'completed' || status === 'failed') && stepIdx === _pipelineSteps.length - 1){
+    _poVisible = false;
+    setTimeout(function(){
+      var po2 = document.getElementById('processingOverlay');
+      if(po2) po2.classList.add('hidden');
+    }, 5000);
+  }
+}
+
+function _updateStepDOM(allSteps, stepIdx, status, text, infoEl){
+  allSteps.forEach(function(s, i){
+    var dot = s.querySelector('.dot') || s.querySelector('.dot-big');
+    var label = s.querySelector('.label') || s.querySelector('.label-big');
+    var line = s.querySelector('.line') || s.querySelector('.line-big');
+    if(i < stepIdx){
+      dot.className = (dot.className.indexOf('big')>=0?'dot-big':'dot') + ' completed';
+      label.className = (label.className.indexOf('big')>=0?'label-big':'label') + ' completed';
+      if(line) line.className = (line.className.indexOf('big')>=0?'line-big':'line') + ' completed';
+    } else if(i === stepIdx){
+      dot.className = (dot.className.indexOf('big')>=0?'dot-big':'dot') + ' ' + status;
+      label.className = (label.className.indexOf('big')>=0?'label-big':'label') + ' ' + status;
+      if(line) line.className = (line.className.indexOf('big')>=0?'line-big':'line') + ' running';
+    } else {
+      dot.className = (dot.className.indexOf('big')>=0?'dot-big':'dot') + ' pending';
+      label.className = (label.className.indexOf('big')>=0?'label-big':'label');
+      if(line) line.className = (line.className.indexOf('big')>=0?'line-big':'line');
+    }
+  });
+  if(infoEl) infoEl.textContent = text;
+}
+
+/* ── 调试面板 ── */
+function toggleDebugPanel(){
+  var panel = document.getElementById('debugPanel');
+  panel.classList.toggle('show');
+}
+document.getElementById('debugToggle').addEventListener('click', toggleDebugPanel);
+document.addEventListener('keydown', function(e){
+  if(e.ctrlKey && e.shiftKey && e.key === 'D'){
+    e.preventDefault();
+    toggleDebugPanel();
+  }
+});
+function _addDebugLine(text){
+  var lines = document.getElementById('debugLines');
+  if(!lines) return;
+  var panel = document.getElementById('debugPanel');
+  if(panel && !panel.classList.contains('show')){
+    panel.classList.add('show');
+  }
+  var div = document.createElement('div');
+  div.className = 'dline';
+  div.textContent = text;
+  lines.appendChild(div);
+  lines.scrollTop = lines.scrollHeight;
+  if(lines.children.length > 200) lines.removeChild(lines.firstChild);
+}
+
+async function _restoreDebugLines(){
+  try{
+    var resp = await fetch('/api/pipeline/debug');
+    var data = await resp.json();
+    if(data.status !== 'ok' || !data.lines || !data.lines.length) return;
+    var lines = document.getElementById('debugLines');
+    if(!lines) return;
+    lines.innerHTML = '';
+    data.lines.forEach(function(t){
+      var div = document.createElement('div');
+      div.className = 'dline';
+      div.textContent = t;
+      lines.appendChild(div);
+    });
+    lines.scrollTop = lines.scrollHeight;
+  }catch(e){}
+}
+
+async function cancelPipeline(){
+  try{
+    var resp = await fetch('/api/pipeline/cancel', {method:'POST'});
+    var data = await resp.json();
+    _addDebugLine('[取消] ' + (data.message || '已发送取消信号'));
+    var btn = document.getElementById('poCancelBtn');
+    if(btn){ btn.textContent = '已取消'; btn.disabled = true; btn.style.opacity = '0.5'; }
+  }catch(e){
+    _addDebugLine('[取消] 请求失败: ' + e.message);
+  }
+}
+
+function setRInfo(html){document.getElementById('rinfo').innerHTML=html;}
+
+/* ── 内嵌对话地图 ── */
+var _boundaryGeoJSON = null; // cached boundary geojson
+function setBoundaryGeoJSON(gj){ _boundaryGeoJSON = gj; }
+
+function createChatMap(containerId, overlays){
+  if(typeof L==='undefined') return;
+  var div = document.getElementById(containerId);
+  if(!div) return;
+  var m = L.map(containerId, {zoomControl: true, attributionControl: false}).setView([35.86,104.19], 4);
+  L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {subdomains:'1234', maxZoom:18}).addTo(m);
+  
+  // boundary
+  if(_boundaryGeoJSON){
+    L.geoJSON(_boundaryGeoJSON, {
+      style: {color:'#3b82f6', weight:2, fillColor:'#3b82f6', fillOpacity:0.06}
+    }).addTo(m);
+  }
+
+  var layers = [];
+  var colors = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#f97316'];
+  if(overlays&&overlays.length){
+    overlays.forEach(function(o, i){
+      var c = o.color || colors[i % colors.length];
+      var lyr;
+      if(o.geojson){
+        lyr = L.geoJSON(o.geojson, {style: {color:c, weight:2, fillColor:c, fillOpacity:0.15}});
+      }
+      if(lyr){
+        lyr.addTo(m);
+        lyr.bindTooltip((o.path?'P'+o.path+'F'+o.frame:o.name), {direction:'center'});
+        layers.push(lyr);
+      }
+    });
+  }
+  if(layers.length){
+    try{ m.fitBounds(L.featureGroup(layers).getBounds().pad(0.2)); }catch(e){}
+  }
+  setTimeout(function(){ m.invalidateSize(); }, 200);
+  return m;
+}
+
+/* ── 发送/终止 ── */
+function setBtnState(running){
+  if(running){
+    btn.textContent='⏹';btn.style.background='#ef4444';btn.disabled=false;
+    input.disabled=true;input.placeholder='Agent 正在处理...';
+  } else {
+    btn.textContent='➤';btn.style.background='';btn.disabled=false;
+    input.disabled=false;input.placeholder='发消息...';input.focus();
+  }
+}
+
+async function doSend(msgOverride){
+  if(!streamDone){ abortChat(); }
+  var msg = msgOverride || input.value.trim();
+  if(!msg)return;
+  if(!msgOverride){ input.value=''; }
+  streamDone=false;setBtnState(true);
+  if(hero.classList.contains('hidden')||chatDiv.classList.contains('hidden')){
+  } else { hero.classList.add('hidden');chatDiv.classList.remove('hidden'); }
+  addMsg('user',msg);addLoading();
+  _abortController=new AbortController();
+  try{
+    const resp=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,history}),signal:_abortController.signal});
+    if(!resp.ok)throw new Error('Server error: '+resp.status);
+    const reader=resp.body.getReader(),decoder=new TextDecoder();let buffer='';
+    while(true){const{done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const parts=buffer.split('\n\n');buffer=parts.pop();for(const part of parts){const lines=part.trim().split('\n');let event='message',data='';for(const line of lines){if(line.startsWith('event: '))event=line.slice(7).trim();else if(line.startsWith('data: '))data=line.slice(6).trim()}      if(!data)continue;try{const obj=JSON.parse(data);
+console.log('SSE event:', event);
+if(event==='tool_progress'){removeLoading();addMsg('tool','⚙ '+obj.text);addLoading();}
+else if(event==='debug_line'){_addDebugLine(obj.text||'');}
+else if(event==='thinking'){removeLoading();addMsg('thinking','💭 '+obj.text);addLoading();}
+else if(event==='ui_update'){handleUI(obj);}
+else if(event==='response'){removeLoading();addMsg('agent',renderMarkdown(obj.text),true);history.push({role:'user',content:msg});history.push({role:'assistant',content:obj.text})}
+else if(event==='error'){removeLoading();addMsg('error',obj.message)}
+else if(event==='done'){removeLoading()}
+}catch(e){}}}
+  }catch(e){if(e.name!=='AbortError'){removeLoading();addMsg('error',e.message)}else{removeLoading();addMsg('tool','⏹ 已终止')}}
+  finally{_abortController=null;streamDone=true;setBtnState(false)}
+}
+
+function abortChat(){
+  if(_abortController){_abortController.abort();_abortController=null}
+  streamDone = true;
+}
+</script>
+</body>
+</html>

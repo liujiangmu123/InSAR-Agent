@@ -1,0 +1,478 @@
+[
+  {
+    "id": "result_0001",
+    "name": "Path11_Frame106",
+    "center": [
+      110.91786726052689,
+      33.83424259738655
+    ],
+    "bbox": [
+      109.34116929077071,
+      32.80868850835197,
+      112.49260662712176,
+      34.859876418206255
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 11,
+    "frame": 106,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/11_106/vel_11_106_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/11_106/tc_11_106_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/11_106/water_11_106_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/11_106/cum_rd_11_106_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/11_106/vel_11_106_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/11_106",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:56",
+    "footprint": {
+      "wkt": "POLYGON ((109.378967 34.449203, 109.756027 32.826004, 112.444946 33.230492, 112.121658 34.851688, 109.378967 34.449203))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0002",
+    "name": "Path11_Frame111",
+    "center": [
+      110.59248850440511,
+      35.327177683096735
+    ],
+    "bbox": [
+      108.98578296320734,
+      34.301382606876885,
+      112.18895630392925,
+      36.35337291701828
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 11,
+    "frame": 111,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/11_111/vel_11_111_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/11_111/tc_11_111_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/11_111/water_11_111_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/11_111/cum_rd_11_111_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/11_111/vel_11_111_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/11_111",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:56",
+    "footprint": {
+      "wkt": "POLYGON ((109.022621 35.942616, 109.406487 34.320229, 112.145859 34.723076, 111.819839 36.343689, 109.022621 35.942616))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0003",
+    "name": "Path11_Frame116",
+    "center": [
+      110.26629747658646,
+      36.82024067361305
+    ],
+    "bbox": [
+      108.62622126926156,
+      35.795383821566645,
+      111.88700269116563,
+      37.84582637752969
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 11,
+    "frame": 116,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/11_116/vel_11_116_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/11_116/tc_11_116_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/11_116/water_11_116_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/11_116/cum_rd_11_116_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/11_116/vel_11_116_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/11_116",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:56",
+    "footprint": {
+      "wkt": "POLYGON ((108.668083 37.43671, 109.059402 35.814808, 111.849312 36.21553, 111.520157 37.835907, 108.668083 37.43671))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0004",
+    "name": "Path11_Frame121",
+    "center": [
+      109.93400130182273,
+      38.312651599828726
+    ],
+    "bbox": [
+      108.25962699063346,
+      37.28770479216258,
+      111.57880381584087,
+      39.338670329198706
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 11,
+    "frame": 121,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/11_121/vel_11_121_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/11_121/tc_11_121_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/11_121/water_11_121_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/11_121/cum_rd_11_121_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/11_121/vel_11_121_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/11_121",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:56",
+    "footprint": {
+      "wkt": "POLYGON ((108.298759 38.929005, 108.698402 37.308002, 111.545799 37.70739, 111.213005 39.327137, 108.298759 38.929005))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0005",
+    "name": "Path11_Frame126",
+    "center": [
+      109.59113451158704,
+      39.832946950278334
+    ],
+    "bbox": [
+      107.86892666054823,
+      38.77937300512278,
+      111.27111796213187,
+      40.888004564686696
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-09",
+    "path": 11,
+    "frame": 126,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/11_126/vel_11_126_201703_202309.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/11_126/tc_11_126_201703_202309.tif",
+      "water_mask": "/app/isce2_gpu/ASF/11_126/water_11_126_201703_202309.tif",
+      "timeseries": "/app/isce2_gpu/ASF/11_126/cum_rd_11_126_201703_202309.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/11_126/vel_11_126_201703_202309.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/11_126",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:56",
+    "footprint": {
+      "wkt": "POLYGON ((107.908981 40.47876, 108.332603 38.8008, 111.240593 39.198879, 110.891548 40.875847, 107.908981 40.47876))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0006",
+    "name": "Path157_Frame102",
+    "center": [
+      107.03413315813515,
+      32.7608770587979
+    ],
+    "bbox": [
+      105.48014498662808,
+      31.69173419573416,
+      108.62425943099008,
+      33.83202400612114
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 157,
+    "frame": 102,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/157_102/vel_157_102_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/157_102/tc_157_102_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/157_102/water_157_102_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/157_102/cum_rd_157_102_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/157_102/vel_157_102_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/157_102",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:56",
+    "footprint": {
+      "wkt": "POLYGON ((105.517113 33.375351, 105.889702 31.751602, 108.537743 32.156422, 108.216019 33.778023, 105.517113 33.375351))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0007",
+    "name": "Path157_Frame107",
+    "center": [
+      106.71586227380365,
+      34.25485068945782
+    ],
+    "bbox": [
+      105.137815992672,
+      33.192316629956196,
+      108.33272889747929,
+      35.319098869715084
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 157,
+    "frame": 107,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/157_107/vel_157_107_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/157_107/tc_157_107_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/157_107/water_157_107_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/157_107/cum_rd_157_107_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/157_107/vel_157_107_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/157_107",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:56",
+    "footprint": {
+      "wkt": "POLYGON ((105.161491 34.868553, 105.540413 33.245838, 108.237854 33.649193, 107.913704 35.269981, 105.161491 34.868553))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0008",
+    "name": "Path157_Frame117",
+    "center": [
+      106.0601594037112,
+      37.26949423038863
+    ],
+    "bbox": [
+      104.41636095298763,
+      36.19344779433054,
+      107.73371845906067,
+      38.34666032348397
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 157,
+    "frame": 117,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/157_117/vel_157_117_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/157_117/tc_157_117_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/157_117/water_157_117_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/157_117/cum_rd_157_117_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/157_117/vel_157_117_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/157_117",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:56",
+    "footprint": {
+      "wkt": "POLYGON ((104.444946 37.915466, 104.852448 36.236355, 107.647583 36.635105, 107.305626 38.312717, 104.444946 37.915466))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0009",
+    "name": "Path157_Frame122",
+    "center": [
+      105.72028159223792,
+      38.787779012857214
+    ],
+    "bbox": [
+      104.0412632105352,
+      37.74566930114344,
+      107.4200581647898,
+      39.830641247418775
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 157,
+    "frame": 122,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/157_122/vel_157_122_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/157_122/tc_157_122_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/157_122/water_157_122_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/157_122/cum_rd_157_122_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/157_122/vel_157_122_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/157_122",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:56",
+    "footprint": {
+      "wkt": "POLYGON ((104.066704 39.406399, 104.470673 37.779522, 107.328987 38.177464, 106.993515 39.803177, 104.066704 39.406399))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0010",
+    "name": "Path55_Frame102",
+    "center": [
+      105.02301503128587,
+      32.5905495734742
+    ],
+    "bbox": [
+      103.4601101581348,
+      31.55973800811532,
+      106.58644633892669,
+      33.62138345117217
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 55,
+    "frame": 102,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/55_102/vel_55_102_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/55_102/tc_55_102_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/55_102/water_55_102_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/55_102/cum_rd_55_102_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/55_102/vel_55_102_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/55_102",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:56",
+    "footprint": {
+      "wkt": "POLYGON ((103.496323 33.207878, 103.869743 31.577742, 106.514297 31.983109, 106.191559 33.611069, 103.496323 33.207878))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0011",
+    "name": "Path84_Frame100",
+    "center": [
+      109.23760683336948,
+      32.05048678565267
+    ],
+    "bbox": [
+      107.68895096720287,
+      31.02030538602569,
+      110.75305441335504,
+      33.08230793503053
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 84,
+    "frame": 100,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/84_100/vel_84_100_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/84_100/tc_84_100_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/84_100/water_84_100_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/84_100/cum_rd_84_100_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/84_100/vel_84_100_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/84_100",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:57",
+    "footprint": {
+      "wkt": "POLYGON ((107.732864 32.666416, 108.102898 31.041935, 110.739021 31.449188, 110.418289 33.071415, 107.732864 32.666416))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0012",
+    "name": "Path84_Frame105",
+    "center": [
+      108.92610975719495,
+      33.54728014756483
+    ],
+    "bbox": [
+      107.3436292815822,
+      32.51580135466862,
+      110.47289703995209,
+      34.58071702133452
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 84,
+    "frame": 105,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/84_105/vel_84_105_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/84_105/tc_84_105_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/84_105/water_84_105_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/84_105/cum_rd_84_105_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/84_105/vel_84_105_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/84_105",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:57",
+    "footprint": {
+      "wkt": "POLYGON ((107.392738 34.162113, 107.768555 32.538647, 110.447342 32.943317, 110.124519 34.564735, 107.392738 34.162113))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0013",
+    "name": "Path84_Frame125",
+    "center": [
+      107.60212391637448,
+      39.57263203898201
+    ],
+    "bbox": [
+      105.88374375005473,
+      38.48390195085762,
+      109.37194916134511,
+      40.66419954357414
+    ],
+    "date_start": "2017-03",
+    "date_end": "2023-12",
+    "path": 84,
+    "frame": 125,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/84_125/vel_84_125_201703_202312.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/84_125/tc_84_125_201703_202312.tif",
+      "water_mask": "/app/isce2_gpu/ASF/84_125/water_84_125_201703_202312.tif",
+      "timeseries": "/app/isce2_gpu/ASF/84_125/cum_rd_84_125_201703_202312.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/84_125/vel_84_125_201703_202312.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/84_125",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:57",
+    "footprint": {
+      "wkt": "POLYGON ((105.925926 40.191589, 106.334824 38.565086, 109.232956 38.963356, 108.895424 40.58884, 105.925926 40.191589))",
+      "type": "Polygon"
+    }
+  },
+  {
+    "id": "result_0014",
+    "name": "Path84_Frame130",
+    "center": [
+      107.23821236633985,
+      41.06043631238829
+    ],
+    "bbox": [
+      105.48437455098431,
+      39.97797508802605,
+      109.04751240121747,
+      42.145390794466394
+    ],
+    "date_start": "2017-03",
+    "date_end": "2022-12",
+    "path": 84,
+    "frame": 130,
+    "files": {
+      "velocity": "/app/isce2_gpu/ASF/84_130/vel_84_130_201703_202212.tif",
+      "temporal_coherence": "/app/isce2_gpu/ASF/84_130/tc_84_130_201703_202212.tif",
+      "water_mask": "/app/isce2_gpu/ASF/84_130/water_84_130_201703_202212.tif",
+      "timeseries": "/app/isce2_gpu/ASF/84_130/cum_rd_84_130_201703_202212.h5"
+    },
+    "preview": "/app/isce2_gpu/ASF/84_130/vel_84_130_201703_202212.tif",
+    "parameters": {
+      "source_dir": "/app/isce2_gpu/ASF/84_130",
+      "auto_detected": true
+    },
+    "created": "2026-07-23 07:57",
+    "footprint": {
+      "wkt": "POLYGON ((105.537827 41.681774, 105.956863 40.056389, 108.921646 40.453972, 108.57943 42.078667, 105.537827 41.681774))",
+      "type": "Polygon"
+    }
+  }
+]

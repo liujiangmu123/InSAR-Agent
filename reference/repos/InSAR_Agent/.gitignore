@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+.junie/
+*.swp
+*.swo
+
+# Secrets & configs with credentials
+*.enc
+*.key
+src/config/settings.json
+src/config/accounts.*
+data/
+
+# Output & runtime
+src/projects/
+*.log
+*.tmp
+
+# OS
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# Docker
+.env
+.env.local
+
+# Virtual env
+venv/
+.venv/
+env/
+
+.env
+*.txt
+*.txt.meta

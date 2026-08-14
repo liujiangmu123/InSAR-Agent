@@ -1,9 +1,10 @@
 # 参考仓库（本地研究用，不纳入版本控制；reference/ 下的分析文档正常入库）
-# pi、pi-chat 为 PI 框架源码，按需入库（2026-08-14 起跟踪）
+# pi、pi-chat、InSAR_Agent 为参考源码，按需入库（2026-08-14 起跟踪）
 _refs/
 reference/repos/*
 !reference/repos/pi/
 !reference/repos/pi-chat/
+!reference/repos/InSAR_Agent/
 .tools/
 
 # 密钥与本地配置

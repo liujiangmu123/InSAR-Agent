@@ -1,0 +1,35 @@
+version: "3.8"
+
+services:
+  insar-agent:
+    build: .
+    image: insar-agent:latest
+    container_name: insar-agent
+    restart: unless-stopped
+    ports:
+      - "8866:8866"
+    volumes:
+      - ./data:/app/data
+      - ./catalog_data:/app/src/insar_agent/data/catalog
+      - G:/isce2_gpu:/app/isce2_gpu
+      # Add your own drives here, e.g.:
+      # - E:/blender:/app/blender
+      # - D:/mydata:/app/mydata
+      # Bind source code for hot-reload (no rebuild needed)
+      - ./web:/app/web
+      - ./src:/app/src
+      # Bind your existing template config (optional)
+      - ./src/insar_agent/tools/smallbaselineApp.cfg:/app/src/insar_agent/tools/smallbaselineApp.cfg:ro
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      # ASF credentials (optional, can also use insar-agent account add inside container)
+      - HYP3_USERNAME=${HYP3_USERNAME:-}
+      - HYP3_PASSWORD=${HYP3_PASSWORD:-}
+      # CDS API for ERA5 atmospheric correction (get key at https://cds.climate.copernicus.eu/)
+      - CDSAPI_URL=${CDSAPI_URL:-https://cds.climate.copernicus.eu/api}
+      - CDSAPI_KEY=${CDSAPI_KEY:-}
+      # Windows→Docker path mapping. Add your own drives:
+      # Format: "G:/dir=/app/dir;E:/dir=/app/dir2"
+      - WIN_PATH_MAP=G:/isce2_gpu=/app/isce2_gpu

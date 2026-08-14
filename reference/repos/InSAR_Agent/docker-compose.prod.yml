@@ -1,0 +1,26 @@
+# 生产部署用 — 无需源码，镜像已包含一切
+# 使用前: 1. 修改下方数据盘路径   2. 配好 .env
+services:
+  insar-agent:
+    image: insar-agent:latest
+    container_name: insar-agent
+    restart: unless-stopped
+    ports:
+      - "8866:8866"
+    volumes:
+      - ./data:/app/data
+      - ./catalog_data:/app/src/insar_agent/data/catalog
+      # === 数据盘 — 把同事自己的路径替换下面 ===
+      - G:/isce2_gpu:/app/isce2_gpu
+      # 如有其他数据盘，按同样格式添加：
+      # - D:/mydata:/app/mydata
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - HYP3_USERNAME=${HYP3_USERNAME:-}
+      - HYP3_PASSWORD=${HYP3_PASSWORD:-}
+      - CDSAPI_URL=${CDSAPI_URL:-https://cds.climate.copernicus.eu/api}
+      - CDSAPI_KEY=${CDSAPI_KEY:-}
+      # Windows→Docker 路径映射，和 volumes 里的数据盘对应
+      - WIN_PATH_MAP=${WIN_PATH_MAP:-G:/isce2_gpu=/app/isce2_gpu}

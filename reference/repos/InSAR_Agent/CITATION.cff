@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: InSAR Agent
+type: software
+authors:
+  - name: InSAR Agent Contributors
+    affiliation: >-
+      Jiangsu Provincial Key Laboratory for Advanced Remote Sensing and
+      Geographic Information Technology, Key Laboratory for Land Satellite
+      Remote Sensing Applications of Ministry of Natural Resources, School of
+      Geography and Ocean Science, Nanjing University, Nanjing, Jiangsu 210023, China
+repository-code: "https://github.com/KevinTyn/InSAR_Agent"
+license: MIT
