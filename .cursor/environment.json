@@ -1,0 +1,16 @@
+{
+  "name": "insar-agent",
+  "install": "sudo apt-get update && sudo apt-get install -y python3.12-venv && python3 -m venv .venv && .venv/bin/python -m pip install --upgrade pip && .venv/bin/python -m pip install -e \".[dev,raster]\" h5py pyyaml hypothesis",
+  "terminals": [
+    {
+      "name": "insar-agent server",
+      "command": "INSAR_HOME=./workspace .venv/bin/python -m insar_agent.api.app"
+    }
+  ],
+  "ports": [
+    {
+      "name": "insar-agent web + API",
+      "port": 8873
+    }
+  ]
+}
