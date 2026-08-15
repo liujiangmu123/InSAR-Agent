@@ -435,18 +435,44 @@ export function createInsarTools(client: BackendClient, controller: ModeControll
     name: "insar_plan_run",
     label: "InSAR Plan Run",
     description:
-      "Plan an InSAR run from a natural-language request (region, time window, target). The backend parses the intent, probes the environment and writes an 11-step plan; nothing is executed yet. Returns the run id and the planned steps.",
+      "Plan an InSAR run from a natural-language request (region, time window, target). " +
+      "The backend parses the intent, probes the environment and writes a plan; nothing is executed yet. " +
+      "pipeline=core is the 11-step processing chain (default); pipeline=analysis is a post-processing " +
+      "run over existing products (steps 20-28). For analysis, give source paths via params_json.",
     parameters: Type.Object({
       session: SessionParam,
       text: Type.String({
         description:
           'Natural-language request, e.g. "Ridgecrest coseismic deformation, 2019-06-10 to 2019-08-15".',
       }),
+      pipeline: Type.Optional(
+        StringEnum(
+          ["core", "analysis"],
+          "core = the 11-step processing chain (default). " +
+            "analysis = post-processing over products of existing runs.",
+        ),
+      ),
+      params_json: Type.Optional(
+        Type.String({
+          description:
+            'For analysis: JSON object of source paths, e.g. {"primary":"mintpy/velocity.h5"}. Applied to step 20.',
+        }),
+      ),
     }),
     async execute(_toolCallId, params, signal) {
-      const args = params as { session: string; text: string };
+      const args = params as {
+        session: string;
+        text: string;
+        pipeline?: "core" | "analysis";
+        params_json?: string;
+      };
       const session = bind(args.session);
-      const stream = await client.turn(session, args.text, signal);
+      const extra: { pipeline?: "core" | "analysis"; params?: Record<string, unknown> } = {};
+      if (args.pipeline !== undefined) extra.pipeline = args.pipeline;
+      if (args.params_json !== undefined) {
+        extra.params = parseJsonObject(args.params_json, "params_json");
+      }
+      const stream = await client.turn(session, args.text, signal, extra);
       const run = await client.latestRun(session, signal);
       if (!run) {
         throw new Error(

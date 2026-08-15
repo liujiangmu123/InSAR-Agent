@@ -48,7 +48,10 @@ def test_health_and_session(client):
 def test_registry_shape(client):
     client.post("/api/sessions", json={"id": "demo"})
     regs = client.get("/api/registry", params={"session": "demo"}).json()
-    assert len(regs) == 11
+    core = [r for r in regs if r.get("group") != "analysis"]
+    analysis = [r for r in regs if r.get("group") == "analysis"]
+    assert len(core) == 11
+    assert [r["id"] for r in analysis] == list(range(20, 29))
     step6 = next(r for r in regs if r["id"] == 6)
     assert {m["id"] for m in step6["methods"]} >= {"snaphu_mcf", "snaphu_smooth", "icu"}
     assert step6["params"]["min_coherence"]["kind"] == "science"

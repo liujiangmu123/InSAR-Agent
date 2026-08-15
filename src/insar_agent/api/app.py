@@ -54,8 +54,8 @@ from insar_agent.core.store import DELIVER_AS, Store
 from insar_agent.loop.driver import Driver
 from insar_agent.loop.queue import QueueScheduler, RunQueue
 from insar_agent.planner.feasibility import narrow_methods
-from insar_agent.planner.plan import fork_run
-from insar_agent.registry.capabilities import PIPELINE, REGISTRY
+from insar_agent.planner.plan import fork_run, pipeline_groups
+from insar_agent.registry.capabilities import REGISTRY
 from insar_agent.report.bundle import build_repro_bundle
 from insar_agent.report.script import export_run_script
 
@@ -372,6 +372,8 @@ def agent_loop_enabled(home: Path) -> bool:
 class TurnBody(BaseModel):
     session: str
     text: str
+    pipeline: str = "core"  # core | analysis
+    params: dict | None = None  # 分析 run 的源路径,或 {step_id: {params/method}}
 
 
 class ConverseBody(BaseModel):
@@ -720,7 +722,7 @@ def create_app(home: Path | None = None) -> FastAPI:
     def registry(session: str | None = None):
         probe = driver_of(session).probe() if session else None
         out = []
-        for cap in PIPELINE:
+        for cap in sorted(REGISTRY.values(), key=lambda c: c.id):
             methods = []
             feas = narrow_methods(cap, probe, allow_simulated=True) if probe else None
             feas_by_id = {f.method.id: f for f in feas} if feas else {}
@@ -735,6 +737,7 @@ def create_app(home: Path | None = None) -> FastAPI:
                 })
             out.append({
                 "id": cap.id, "name": cap.name, "deps": list(cap.deps),
+                "group": cap.group,
                 "method": cap.default_method, "methods": methods,
                 "params": {k: {"default": p.default, "kind": p.kind, "type": p.type,
                                "min": p.min, "max": p.max, "hint": p.hint}
@@ -830,7 +833,12 @@ def create_app(home: Path | None = None) -> FastAPI:
     @app.post("/api/turn")
     def turn(body: TurnBody):
         check_turn_text(body.text)  # 孤代理挡在开流前(先于 driver_of,不落目录)
-        return ndjson(driver_of(body.session).turn(body.session, body.text))
+        try:
+            pipeline_groups(body.pipeline)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return ndjson(driver_of(body.session).turn(
+            body.session, body.text, pipeline=body.pipeline, step_params=body.params))
 
     @app.post("/api/converse")
     def converse(body: ConverseBody):

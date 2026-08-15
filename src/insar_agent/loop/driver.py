@@ -50,7 +50,7 @@ from insar_agent.loop.goal import (
     should_extend_budget,
 )
 from insar_agent.brain.llm_config import AGENT_MAX_CYCLES_MAX
-from insar_agent.planner.plan import PlanResult, make_plan
+from insar_agent.planner.plan import PlanResult, make_plan, pipeline_groups
 from insar_agent.registry.capabilities import REGISTRY, topo_order
 from insar_agent.registry.model import Capability
 from insar_agent.registry.scenarios import Scenario, scenario_of
@@ -199,6 +199,39 @@ def compute_agent_hash(registry: dict[int, Capability]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def _run_intent(run: dict) -> dict:
+    raw = run.get("intent") or "{}"
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _run_groups(run: dict) -> tuple[str, ...]:
+    groups = _run_intent(run).get("groups") or ["core"]
+    return tuple(groups)
+
+
+def _overrides_from_params(params: dict | None) -> dict[int, dict]:
+    """turn 请求的 params → make_plan overrides。
+
+    数字键视为逐步覆写;否则整份当作第 20 步(分析输入)参数。
+    """
+    if not params:
+        return {}
+    if all(str(k).isdigit() for k in params):
+        out: dict[int, dict] = {}
+        for k, v in params.items():
+            if isinstance(v, dict) and ("params" in v or "method" in v):
+                out[int(k)] = v
+            elif isinstance(v, dict):
+                out[int(k)] = {"params": v}
+        return out
+    return {20: {"params": params}}
+
+
 class Driver:
     def __init__(self, store: Store, *, workspace: Path,
                  registry: dict[int, Capability] | None = None,
@@ -330,7 +363,9 @@ class Driver:
 
     # ---------------- 对话回合 ----------------
 
-    async def turn(self, session_id: str, text: str) -> AsyncIterator[dict]:
+    async def turn(self, session_id: str, text: str, *,
+                   pipeline: str = "core",
+                   step_params: dict | None = None) -> AsyncIterator[dict]:
         store = self.store
         session = store.get_session(session_id)
         if session is None:
@@ -398,7 +433,9 @@ class Driver:
                             sc, region=outcome.action.get("region", sc.region),
                             dates=outcome.action.get("timerange", sc.dates))
                     async for event in self._plan_turn(session_id, session, text, sc,
-                                                       intent_source="converse"):
+                                                       intent_source="converse",
+                                                       pipeline=pipeline,
+                                                       step_params=step_params):
                         yield event
                 else:
                     async for event in self._apply_converse(session_id, outcome):
@@ -421,7 +458,8 @@ class Driver:
         sc = intent.scenario
         assert sc is not None
         async for event in self._plan_turn(session_id, session, text, sc,
-                                           intent_source=intent.source):
+                                           intent_source=intent.source,
+                                           pipeline=pipeline, step_params=step_params):
             yield event
 
     # ---------------- converse 线程桥(turn 的流式辅助,0814B §1.3) ----------------
@@ -570,7 +608,9 @@ class Driver:
     # ---------------- 规划回合(turn 的规划主体,converse plan 动作与规则路径共用) ----------------
 
     async def _plan_turn(self, session_id: str, session: dict, text: str,
-                         sc: Scenario, *, intent_source: str) -> AsyncIterator[dict]:
+                         sc: Scenario, *, intent_source: str,
+                         pipeline: str = "core",
+                         step_params: dict | None = None) -> AsyncIterator[dict]:
         store = self.store
         mode = session["mode"]
         yield self._emit(ev.thinking(
@@ -613,22 +653,35 @@ class Driver:
                     overrides[sid].setdefault("params", {}).update(action["payload"]["params"])
                 pending_next_run.append((action, sid))
 
+        # pipeline → groups 只在这一处转换(API 只转发 pipeline 字符串)
+        groups = pipeline_groups(pipeline)
+        for sid, ov in _overrides_from_params(step_params).items():
+            overrides.setdefault(sid, {})
+            if "method" in ov:
+                overrides[sid]["method"] = ov["method"]
+            if "params" in ov:
+                overrides[sid].setdefault("params", {}).update(ov["params"])
+
         # ---- 计划 ----
         # next_run 预约的变更(overrides)只能经 make_plan 进入新计划;复用既有
         # run 的分支不会应用它们 —— 有 overrides 时必须重新规划,否则动作已被
         # 消费却静默丢失(REVIEW P1:next_run 干预失效)。
         latest = store.latest_run(session_id)
         plan: PlanResult | None = None
-        if latest and not overrides and latest["scenario"] == sc.key and latest["status"] in (
-                "ready", "planning", "paused", "interrupted", "running", "done", "failed"):
+        if (latest and not overrides and latest["scenario"] == sc.key
+                and _run_groups(latest) == groups
+                and latest["status"] in (
+                "ready", "planning", "paused", "interrupted", "running", "done", "failed")):
             run_id = latest["run_id"]
         else:
             plan = make_plan(store, session_id, registry=self.registry, probe=probe,
                              scenario=sc, workspace=str(self.workspace),
-                             intent={"text": text, "source": intent_source},
+                             intent={"text": text, "source": intent_source,
+                                     "pipeline": pipeline},
                              overrides=overrides or None,
                              allow_simulated=self.allow_simulated,
-                             agent_hash=self.agent_hash)
+                             agent_hash=self.agent_hash,
+                             groups=groups)
             run_id = plan.run_id
             if plan.problems:
                 for p in plan.problems:

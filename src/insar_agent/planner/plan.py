@@ -40,6 +40,15 @@ class PlanResult:
         return not self.problems
 
 
+def pipeline_groups(pipeline: str = "core") -> tuple[str, ...]:
+    """pipeline 字符串 → 规划 groups。转换只在这一处做(API/driver 都调用这里)。"""
+    if pipeline == "analysis":
+        return ("analysis",)
+    if pipeline == "core":
+        return ("core",)
+    raise ValueError(f"未知 pipeline:{pipeline!r}(core|analysis)")
+
+
 def _plan_methods(registry: dict[int, Capability], probe: ProbeResult, *,
                   scenario: Scenario | None, allow_simulated: bool,
                   overrides: dict[int, dict] | None = None,

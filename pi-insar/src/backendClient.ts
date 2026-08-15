@@ -638,8 +638,22 @@ export class BackendClient {
   }
 
   /** `POST /api/turn` — rules-path planning; no LLM key required. */
-  turn(session: string, text: string, signal?: AbortSignal): Promise<StreamResult> {
-    return this.ndjson("/api/turn", { session, text }, signal);
+  turn(
+    session: string,
+    text: string,
+    signal?: AbortSignal,
+    extra?: { pipeline?: "core" | "analysis"; params?: Record<string, unknown> },
+  ): Promise<StreamResult> {
+    return this.ndjson(
+      "/api/turn",
+      {
+        session,
+        text,
+        ...(extra?.pipeline ? { pipeline: extra.pipeline } : {}),
+        ...(extra?.params ? { params: extra.params } : {}),
+      },
+      signal,
+    );
   }
 
   /** `POST /api/pipeline` — executes the run (or `stepIds`) to completion. */

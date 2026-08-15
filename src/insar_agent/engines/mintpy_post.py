@@ -297,7 +297,7 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
         argv = [py, "-u", "-m", "mintpy.cli.view", _rel(workspace, inp)]
         if dset:
             argv.append(dset)
-        argv.extend(["--dpi", str(int(params.get("dpi", 300))), "--nodisplay",
+        argv.extend(["--dpi", str(int(params.get("dpi", 300))), "--nodisplay", "--save",
                      "-o", f"{_FIGS}/view_{inp.stem}.png"])
         cmap = str(params.get("cmap") or "").strip()
         if cmap:
@@ -308,7 +308,7 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
         inp = _safe_rel(workspace, str(params.get("input") or "analysis/decomposed.h5"), "input")
         figs.mkdir(parents=True, exist_ok=True)
         argv = [py, "-u", "-m", "mintpy.cli.plot_transection", _rel(workspace, inp),
-                "--nodisplay", "-o", f"{_FIGS}/transection.png"]
+                "--nodisplay", "--save", "-o", f"{_FIGS}/transection.png"]
         return _runner_plan([argv], workspace)
 
     if method == "kmz":

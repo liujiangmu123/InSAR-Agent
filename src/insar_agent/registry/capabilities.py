@@ -474,9 +474,11 @@ PIPELINE: tuple[Capability, ...] = (
                           hint="默认按产物类型路由:速度=vik/roma(diverging)、相干=batlow"
                                "(sequential)、缠绕相位=romaO(cyclic);显式指定时直通"),
             "format": Param("png+pdf", kind="presentation", type="str"),
-            "figure_set": Param(["velocity", "coherence", "mask"], kind="presentation",
-                                type="list",
-                                hint="本步要出的图种;场景包可覆写(如沉降加 points_timeseries)"),
+            "figure_set": Param(["velocity"], kind="presentation", type="list",
+                                hint="本步要出的图种;场景包可覆写"
+                                     "(velocity/coherence/mask/network/points_timeseries 等)"),
+            "points_lalo": Param([], kind="science", type="list",
+                                 hint="points_timeseries 的采样点 [[lat,lon], ...]"),
         },
         artifacts=(
             ArtifactSpec("figures", ("products/figures", "products/velocities"),

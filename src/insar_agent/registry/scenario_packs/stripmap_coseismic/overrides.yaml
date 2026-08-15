@@ -48,3 +48,11 @@ step_overrides:
   # 单干涉对无 PS/SBAS 双链,交叉验证不可行 —— 诚实降级为真实统计质检(对齐 quake 包)
   11:
     method: coherence_mask
+  # 第 7 步数据面:ISCE2 本地链布局(docs/VALIDATION-isce2-wsl.md 实测).
+  # 入射角/水掩膜 VALIDATION 未列出,不编造路径,保留 registry HyP3 默认.
+  7:
+    params:
+      processor: isce
+      unw_pattern: ../isce2/interferogram/filt_topophase.unw.geo
+      cor_pattern: ../isce2/interferogram/phsig.cor
+      dem_pattern: /home/insar/work/baja/dem/dem.wgs84

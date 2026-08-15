@@ -19,7 +19,8 @@
 - 环境与会话:`insar_health`、`insar_env_probe`、`insar_list_datasets`、
   `insar_create_session`、`insar_list_sessions`
 - 规划与执行:`insar_plan_run` → `insar_run_status` → `insar_execute_run` →
-  `insar_resume`(后端重启后接回 running,已结算步骤绝不重跑)
+  `insar_resume`(后端重启后接回 running,已结算步骤绝不重跑)。
+  `pipeline=analysis` 规划分析链(步 20-28,需 `params_json` 给出源产物路径)
 - 改动与分支:`insar_preview_change` → `insar_apply_change`、`insar_fork_run`、`insar_intervene`
 - 图件与轨迹:`insar_view_figure`(列出/内联查看 run 的真实图件产物)、
   `insar_run_trace`(执行轨迹:各步阶段与耗时)
