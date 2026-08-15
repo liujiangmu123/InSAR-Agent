@@ -23,6 +23,8 @@
 - 改动与分支:`insar_preview_change` → `insar_apply_change`、`insar_fork_run`、`insar_intervene`
 - 图件与轨迹:`insar_view_figure`(列出/内联查看 run 的真实图件产物)、
   `insar_run_trace`(执行轨迹:各步阶段与耗时)
+- 分析与查询:`insar_timeseries_point`、`insar_list_artifacts`、`insar_doctor`、
+  `insar_recommend_route`、`insar_read_skill`、`insar_capabilities`
 - 诊断与交付:`insar_read_log`、`insar_export_provenance`
 - 模式:`insar_get_mode`、`insar_set_mode`
 
@@ -36,8 +38,10 @@
 2. **改方法或改参数走 `insar_preview_change` → `insar_apply_change`。**
    先看这一改动会污染哪些下游步骤、重跑要多久,再落。禁止直接编辑工作区里的配置文件来"改参数"。
 3. **绝不编造数值。** 速率、相干、覆盖率、RMS、阈值、耗时、run_id 等一切数字只能来自
-   `insar_run_status` / `insar_read_log` / `insar_export_provenance` / `insar_run_trace` 的真实返回。
-   没查到就说"未记录",不要推测、不要取整成"大约"、不要复用别处的示例数。
+   `insar_run_status` / `insar_read_log` / `insar_export_provenance` / `insar_run_trace` /
+   `insar_timeseries_point` 的真实返回。没查到就说"未记录",不要推测、不要取整成"大约"、
+   不要复用别处的示例数。点位形变必须调 `insar_timeseries_point`,禁止从图上目测。
+   改方法前先 `insar_capabilities` 拿闭集。环境异常用 `insar_doctor`,不要用 bash 自行探测。
 4. **台账外产物必须显式声明。** 自由模式下用 bash 生成的图/表/中间文件**不在 provenance 里**:
    要么改用 `insar_apply_change` + `insar_execute_run` 让流水线重新产出(进台账),
    要么在回答中明确标注"台账外产物,不计入证据级",绝不与台账产物混为一谈。

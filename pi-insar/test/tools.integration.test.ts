@@ -47,7 +47,7 @@ beforeAll(() => {
 
 describe("insar_* tools against a live backend", () => {
   it("registers every tool under the insar_ prefix", () => {
-    expect(tools.size).toBe(19);
+    expect(tools.size).toBe(25);
     for (const name of tools.keys()) expect(name.startsWith("insar_")).toBe(true);
     // Overriding a built-in would replace it for the whole pi session.
     for (const builtin of ["read", "bash", "write", "edit", "grep", "find", "ls"]) {
@@ -306,5 +306,39 @@ describe("insar_* tools against a live backend", () => {
     await call("insar_create_session", { session: emptySession, name: "empty-trace" });
     const outcome = await call("insar_run_trace", { session: emptySession });
     expect(outcome.text).toMatch(/404|no run/i);
+  });
+
+  it("insar_capabilities returns the closed method set", async () => {
+    const out = await call("insar_capabilities", {});
+    expect(out.text).toContain("mintpy_sbas");
+    expect(out.text).toContain("methods (closed set)");
+  });
+
+  it("insar_read_skill returns step knowledge", async () => {
+    const out = await call("insar_read_skill", { step_id: 7 });
+    expect(out.text.length).toBeGreaterThan(200);
+  });
+
+  it("insar_timeseries_point fails honestly when there is no timeseries", async () => {
+    await expect(call("insar_timeseries_point", { session: SESSION, lat: 35.7, lon: -117.6 })).rejects.toThrow(
+      /no timeseries|placeholder|404/i,
+    );
+  });
+
+  it("insar_list_artifacts round-trips the ledger listing", async () => {
+    const { text, details } = await call("insar_list_artifacts", { session: SESSION, run_id: runId });
+    expect(details).toHaveProperty("steps");
+    expect(text).toMatch(/artifact|no artifacts/i);
+  });
+
+  it("insar_doctor returns a live environment report", async () => {
+    const { text, details } = await call("insar_doctor");
+    expect(details).toHaveProperty("status");
+    expect(details).toHaveProperty("results");
+    expect(text).toMatch(/^(FAIL:|WARN:|OK:)/);
+  });
+
+  it("insar_recommend_route fails honestly for an unknown dataset", async () => {
+    await expect(call("insar_recommend_route", { dataset_id: "no-such-dataset" })).rejects.toThrow(/404/);
   });
 });

@@ -30,6 +30,12 @@ insar_execute_run            # 执行(可只跑 step_ids 子集),返回时执行
 insar_resume                 # 后端重启后接回 running;已结算步骤绝不重跑
 insar_view_figure            # 列出/内联查看 run 的真实图件产物(省略 name 列出)
 insar_run_trace              # 执行轨迹:各步阶段与耗时(排障/写报告的时间线)
+insar_timeseries_point       # 单像元真实形变时序(mm);禁止从图上目测
+insar_list_artifacts         # 产物清单(路径/大小/是否仍在盘上)
+insar_doctor                 # 秒级只读体检;环境异常不要用 bash 自行探测
+insar_recommend_route        # 数据集 → 处理路线优劣对比
+insar_read_skill             # 按需取第 N 步科学知识
+insar_capabilities           # 每步方法 id 闭集;apply_change 前必看
 insar_read_log               # 失败步骤的日志尾巴
 insar_export_provenance      # kind=ledger(证据文档)/ kind=run_sh(等价裸命令脚本)
 ```
@@ -57,9 +63,12 @@ insar_export_provenance      # kind=ledger(证据文档)/ kind=run_sh(等价裸�
 | 改方法、改科学参数 | `insar_preview_change` → `insar_apply_change` |
 | 中止、跳过、复位、暂停 | `insar_intervene` |
 | 比较两种处理选择 | `insar_fork_run`(复用未受影响的步骤)后各自 `insar_execute_run` |
-| 看状态、看日志、看产物清单 | `insar_run_status` / `insar_read_log` / `insar_export_provenance` |
+| 看状态、看日志、看产物清单 | `insar_run_status` / `insar_read_log` / `insar_list_artifacts` / `insar_export_provenance` |
 | 看真实图件(列出或内联) | `insar_view_figure`(省略 `name` 列出;给 `name` 内联) |
 | 看各步阶段与耗时 | `insar_run_trace` |
+| 点位形变数值 | `insar_timeseries_point`(禁止目测) |
+| 环境体检 / 选路线 / 读步骤知识 | `insar_doctor` / `insar_recommend_route` / `insar_read_skill` |
+| 改方法前拿闭集 | `insar_capabilities` |
 | 读代码、读文档、查目录、算一个临时统计、写一次性脚本 | 自由用 pi 的 `read`/`bash`/`grep`(free 模式下) |
 
 判据一句话:**会影响科学结论或产物的动作走工具层;只为"我自己看懂"的动作随便跑。**
@@ -140,7 +149,7 @@ runnable → checked → audited → calibrated → validated → publishable
 ## 6. 绝不编造数值
 
 速率、相干、`unwrap_coverage`、闭合环 RMS、阈值、耗时、run_id、产物路径 —— 一切数字只有三个合法来源:
-`insar_run_status`、`insar_read_log`、`insar_export_provenance`、`insar_run_trace`。
+`insar_run_status`、`insar_read_log`、`insar_export_provenance`、`insar_run_trace`、`insar_timeseries_point`。
 
 - 查不到 → 说"未记录/需要先跑第 N 步",不要估、不要引用别的 run 的数、不要给"大约"。
 - 质量门 PENDING 只 warning 不硬停 → 如实说 warning,不要说"通过"。

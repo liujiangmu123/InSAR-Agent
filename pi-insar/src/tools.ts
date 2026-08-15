@@ -14,10 +14,16 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Static, type TSchema, Type } from "typebox";
 import type {
   ActionName,
+  ArtifactsResponse,
   BackendClient,
+  CapabilityInfo,
   DeliverAs,
+  DoctorResponse,
   MonitorResponse,
+  RecommendResponse,
+  SkillResponse,
   StreamResult,
+  TimeseriesPointResponse,
   TraceEvent,
 } from "./backendClient.ts";
 import { ACTIONS, BackendError, DELIVER_AS, FREEDOM_MODES } from "./backendClient.ts";
@@ -172,6 +178,104 @@ function summarizeTrace(events: TraceEvent[]): string {
     lines.push(`  ${label} · ${phase} · ${formatDuration(duration)} · ${keyEvent}`);
   }
   return lines.join("\n");
+}
+
+function formatBytes(size: number | null): string {
+  if (size === null || !Number.isFinite(size)) return "?";
+  if (size < 1024) return `${size} B`;
+  return `${Math.round(size / 1024)} KiB`;
+}
+
+function formatCapabilities(steps: CapabilityInfo[]): string {
+  return steps
+    .map((step) => {
+      const methods = step.methods.map((method) => {
+        const flags = [
+          method.recommend ? "recommended" : undefined,
+          method.ok ? undefined : "blocked",
+          method.simulated ? "simulated" : undefined,
+        ].filter(Boolean);
+        return `    ${method.id}${flags.length > 0 ? ` (${flags.join(", ")})` : ""}`;
+      });
+      return [
+        `${String(step.id).padStart(2, "0")} ${step.name} · default ${step.method}`,
+        "  methods (closed set):",
+        ...methods,
+      ].join("\n");
+    })
+    .join("\n");
+}
+
+function formatArtifacts(listing: ArtifactsResponse): string {
+  if (!listing.run) return "Session has no run yet.";
+  const total = listing.steps.reduce((sum, step) => sum + step.artifacts.length, 0);
+  if (total === 0) return `Run ${listing.run} has no artifacts yet.`;
+  const blocks = listing.steps.map((step) => {
+    const rows = step.artifacts.map((art) => {
+      const missing = art.exists ? "" : " MISSING";
+      return `    ${art.artId} · ${art.kind} · ${art.path} · ${formatBytes(art.size)}${missing}`;
+    });
+    return [
+      `  step ${String(step.stepId).padStart(2, "0")} ${step.name} · ${step.method || "-"} · ${step.artifacts.length} file(s)`,
+      ...rows,
+    ].join("\n");
+  });
+  return `Run ${listing.run}: ${total} artifact(s) across ${listing.steps.length} step(s)\n${blocks.join("\n")}`;
+}
+
+function formatDoctor(report: DoctorResponse): string {
+  const fails = report.results.filter((item) => item.status === "fail");
+  const warns = report.results.filter((item) => item.status === "warn");
+  const head =
+    fails.length > 0
+      ? `FAIL: ${fails.length} check(s) failed (${report.counts.fail} fail, ${report.counts.warn} warn, ${report.counts.ok} ok)`
+      : report.status === "warn" || warns.length > 0
+        ? `WARN: ${warns.length} check(s) with warnings (${report.counts.ok} ok)`
+        : `OK: ${report.counts.ok} checks passed`;
+  const lines = [...fails, ...warns].map(
+    (item) => `  ${item.status.toUpperCase()} · ${item.name} · ${item.detail}${item.fix_hint ? ` · ${item.fix_hint}` : ""}`,
+  );
+  return [head, `took ${report.took_ms} ms`, ...lines].join("\n");
+}
+
+function formatRecommend(data: RecommendResponse): string {
+  const datasetId = String(data.dataset["id"] ?? data.dataset["kind"] ?? "dataset");
+  if (data.routes.length === 0) return `No routes for ${datasetId}.`;
+  const blocks = data.routes.map((route) => {
+    const flag = route.ready ? "ready" : `not ready${route.missing.length > 0 ? ` (missing ${route.missing.join(", ")})` : ""}`;
+    return [
+      `  ${route.route_id} · ${route.name} · ${flag}`,
+      ...route.pros.map((line) => `    + ${line}`),
+      ...route.cons.map((line) => `    - ${line}`),
+      route.est_note ? `    note: ${route.est_note}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  });
+  return `Routes for ${datasetId}:\n${blocks.join("\n")}`;
+}
+
+function skillToMarkdown(skill: SkillResponse): string {
+  const sections = Object.entries(skill.sections).flatMap(([name, text]) => [`## ${name}`, "", text, ""]);
+  return [`# ${skill.name}`, "", skill.description, "", ...sections].join("\n");
+}
+
+function formatTimeseries(data: TimeseriesPointResponse): string {
+  const n = data.values_mm.length;
+  const first = data.values_mm[0] ?? 0;
+  const last = data.values_mm[n - 1] ?? 0;
+  const coord =
+    data.point.lat !== null && data.point.lon !== null
+      ? ` (${data.point.lat.toFixed(4)}, ${data.point.lon.toFixed(4)})`
+      : "";
+  const head = [
+    `point row=${data.point.row} col=${data.point.col}${coord}`,
+    `source ${data.source}`,
+    `${n} epochs ${data.dates[0] ?? "?"} … ${data.dates[n - 1] ?? "?"}`,
+    `cumulative ${(last - first).toFixed(1)} mm`,
+  ].join("\n");
+  const table = data.dates.map((date, i) => `${date}  ${data.values_mm[i]?.toFixed(2)}`).join("\n");
+  return `${head}\n\n${table}`;
 }
 
 function typed<T extends TSchema>(definition: ToolDefinition<T, unknown, unknown>): InsarTool {
@@ -750,6 +854,116 @@ export function createInsarTools(client: BackendClient, controller: ModeControll
     },
   });
 
+  const capabilities = typed({
+    name: "insar_capabilities",
+    label: "InSAR Capabilities",
+    description:
+      "Return the closed set of pipeline methods and parameters per step. " +
+      "Call this before insar_apply_change — method ids outside this list are rejected.",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, signal) {
+      const { steps } = await client.capabilities(signal);
+      return result(formatCapabilities(steps), { steps });
+    },
+  });
+
+  const timeseriesPoint = typed({
+    name: "insar_timeseries_point",
+    label: "InSAR Time Series at Point",
+    description:
+      "Read the real deformation time series of one pixel from the run's timeseries HDF5 " +
+      "(values in mm, dates from the ledger). Locate by lat/lon (preferred) or row/col. " +
+      "Use this to answer 'how much has this point moved' — never estimate it from a figure.",
+    parameters: Type.Object({
+      session: SessionParam,
+      run_id: RunIdParam,
+      lat: Type.Optional(Type.Number({ description: "Latitude in degrees" })),
+      lon: Type.Optional(Type.Number({ description: "Longitude in degrees" })),
+      row: Type.Optional(Type.Integer({ minimum: 0, description: "Pixel row (used only when lat/lon absent)" })),
+      col: Type.Optional(Type.Integer({ minimum: 0, description: "Pixel column" })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as {
+        session: string;
+        run_id?: string;
+        lat?: number;
+        lon?: number;
+        row?: number;
+        col?: number;
+      };
+      const hasLatLon = args.lat !== undefined && args.lon !== undefined;
+      const hasRowCol = args.row !== undefined && args.col !== undefined;
+      if (!hasLatLon && !hasRowCol) {
+        throw new Error("Give either lat and lon, or row and col.");
+      }
+      const data = await client.timeseriesPoint(
+        bind(args.session),
+        { runId: args.run_id, lat: args.lat, lon: args.lon, row: args.row, col: args.col },
+        signal,
+      );
+      return result(formatTimeseries(data), data);
+    },
+  });
+
+  const listArtifacts = typed({
+    name: "insar_list_artifacts",
+    label: "InSAR List Artifacts",
+    description:
+      "List every artifact the run's ledger recorded (path, kind, size, whether the file " +
+      "still exists). Use this before delivery to see what was produced and where.",
+    parameters: Type.Object({ session: SessionParam, run_id: RunIdParam }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { session: string; run_id?: string };
+      const listing = await client.artifacts(bind(args.session), args.run_id, signal);
+      return result(formatArtifacts(listing), listing);
+    },
+  });
+
+  const doctor = typed({
+    name: "insar_doctor",
+    label: "InSAR Doctor",
+    description:
+      "Second-scale read-only environment check (engines, disk, database, ports, WSL). " +
+      "Use this when something looks wrong instead of probing with bash.",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, signal) {
+      const report = await client.doctor(signal);
+      return result(formatDoctor(report), report);
+    },
+  });
+
+  const recommendRoute = typed({
+    name: "insar_recommend_route",
+    label: "InSAR Recommend Route",
+    description:
+      "Given a dataset id from insar_list_datasets, compare processing routes " +
+      "(HyP3 cloud product vs local full chain) and which engines are missing.",
+    parameters: Type.Object({
+      dataset_id: Type.String({ description: "Dataset id as returned by insar_list_datasets" }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { dataset_id: string };
+      const data = await client.recommend(args.dataset_id, signal);
+      return result(formatRecommend(data), data);
+    },
+  });
+
+  const readSkill = typed({
+    name: "insar_read_skill",
+    label: "InSAR Read Skill",
+    description:
+      "Fetch the scientific skill document for one pipeline step (1-11). " +
+      "Use this for method/parameter meaning instead of recalling it from memory.",
+    parameters: Type.Object({
+      step_id: Type.Integer({ minimum: 1, maximum: 11, description: "Pipeline step number (1-11)" }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { step_id: number };
+      const skill = await client.skill(args.step_id, signal);
+      return result(skillToMarkdown(skill), skill);
+    },
+  });
+
   return [
     health,
     createSession,
@@ -770,6 +984,12 @@ export function createInsarTools(client: BackendClient, controller: ModeControll
     readLog,
     setMode,
     getMode,
+    capabilities,
+    timeseriesPoint,
+    listArtifacts,
+    doctor,
+    recommendRoute,
+    readSkill,
   ];
 }
 

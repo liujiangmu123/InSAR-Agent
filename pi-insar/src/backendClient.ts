@@ -187,6 +187,122 @@ export interface TraceEvent {
   raw_response: string | null;
 }
 
+/** `GET /api/timeseries-point` — one pixel from a real MintPy timeseries HDF5. */
+export interface TimeseriesPointResponse {
+  dates: string[];
+  values_mm: number[];
+  ref_point: { lat: number; lon: number } | null;
+  source: string;
+  point: { lat: number | null; lon: number | null; row: number; col: number };
+  shape: { rows: number; cols: number };
+  extent: { lon_min: number; lon_max: number; lat_min: number; lat_max: number } | null;
+  n_dropped: number;
+}
+
+export interface ArtifactFileRow {
+  artId: string;
+  path: string;
+  kind: string;
+  policy: string;
+  fp: unknown;
+  size: number | null;
+  mtime: number | null;
+  exists: boolean;
+}
+
+export interface ArtifactStepGroup {
+  stepId: number;
+  name: string;
+  method: string;
+  artifacts: ArtifactFileRow[];
+}
+
+/** `GET /api/artifacts` — ledger rows grouped by step (missing files stay listed). */
+export interface ArtifactsResponse {
+  run: string | null;
+  steps: ArtifactStepGroup[];
+}
+
+export interface CapabilityMethodInfo {
+  id: string;
+  label: string;
+  engine: string;
+  why: string;
+  recommend: boolean;
+  extra: string;
+  ok: boolean;
+  simulated: boolean;
+  blocked: string;
+}
+
+export interface CapabilityParamInfo {
+  default: unknown;
+  kind: string;
+  type: string;
+  min: number | null;
+  max: number | null;
+  hint: string;
+}
+
+/** One pipeline step from `GET /api/registry` (the endpoint returns a bare array). */
+export interface CapabilityInfo {
+  id: number;
+  name: string;
+  deps: number[];
+  method: string;
+  methods: CapabilityMethodInfo[];
+  params: Record<string, CapabilityParamInfo>;
+  outputs: Array<{ path: string; kind: string; layout: string }>;
+  replay: string;
+  timeouts: { idle: number; total: number };
+}
+
+export interface DoctorCheck {
+  name: string;
+  category: string;
+  status: string;
+  detail: string;
+  fix_hint: string;
+}
+
+/** `GET /api/doctor` — `summarize(check_all)` plus `took_ms`. */
+export interface DoctorResponse {
+  status: string;
+  exit_code: number;
+  counts: { ok: number; warn: number; fail: number };
+  results: DoctorCheck[];
+  took_ms: number;
+}
+
+export interface RecommendRoute {
+  route_id: string;
+  name: string;
+  suitable_scenarios: string[];
+  pros: string[];
+  cons: string[];
+  requirements: Array<Record<string, unknown>>;
+  steps_involved: number[];
+  est_note: string;
+  ready: boolean;
+  missing: string[];
+}
+
+export interface RecommendResponse {
+  dataset: Record<string, unknown>;
+  routes: RecommendRoute[];
+}
+
+/** `GET /api/skills/{step_id}` — structured step knowledge, not a single markdown blob. */
+export interface SkillResponse {
+  capability: number;
+  name: string;
+  version: string;
+  content_hash: string;
+  description: string;
+  applies_to: string[];
+  sections: Record<string, string>;
+}
+
 export interface DatasetsResponse {
   roots: unknown[];
   datasets: unknown[];
@@ -640,6 +756,61 @@ export class BackendClient {
       query: { session, run_id: runId },
       signal,
     });
+  }
+
+  /**
+   * `GET /api/registry` returns a bare array. Wrap it so callers always get
+   * `{ steps }` without inventing fields the backend does not send.
+   */
+  async capabilities(signal?: AbortSignal): Promise<{ steps: CapabilityInfo[] }> {
+    const steps = await this.json<CapabilityInfo[]>("GET", "/api/registry", { signal });
+    return { steps };
+  }
+
+  timeseriesPoint(
+    session: string,
+    opts: {
+      runId?: string | undefined;
+      lat?: number | undefined;
+      lon?: number | undefined;
+      row?: number | undefined;
+      col?: number | undefined;
+    },
+    signal?: AbortSignal,
+  ): Promise<TimeseriesPointResponse> {
+    return this.json<TimeseriesPointResponse>("GET", "/api/timeseries-point", {
+      query: {
+        session,
+        run_id: opts.runId,
+        lat: opts.lat,
+        lon: opts.lon,
+        row: opts.row,
+        col: opts.col,
+      },
+      signal,
+    });
+  }
+
+  artifacts(session: string, runId?: string, signal?: AbortSignal): Promise<ArtifactsResponse> {
+    return this.json<ArtifactsResponse>("GET", "/api/artifacts", {
+      query: { session, run_id: runId },
+      signal,
+    });
+  }
+
+  doctor(signal?: AbortSignal): Promise<DoctorResponse> {
+    return this.json<DoctorResponse>("GET", "/api/doctor", { signal });
+  }
+
+  recommend(datasetId: string, signal?: AbortSignal): Promise<RecommendResponse> {
+    return this.json<RecommendResponse>("GET", "/api/recommend", {
+      query: { dataset_id: datasetId },
+      signal,
+    });
+  }
+
+  skill(stepId: number, signal?: AbortSignal): Promise<SkillResponse> {
+    return this.json<SkillResponse>("GET", `/api/skills/${stepId}`, { signal });
   }
 
   /** `POST /api/pi-journal` — out-of-ledger observation log (never provenance). */
