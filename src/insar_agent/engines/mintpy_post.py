@@ -104,6 +104,109 @@ for argv in JOBS:
 print("OK mintpy_post", flush=True)
 '''
 
+# spatial_average 不走 mintpy.cli:上游对 FILE_TYPE=velocity 把标量当列表写 txt
+# (IndexError);saveList=False 仍无条件回读 SpatialAvg.txt(FileNotFoundError)。
+# 在引擎 Python 里按 ut.spatial_average 的内存路径计算,结果写入 analysis/measure.json。
+_SPATIAL_AVG_RUNNER = r'''
+# insar-agent spatial_average runner(零决策;bypass mintpy.cli)
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+from mintpy.utils import readfile
+from mintpy.utils import utils1 as ut
+
+FNAME = __FNAME__
+DATASET = __DATASET__
+
+
+def _as_json(v):
+    if v is None:
+        return None
+    if isinstance(v, (bytes, np.bytes_)):
+        return v.decode()
+    if isinstance(v, (np.floating, float)):
+        return float(v)
+    if isinstance(v, (np.integer, int)):
+        return int(v)
+    return str(v)
+
+
+def _spatial_average(fname, datasetName=None, maskFile=None, box=None,
+                     saveList=False, **_ignored):
+    """ut.spatial_average 内存路径:saveList=False,不写/不读 SpatialAvg.txt。"""
+    atr = readfile.read_attribute(fname)
+    k = atr.get("FILE_TYPE", "")
+    if not box:
+        box = (0, 0, int(atr["WIDTH"]), int(atr["LENGTH"]))
+    if k == "ifgramStack":
+        from mintpy.objects import ifgramStack
+        obj = ifgramStack(fname)
+        obj.open(print_msg=False)
+        out = obj.spatial_average(datasetName=datasetName or "coherence",
+                                  maskFile=maskFile, box=box)
+        obj.close()
+        return out
+    if k == "timeseries":
+        from mintpy.objects import timeseries
+        return timeseries(fname).spatial_average(maskFile=maskFile, box=box)
+    read_kw = {"box": box}
+    if datasetName:
+        read_kw["datasetName"] = datasetName
+    data = readfile.read(fname, **read_kw)[0]
+    return np.nanmean(data), None
+
+
+def main():
+    Path("analysis").mkdir(parents=True, exist_ok=True)
+    ut.spatial_average = _spatial_average
+    kwargs = {"saveList": False}
+    if DATASET:
+        kwargs["datasetName"] = DATASET
+    mean_list, date_list = ut.spatial_average(FNAME, **kwargs)
+    values = [float(x) for x in np.atleast_1d(mean_list).ravel().tolist()]
+    if any(not np.isfinite(v) for v in values):
+        raise RuntimeError("spatial_average 结果非有限值")
+    atr = readfile.read_attribute(FNAME)
+    ftype = str(atr.get("FILE_TYPE") or "")
+    dates = None
+    if date_list is not None and ftype in ("timeseries", "ifgramStack"):
+        dates = [_as_json(x) for x in np.atleast_1d(date_list).ravel().tolist()]
+    report = {
+        "method": "spatial_average",
+        "file": FNAME,
+        "dataset": DATASET,
+        "n": len(values),
+        "values": values,
+        "dates": dates,
+    }
+    if len(values) == 1:
+        report["mean"] = values[0]
+    unit = atr.get("UNIT")
+    if unit not in (None, "", "None"):
+        report["unit"] = _as_json(unit)
+    text = json.dumps(report, ensure_ascii=False, allow_nan=False)
+    Path("analysis/measure.json").write_text(text + "\n", encoding="utf-8")
+    print(text, flush=True)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        sys.stderr.write(f"spatial_average failed: {exc}\n")
+        sys.exit(1)
+'''
+
+
+def _spatial_average_runner(fname: str, dataset: str | None) -> str:
+    return (_SPATIAL_AVG_RUNNER
+            .replace("__FNAME__", repr(fname))
+            .replace("__DATASET__", repr(dataset)))
+
 
 def _safe_rel(workspace: Path, rel: str, label: str) -> Path:
     """相对路径解析 + 逃逸防御:结果必须仍在 workspace 内。"""
@@ -251,16 +354,30 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
             argv.extend(["--dset", dset])
         return _runner_plan([argv], workspace)
 
-    if method in ("spatial_average", "temporal_average", "timeseries_rms"):
+    if method == "spatial_average":
+        src = workspace / _OUT_DIR / "decomposed.h5"
+        if not src.is_file():
+            raise FileNotFoundError("spatial_average 输入不存在:analysis/decomposed.h5")
+        fname = _rel(workspace, src)
+        dset = str(params.get("dataset") or "").strip() or None
+        script_rel = ".analysis/run_post.py"
+        argv = [py, "-u", script_rel]
+        return CommandPlan(
+            argv=argv,
+            cwd=str(workspace),
+            env=dict(_ENV),
+            files={script_rel: _spatial_average_runner(fname, dset),
+                   f"{_OUT_DIR}/.keep": "# analysis output dir\n"},
+            shell_line=" ".join(shell_quote(a) for a in argv),
+        )
+
+    if method in ("temporal_average", "timeseries_rms"):
         src = workspace / _OUT_DIR / "decomposed.h5"
         if not src.is_file():
             raise FileNotFoundError(f"{method} 输入不存在:analysis/decomposed.h5")
-        cli = {"spatial_average": "spatial_average",
-               "temporal_average": "temporal_average",
+        cli = {"temporal_average": "temporal_average",
                "timeseries_rms": "timeseries_rms"}[method]
         argv = [py, "-u", "-m", f"mintpy.cli.{cli}", _rel(workspace, src)]
-        if method == "spatial_average":
-            argv.append("--nodisplay")
         dset = str(params.get("dataset") or "").strip()
         if dset:
             argv.extend(["-d", dset])

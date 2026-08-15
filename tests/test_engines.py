@@ -151,3 +151,64 @@ def test_hyp3_plan_skips_cloud_steps(store):
     # 落库状态一致
     rows = {s.step_id: s.state for s in store.load_steps(plan.run_id)}
     assert rows[3] == "skipped" and rows[7] == "pending"
+
+
+def _touch_decomposed(workspace):
+    p = workspace / "analysis" / "decomposed.h5"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"")
+    return p
+
+
+def test_spatial_average_wrapper_uses_ut_not_cli(workspace):
+    """速度场不能走 mintpy.cli.spatial_average(上游写 txt 必崩);包装脚本内存计算."""
+    from insar_agent.engines import mintpy_post
+
+    _touch_decomposed(workspace)
+    plan = mintpy_post.build(
+        cap=REGISTRY[24], method="spatial_average", params={},
+        run={"simulated": 0}, workspace=workspace)
+    assert plan.argv[1:] == ["-u", ".analysis/run_post.py"]
+    assert plan.cwd == str(workspace)
+    assert set(plan.files) == {".analysis/run_post.py", "analysis/.keep"}
+    script = plan.files[".analysis/run_post.py"]
+    assert "ut.spatial_average" in script
+    assert "saveList=False" in script
+    assert "atleast_1d" in script
+    assert "analysis/measure.json" in script
+    assert "mintpy.cli.spatial_average" not in script
+    assert "analysis/decomposed.h5" in script
+    assert "DATASET = None" in script
+
+
+def test_spatial_average_bakes_dataset_param(workspace):
+    from insar_agent.engines import mintpy_post
+
+    _touch_decomposed(workspace)
+    plan = mintpy_post.build(
+        cap=REGISTRY[24], method="spatial_average",
+        params={"dataset": "vertical"},
+        run={"simulated": 0}, workspace=workspace)
+    script = plan.files[".analysis/run_post.py"]
+    assert "DATASET = 'vertical'" in script
+    assert "mintpy.cli.spatial_average" not in script
+
+
+def test_temporal_average_and_rms_still_use_mintpy_cli(workspace):
+    """本缺陷只动 spatial_average;时序类 CLI 包装保持原样."""
+    from insar_agent.engines import mintpy_post
+
+    _touch_decomposed(workspace)
+    temporal = mintpy_post.build(
+        cap=REGISTRY[24], method="temporal_average", params={},
+        run={"simulated": 0}, workspace=workspace)
+    rms = mintpy_post.build(
+        cap=REGISTRY[24], method="timeseries_rms", params={},
+        run={"simulated": 0}, workspace=workspace)
+    t_script = temporal.files[".analysis/run_post.py"]
+    r_script = rms.files[".analysis/run_post.py"]
+    assert "mintpy.cli.temporal_average" in t_script
+    assert "mintpy.cli.timeseries_rms" in r_script
+    assert "mintpy.cli.spatial_average" not in t_script
+    assert "ut.spatial_average" not in t_script
+    assert temporal.argv[1:] == ["-u", ".analysis/run_post.py"]
