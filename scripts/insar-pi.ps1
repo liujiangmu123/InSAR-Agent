@@ -1,14 +1,17 @@
 # insar-pi.ps1 — start pi with the InSAR agent loaded (Windows-native launcher).
 # Mirrors scripts/insar-pi (bash). Everything passed is *additive*; graduated
 # freedom is enforced per tool call by the extension guard, not by crippling pi.
+# Non-advanced on purpose: no [CmdletBinding()] / param(), so every token
+# (including --insar-strict and -p) lands in $args and is forwarded to pi.
 #
-#   pwsh scripts/insar-pi.ps1                      # interactive, free mode
-#   pwsh scripts/insar-pi.ps1 --insar-strict       # strict reproducible mode
-#   pwsh scripts/insar-pi.ps1 -p "plan a run"      # any pi flag passes through
+#   pwsh -NoProfile -File scripts/insar-pi.ps1
+#   pwsh -NoProfile -File scripts/insar-pi.ps1 --insar-strict
+#   pwsh -NoProfile -File scripts/insar-pi.ps1 --insar-session real
+#   pwsh -NoProfile -File scripts/insar-pi.ps1 -p "plan a run"
+#   pwsh -NoProfile -File scripts/insar-pi.ps1 --list-models
+#   pwsh -NoProfile -File scripts/insar-pi.ps1 --model insar-llm/kimi-k2.5
 #
 # Env: INSAR_API_BASE (default http://127.0.0.1:8873), INSAR_PI_SKIP_HEALTH=1
-[CmdletBinding()]
-param([Parameter(ValueFromRemainingArguments = $true)][string[]]$PiArgs)
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -40,10 +43,10 @@ if ($env:INSAR_PI_SKIP_HEALTH -ne "1") {
   }
 }
 
-$Args = @("-e", $Extension)
-foreach ($root in $SkillRoots) { if (Test-Path $root) { $Args += @("--skill", $root) } }
-$Args += @("--append-system-prompt", $AppendSystem)
-if (Test-Path $Theme) { $Args += @("--theme", $Theme) }
+$PiFlags = @("-e", $Extension)
+foreach ($root in $SkillRoots) { if (Test-Path $root) { $PiFlags += @("--skill", $root) } }
+$PiFlags += @("--append-system-prompt", $AppendSystem)
+if (Test-Path $Theme) { $PiFlags += @("--theme", $Theme) }
 
-& pi @Args @PiArgs
+& pi @PiFlags @args
 exit $LASTEXITCODE
