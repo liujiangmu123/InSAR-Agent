@@ -43,7 +43,7 @@
 | 13 | `33-phase13-analysis-and-prediction.md` | 变化检测 + 有纪律的外推预测(步 26-27) | P1 | ☑ | `1c3395b` |
 | 14 | `34-phase14-inversion-bridge.md` | 反演桥:GBIS/Kite/GMT/QGIS 标准导出(步 28) | P1 | ☑ | `64a7ed9` |
 | 15 | `35-phase15-scenario-packs.md` | 多源数据接入(8 种处理器)+ 沉降/火山场景包 + 剧本 | P0 | ☑ | `df89d2e` |
-| 16 | `40-phase16-docs-and-final.md` | 文档收口 + 最终全量验收 | P0 | ☐ | |
+| 16 | `40-phase16-docs-and-final.md` | 文档收口 + 最终全量验收 | P0 | ☑ | `1e438e1` |
 
 ## 第三部分:附录(随用随查)
 
