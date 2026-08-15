@@ -202,7 +202,8 @@ runnable → checked → audited → calibrated → validated → publishable
 
 场景包技能(规划前先看清场景差异):`quake`(同震,Ridgecrest,HyP3 已完成 2–6 步)、
 `permafrost`(冻土季节冻融,低相干 + 周期项)、`landslide`(滑坡点状目标,PS 链)、
-`stripmap_coseismic`(ALOS 条带同震,ISCE2 stripmapApp 全链)。
+`stripmap_coseismic`(ALOS 条带同震,ISCE2 stripmapApp 全链)、
+`subsidence`(城市抽水沉降漏斗)、`volcano`(火山形变,禁止套用沉降的 deramp 例外)。
 
 ## 10. 常见错误(别犯)
 

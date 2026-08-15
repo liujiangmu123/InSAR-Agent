@@ -1,0 +1,7 @@
+# 机器读:步骤覆写(火山形变 —— 长波长是信号,禁止 deramp;岩浆房充放用指数)
+step_overrides:
+  8:
+    params:
+      ramp: 'no'                     # 长波长信号是目标,绝不能当轨道误差扣掉
+  9:
+    method: exponential              # 岩浆房充放的指数衰减形态

@@ -33,6 +33,13 @@ _RANGES: dict[int, tuple[str, str]] = {
     9: ("velocity", "velocity"),
 }
 
+_DEFAULT_PROCESSOR = "hyp3"
+_DEFAULT_UNW_PATTERN = "../hyp3/*/*unw_phase_clipped.tif"
+_DEFAULT_COR_PATTERN = "../hyp3/*/*corr_clipped.tif"
+_DEFAULT_DEM_PATTERN = "../hyp3/*/*dem_clipped.tif"
+_DEFAULT_INC_PATTERN = "../hyp3/*/*lv_theta_clipped.tif"
+_DEFAULT_WATER_PATTERN = "../hyp3/*/*water_mask_clipped.tif"
+
 # cfg 必须纯 ASCII:MintPy read_template 不指定编码,中文 Windows 上按 GBK 读会崩
 _CFG_TEMPLATE = """\
 # rendered by insar-agent (diffable, reproducible; shape follows RidgecrestSenDT71.txt)
@@ -122,15 +129,15 @@ def render_cfg(run: dict, *, this_step: int, this_method: str, this_params: dict
     # 旧 run 的 chain 无此参数,同样落 no,cfg 语义不变)
     perp = int(p7.get("max_perp_baseline", 0) or 0)
 
-    # 数据面(HyP3 路线):相对 mintpy/ 工作目录
+    # 数据面:默认 HyP3;场景包/apply_change 可覆写 processor 与 glob
     return _CFG_TEMPLATE.format(
         num_worker=int(p7.get("parallel_workers", 4)),
-        processor="hyp3",
-        unw_file="../hyp3/*/*unw_phase_clipped.tif",
-        cor_file="../hyp3/*/*corr_clipped.tif",
-        dem_file="../hyp3/*/*dem_clipped.tif",
-        inc_file="../hyp3/*/*lv_theta_clipped.tif",
-        water_file="../hyp3/*/*water_mask_clipped.tif",
+        processor=p7.get("processor", _DEFAULT_PROCESSOR),
+        unw_file=p7.get("unw_pattern", _DEFAULT_UNW_PATTERN),
+        cor_file=p7.get("cor_pattern", _DEFAULT_COR_PATTERN),
+        dem_file=p7.get("dem_pattern", _DEFAULT_DEM_PATTERN),
+        inc_file=p7.get("inc_pattern", _DEFAULT_INC_PATTERN),
+        water_file=p7.get("water_pattern", _DEFAULT_WATER_PATTERN),
         subset_lalo=os.environ.get("INSAR_SUBSET_LALO", "391e4:400e4,39e4:51e4"),
         reference_lalo=os.environ.get("INSAR_REFERENCE_LALO", "391.5e4,45e4"),
         temp_base_max=p7.get("max_temporal_baseline", 120),

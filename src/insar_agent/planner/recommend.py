@@ -29,7 +29,8 @@ from insar_agent.runtime.probe import ProbeResult
 
 #: 场景闭集(registry/scenario_packs 目录名;suitable_scenarios 只能取其子集,
 #: tests/test_recommend.py 对照 registry.scenarios.SCENARIOS 做闭集校验)
-SCENARIO_KEYS = ("quake", "permafrost", "landslide", "stripmap_coseismic")
+SCENARIO_KEYS = ("quake", "permafrost", "landslide", "stripmap_coseismic",
+                 "subsidence", "volcano")
 
 
 @dataclass(frozen=True)

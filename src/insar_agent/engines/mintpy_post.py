@@ -14,11 +14,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from insar_agent.engines.mintpy import engine_python
 from insar_agent.registry.model import Capability
 from insar_agent.runtime.jobs import CommandPlan, shell_quote
 
 _OUT_DIR = "analysis"
+_BRIDGE = "analysis/bridge"
+_FIGS = "analysis/figures"
 _ENV = {
     "HDF5_USE_FILE_LOCKING": "FALSE",
     "PYTHONIOENCODING": "utf-8",
@@ -31,6 +35,60 @@ _ITRF_PLATES = {
     "Antartica", "Arabia", "Australia", "Eurasia", "India", "Nazca",
     "NorthAmerica", "Nubia", "Pacific", "SouthAmerica", "Somalia",
 }
+
+ACCEL_SIGMA_RATIO = 2.0
+
+
+def accel_significance(accel: np.ndarray, accel_std: np.ndarray,
+                       threshold: float = ACCEL_SIGMA_RATIO) -> tuple[np.ndarray, np.ndarray]:
+    """显著性 = |a|/σ_a ≥ threshold。返回 (mask, ratio)。"""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.abs(accel) / accel_std
+    sig = np.isfinite(ratio) & (ratio >= float(threshold))
+    return sig, ratio
+
+
+def summarize_accel(accel: np.ndarray, accel_std: np.ndarray, *,
+                    threshold: float = ACCEL_SIGMA_RATIO,
+                    atr: dict | None = None) -> dict:
+    sig, ratio = accel_significance(accel, accel_std, threshold)
+    valid = np.isfinite(accel)
+    n = int(valid.sum())
+    n_sig = int(sig.sum())
+    abs_a = np.abs(accel)
+    abs_a = np.where(valid, abs_a, np.nan)
+    summary: dict[str, Any] = {
+        "method": "quadratic_accel",
+        "significance_threshold": float(threshold),
+        "criterion": "|a|/sigma_a >= 2",
+        "n_valid": n,
+        "n_significant": n_sig,
+        "significant_fraction": (n_sig / n) if n else 0.0,
+    }
+    if n == 0:
+        summary["max_abs_accel"] = None
+        return summary
+    idx = int(np.nanargmax(abs_a))
+    yx = np.unravel_index(idx, accel.shape)
+    summary["max_abs_accel"] = float(abs_a[yx])
+    summary["max_abs_accel_yx"] = [int(yx[0]), int(yx[1])]
+    summary["max_abs_accel_ratio"] = float(ratio[yx]) if np.isfinite(ratio[yx]) else None
+    atr = atr or {}
+    if all(k in atr for k in ("X_FIRST", "Y_FIRST", "X_STEP", "Y_STEP")):
+        x0, y0, dx, dy = (float(atr[k]) for k in ("X_FIRST", "Y_FIRST", "X_STEP", "Y_STEP"))
+        lat = y0 + dy * yx[0]
+        lon = x0 + dx * yx[1]
+        summary["max_abs_accel_lalo"] = [lat, lon]
+    return summary
+
+
+def _require_engine_python() -> str:
+    from insar_agent.engines import ToolMissing
+    py = engine_python()
+    path = Path(py)
+    if path.is_absolute() and not path.exists():
+        raise ToolMissing(f"MintPy 引擎 Python 不存在:{py}")
+    return py
 
 _RUNNER = '''\
 # insar-agent mintpy_post runner(零决策,argv 已烘焙)
@@ -226,6 +284,119 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
             env=dict(_ENV),
             files={script_rel: runner, f"{_OUT_DIR}/.keep": "# analysis output dir\n"},
             shell_line=" ".join(shell_quote(a) for a in [py, "-u", script_rel]),
+        )
+
+    py = _require_engine_python()
+    figs = workspace / _FIGS
+    bridge = workspace / _BRIDGE
+
+    if method == "view_snapshot":
+        inp = _safe_rel(workspace, str(params.get("input") or "analysis/decomposed.h5"), "input")
+        figs.mkdir(parents=True, exist_ok=True)
+        dset = str(params.get("dataset") or "").strip()
+        argv = [py, "-u", "-m", "mintpy.cli.view", _rel(workspace, inp)]
+        if dset:
+            argv.append(dset)
+        argv.extend(["--dpi", str(int(params.get("dpi", 300))), "--nodisplay",
+                     "-o", f"{_FIGS}/view_{inp.stem}.png"])
+        cmap = str(params.get("cmap") or "").strip()
+        if cmap:
+            argv.extend(["-c", cmap])
+        return _runner_plan([argv], workspace)
+
+    if method == "transection_figure":
+        inp = _safe_rel(workspace, str(params.get("input") or "analysis/decomposed.h5"), "input")
+        figs.mkdir(parents=True, exist_ok=True)
+        argv = [py, "-u", "-m", "mintpy.cli.plot_transection", _rel(workspace, inp),
+                "--nodisplay", "-o", f"{_FIGS}/transection.png"]
+        return _runner_plan([argv], workspace)
+
+    if method == "kmz":
+        inp = _safe_rel(workspace, str(params.get("input") or "analysis/decomposed.h5"), "input")
+        figs.mkdir(parents=True, exist_ok=True)
+        argv = [py, "-u", "-m", "mintpy.cli.save_kmz", _rel(workspace, inp),
+                "-o", f"{_FIGS}/{inp.stem}.kmz"]
+        return _runner_plan([argv], workspace)
+
+    if method == "kmz_timeseries":
+        inp = _safe_rel(workspace, str(params.get("ts_file") or "mintpy/timeseries.h5"), "ts")
+        figs.mkdir(parents=True, exist_ok=True)
+        argv = [py, "-u", "-m", "mintpy.cli.save_kmz_timeseries", _rel(workspace, inp),
+                "-o", f"{_FIGS}/{inp.stem}_ts.kmz"]
+        return _runner_plan([argv], workspace)
+
+    if method in ("epoch_diff", "velocity_compare"):
+        if method == "epoch_diff":
+            a_rel = str(params.get("epoch1") or "analysis/corrected.h5")
+            b_rel = str(params.get("epoch2") or "analysis/corrected_2.h5")
+        else:
+            a_rel = "analysis/corrected.h5"
+            b_rel = str(params.get("secondary_velocity") or "analysis/corrected_2.h5")
+        a = _safe_rel(workspace, a_rel, "file1")
+        b = _safe_rel(workspace, b_rel, "file2")
+        argv = [py, "-u", "-m", "mintpy.cli.diff",
+                _rel(workspace, a), _rel(workspace, b), "-o", f"{_OUT_DIR}/change.h5"]
+        return _runner_plan([argv], workspace)
+
+    if method == "quadratic_accel":
+        ts = _safe_rel(workspace, str(params.get("ts_file") or "mintpy/timeseries.h5"), "ts")
+        argv = [py, "-u", "-m", "mintpy.cli.timeseries2velocity", _rel(workspace, ts),
+                "--poly", "2", "-o", f"{_OUT_DIR}/change.h5"]
+        return _runner_plan([argv], workspace)
+
+    if method == "bridge_gbis":
+        bridge.mkdir(parents=True, exist_ok=True)
+        src = _safe_rel(workspace, str(params.get("input") or "analysis/decomposed.h5"), "input")
+        geom = _safe_rel(workspace, str(params.get("geom_file") or "mintpy/inputs/geometryGeo.h5"),
+                         "geom")
+        argv = [py, "-u", "-m", "mintpy.cli.save_gbis", str(src),
+                "-g", str(geom), "--nodisplay", "-o", str(bridge / "gbis.mat")]
+        mask = str(params.get("mask_file") or "").strip()
+        if mask:
+            argv.extend(["-m", str(_safe_rel(workspace, mask, "mask"))])
+        return CommandPlan(argv=argv, cwd=str(workspace), env=dict(_ENV), files={},
+                           shell_line=" ".join(shell_quote(a) for a in argv))
+
+    if method == "bridge_kite":
+        bridge.mkdir(parents=True, exist_ok=True)
+        src = _safe_rel(workspace, str(params.get("input") or "analysis/decomposed.h5"), "input")
+        dset = str(params.get("dataset") or "velocity").strip() or "velocity"
+        argv = [py, "-u", "-m", "mintpy.cli.save_kite", str(src),
+                "-d", dset, "-o", str(bridge / "kite")]
+        geom = str(params.get("geom_file") or "").strip()
+        if geom:
+            argv.extend(["-g", str(_safe_rel(workspace, geom, "geom"))])
+        return CommandPlan(argv=argv, cwd=str(workspace), env=dict(_ENV), files={},
+                           shell_line=" ".join(shell_quote(a) for a in argv))
+
+    if method == "bridge_gmt":
+        bridge.mkdir(parents=True, exist_ok=True)
+        src = _safe_rel(workspace, str(params.get("input") or "analysis/decomposed.h5"), "input")
+        argv = [py, "-u", "-m", "mintpy.cli.save_gmt", str(src),
+                "-o", str(bridge / "velocity.grd")]
+        return CommandPlan(argv=argv, cwd=str(workspace), env=dict(_ENV), files={},
+                           shell_line=" ".join(shell_quote(a) for a in argv))
+
+    if method == "bridge_qgis":
+        bridge.mkdir(parents=True, exist_ok=True)
+        ts = _safe_rel(workspace, str(params.get("ts_file") or "mintpy/timeseries.h5"), "ts")
+        geom = _safe_rel(workspace, str(params.get("geom_file") or "mintpy/inputs/geometryGeo.h5"),
+                         "geom")
+        argv = [py, "-u", "-m", "mintpy.cli.save_qgis", str(ts),
+                "-g", str(geom), "-o", str(bridge / "timeseries.shp")]
+        return CommandPlan(argv=argv, cwd=str(workspace), env=dict(_ENV), files={},
+                           shell_line=" ".join(shell_quote(a) for a in argv))
+
+    if method == "bridge_hdfeos5":
+        bridge.mkdir(parents=True, exist_ok=True)
+        ts = _safe_rel(workspace, str(params.get("ts_file") or "mintpy/timeseries.h5"), "ts")
+        argv = [py, "-u", "-m", "mintpy.cli.save_hdfeos5", str(ts)]
+        geom = str(params.get("geom_file") or "").strip()
+        if geom:
+            argv.extend(["-g", str(_safe_rel(workspace, geom, "geom"))])
+        return CommandPlan(
+            argv=argv, cwd=str(bridge), env=dict(_ENV), files={},
+            shell_line=" ".join(shell_quote(a) for a in argv),
         )
 
     raise ToolMissing(f"mintpy_post 无此方法:{method}")

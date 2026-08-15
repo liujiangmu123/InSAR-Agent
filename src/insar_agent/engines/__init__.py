@@ -33,6 +33,9 @@ def resolve_builder(cap: Capability, method_id: str, *, simulated: bool):
     if method_id in ("passthrough", "register_sources"):
         from insar_agent.engines import passthrough
         return passthrough.build
+    if method_id == "extrapolate_fitted":
+        from insar_agent.engines import predict
+        return predict.build
 
     if simulated:
         return simulate.build
@@ -50,7 +53,11 @@ def resolve_builder(cap: Capability, method_id: str, *, simulated: bool):
         return qa.build
     if method_id in ("asc_desc_horz_vert", "raster_diff", "mask_by_coherence",
                      "subset_lalo", "spatial_average", "temporal_average",
-                     "transection", "timeseries_rms", "plate_motion_itrf"):
+                     "transection", "timeseries_rms", "plate_motion_itrf",
+                     "view_snapshot", "transection_figure", "kmz", "kmz_timeseries",
+                     "epoch_diff", "quadratic_accel", "velocity_compare",
+                     "bridge_gbis", "bridge_kite", "bridge_gmt", "bridge_qgis",
+                     "bridge_hdfeos5"):
         from insar_agent.engines import mintpy_post
         return mintpy_post.build
 

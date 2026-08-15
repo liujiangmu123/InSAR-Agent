@@ -1,0 +1,15 @@
+# 机器读:步骤覆写(城市地面沉降 —— 短基线密网 + 局地线性去斜 + 年周期)
+step_overrides:
+  7:
+    params:
+      max_temporal_baseline: 90        # 城市高相干,短基线密网
+  8:
+    params:
+      ramp: linear                     # 局地沉降:线性去斜合法(capabilities.py C1 注释的例外场景)
+  9:
+    method: poly_periodic              # 抽水型沉降常带年周期
+    params:
+      periods: [1]
+  10:
+    params:
+      figure_set: [velocity, coherence, mask, points_timeseries]

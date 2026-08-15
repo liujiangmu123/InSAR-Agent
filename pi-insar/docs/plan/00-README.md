@@ -40,9 +40,9 @@
 | 10 | `30-phase10-postprocess-capabilities.md` | 分析 run 机制 + 掩膜/校正占位/分解/统计(步 20-24) | P0 | ☑ | `53f1374` |
 | 11 | `31-phase11-correction-capabilities.md` | 校正链:解缠误差/电离层/板块运动/不确定度 | P0 | ☑ | `53f1374` |
 | 12 | `32-phase12-figure-system.md` | 出图体系:图集/网络图/相干矩阵/剖面/KMZ(步 25) | P0 | ☐ | |
-| 13 | `33-phase13-analysis-and-prediction.md` | 变化检测 + 有纪律的外推预测(步 26-27) | P1 | ☐ | |
-| 14 | `34-phase14-inversion-bridge.md` | 反演桥:GBIS/Kite/GMT/QGIS 标准导出(步 28) | P1 | ☐ | |
-| 15 | `35-phase15-scenario-packs.md` | 多源数据接入(8 种处理器)+ 沉降/火山场景包 + 剧本 | P0 | ☐ | |
+| 13 | `33-phase13-analysis-and-prediction.md` | 变化检测 + 有纪律的外推预测(步 26-27) | P1 | ☑ | `1c3395b` |
+| 14 | `34-phase14-inversion-bridge.md` | 反演桥:GBIS/Kite/GMT/QGIS 标准导出(步 28) | P1 | ☑ | `64a7ed9` |
+| 15 | `35-phase15-scenario-packs.md` | 多源数据接入(8 种处理器)+ 沉降/火山场景包 + 剧本 | P0 | ☑ | `df89d2e` |
 | 16 | `40-phase16-docs-and-final.md` | 文档收口 + 最终全量验收 | P0 | ☐ | |
 
 ## 第三部分:附录(随用随查)

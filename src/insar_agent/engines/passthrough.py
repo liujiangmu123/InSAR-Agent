@@ -25,6 +25,32 @@ _PASSTHROUGH_PAIRS: dict[int, tuple[tuple[str, str, bool], ...]] = {
     22: (("analysis/masked.h5", "analysis/corrected.h5", True),
          ("analysis/masked_2.h5", "analysis/corrected_2.h5", False)),
     23: (("analysis/corrected.h5", "analysis/decomposed.h5", True),),
+    25: (),
+    26: (("analysis/decomposed.h5", "analysis/change.h5", True),),
+    27: (),
+    28: (),
+}
+
+# cap.id → JSON 声明产物(跳过科学动作时仍留下可审计文件)
+_PASSTHROUGH_MARKERS: dict[int, tuple[tuple[str, dict], ...]] = {
+    25: (("analysis/figures/passthrough.json",
+          {"method": "passthrough", "reason": "本次分析不出图"}),),
+    26: (("analysis/change_summary.json",
+          {"method": "passthrough", "significant_fraction": None,
+           "note": "本次分析不做变化检测"}),),
+    27: (("analysis/prediction.json",
+          {"status": "passthrough",
+           "assumptions": ["no extrapolation requested (passthrough)"],
+           "not_a_forecast_of": [
+               "earthquake occurrence or timing",
+               "landslide failure time",
+               "new coseismic or outburst step events",
+           ],
+           "ci": {"level": None, "lower": None, "upper": None,
+                  "note": "passthrough: no prediction computed"},
+           "note": "本次分析不做外推,prediction.json 仅为规范链占位"}),),
+    28: (("analysis/bridge/passthrough.json",
+          {"method": "passthrough", "reason": "本次分析不导出反演桥"}),),
 }
 
 _MATERIALIZE_PY = '''\
@@ -33,6 +59,7 @@ import hashlib, json, os, shutil, sys
 from pathlib import Path
 
 PAIRS = {pairs!r}  # [(src, dst, required), ...]
+MARKERS = {markers!r}  # [(relpath, payload), ...]
 
 def sha256_of(path: Path) -> str:
     h = hashlib.sha256()
@@ -70,6 +97,12 @@ for src_s, dst_s, required in PAIRS:
         "source": str(src), "dest": str(dst), "sha256": digest, "mode": mode,
     }}, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"OK {{mode}} {{src}} -> {{dst}} sha256={{digest[:12]}}", flush=True)
+
+for rel, payload in MARKERS:
+    path = Path(rel)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"OK marker {{path}}", flush=True)
 
 sys.exit(2 if failed else 0)
 '''
@@ -109,16 +142,18 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
             if not sec.is_file():
                 raise FileNotFoundError(f"register_sources 次源不存在:{sec}")
             pairs.append((_rel_posix(workspace, sec), f"{_OUT_DIR}/source_2.h5", True))
+        markers: list[tuple[str, dict]] = []
     elif method == "passthrough":
-        declared = _PASSTHROUGH_PAIRS.get(cap.id)
-        if not declared:
+        if cap.id not in _PASSTHROUGH_PAIRS and cap.id not in _PASSTHROUGH_MARKERS:
             raise ValueError(f"passthrough 无此步骤的规范链:{cap.id}")
+        declared = _PASSTHROUGH_PAIRS.get(cap.id, ())
         pairs = []
         for src_rel, dst_rel, required in declared:
             src = workspace / src_rel
             if required and not src.is_file():
                 raise FileNotFoundError(f"passthrough 规范输入不存在:{src_rel}")
             pairs.append((src_rel, dst_rel, required))
+        markers = list(_PASSTHROUGH_MARKERS.get(cap.id, ()))
     else:
         raise ValueError(f"passthrough 无此方法:{method}")
 
@@ -127,6 +162,6 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
         argv=[wrapper_python(), "-X", "utf8", script_rel],
         cwd=str(workspace),
         env={"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
-        files={script_rel: _MATERIALIZE_PY.format(pairs=pairs)},
+        files={script_rel: _MATERIALIZE_PY.format(pairs=pairs, markers=markers)},
         shell_line=f"python {script_rel}",
     )

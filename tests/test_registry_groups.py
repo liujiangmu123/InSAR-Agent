@@ -1,4 +1,4 @@
-"""Phase 10/11:group 过滤保证核心 run 仍恰好 11 步;分析链 20-24 按需入选。
+"""Phase 10-15:group 过滤保证核心 run 仍恰好 11 步;分析链 20-28 按需入选。
 
 源产物路径是 science 参数,必须进 eval_hash,否则失效传播是假的。
 """
@@ -26,7 +26,7 @@ def test_core_plan_still_has_exactly_11_steps():
 def test_analysis_plan_selects_only_analysis_steps():
     choices, _ = _plan_methods(REGISTRY, _probe(), scenario=None, allow_simulated=True,
                                groups=("analysis",))
-    assert sorted(choices) == [20, 21, 22, 23, 24]
+    assert sorted(choices) == list(range(20, 29))
 
 
 def test_analysis_params_enter_the_fingerprint():

@@ -74,10 +74,10 @@ EXPECTED = {
 # ---------------- 三场景等价性 ----------------
 
 def test_three_scenarios_equivalent_to_hardcoded():
-    # stripmap_coseismic(priority=5)是后加的第四包,排最前;原三包等价性逐字段锁定,
-    # 新包字段由 tests/test_stripmap_scenario.py 单独验收
+    # stripmap_coseismic(priority=5)排最前;volcano=15、subsidence=25 为本期新增;
+    # 原三包等价性逐字段锁定,新包由下方 test_subsidence_* / test_volcano_* 验收
     assert tuple(sc.key for sc in SCENARIOS) == (
-        "stripmap_coseismic", "quake", "permafrost", "landslide")
+        "stripmap_coseismic", "quake", "volcano", "permafrost", "subsidence", "landslide")
     for key, want in EXPECTED.items():
         sc = scenario_of(key)
         assert sc is not None, key
@@ -276,3 +276,95 @@ def test_priority_orders_classification(tmp_path):
     write_pack(tmp_path, "zzz", second)
     scs = load_scenarios(tmp_path)
     assert [s.key for s in scs] == ["zzz", "aaa"]  # 目录名倒序,但 priority 生效
+
+
+# ---------------- 沉降 / 火山包(Phase 15) ----------------
+
+def test_six_packs_keywords_do_not_preempt():
+    """每个包的每个 match 关键词只命中自己,闭集互不重叠(classify_text 先到先得)。"""
+    assert len(SCENARIOS) == 6
+    for sc in SCENARIOS:
+        for kw in sc.match.split("|"):
+            hit = classify_text(f"请分析{kw}相关形变")
+            assert hit is not None and hit.key == sc.key, (
+                f"{sc.key} 关键词 {kw!r} 命中了 {getattr(hit, 'key', None)}")
+
+
+def test_subsidence_pack_fields_and_overrides():
+    sc = scenario_of("subsidence")
+    assert sc is not None
+    assert sc.label == "城市地面沉降"
+    assert sc.match == "沉降|subsidence|抽水沉降|沉降漏斗"
+    assert sc.chain == "SBAS" and sc.model == "poly_periodic" and sc.pick_7 == "mintpy_sbas"
+    assert sc.data_ready is False
+    assert sc.cloud_completed == ()
+    assert sc.step_overrides[7]["params"]["max_temporal_baseline"] == 90
+    assert sc.step_overrides[8]["params"]["ramp"] == "linear"
+    assert sc.step_overrides[9]["method"] == "poly_periodic"
+    assert sc.step_overrides[9]["params"]["periods"] == [1]
+    assert sc.step_overrides[10]["params"]["figure_set"] == [
+        "velocity", "coherence", "mask", "points_timeseries"]
+    body = sc.knowledge()
+    assert "90" in body and "年周期" in body
+    assert "稳定基岩" in body or "稳定区" in body
+    assert "漏斗" in body
+
+
+def test_volcano_pack_fields_and_deramp_redline():
+    sc = scenario_of("volcano")
+    assert sc is not None
+    assert sc.label == "火山形变"
+    assert sc.match == "火山|volcano|岩浆房|喷发"
+    assert sc.chain == "SBAS" and sc.model == "exponential" and sc.pick_7 == "mintpy_sbas"
+    assert sc.data_ready is False
+    assert sc.cloud_completed == ()
+    assert sc.step_overrides[8]["params"]["ramp"] == "no"
+    assert sc.step_overrides[9]["method"] == "exponential"
+    body = sc.knowledge()
+    assert "deramp=no" in body
+    assert "红线" in body
+    assert "长波长" in body
+
+
+def test_mixed_text_keeps_existing_pack_priority():
+    """新包不得抢走既有包的关键词;混合文本仍按 priority 消解。"""
+    assert classify_text("冻土融沉监测").key == "permafrost"          # 冻土先于沉降
+    assert classify_text("监测某市地面沉降").key == "subsidence"
+    assert classify_text("火山形变时间序列").key == "volcano"
+    assert classify_text("火山地震同震").key == "quake"               # 同震/地震仍归 quake
+    assert classify_text("Ridgecrest 地震同震形变").key == "quake"
+    assert classify_text("雅鲁藏布江的滑坡隐患点").key == "landslide"
+
+
+def test_subsidence_and_volcano_plan_applies_overrides(store):
+    """场景包覆写穿透到计划:沉降 ramp=linear/periods=[1];火山 ramp=no/exponential。"""
+    from insar_agent.planner.plan import make_plan
+    from insar_agent.registry.capabilities import REGISTRY
+    from insar_agent.runtime.probe import ProbeResult
+
+    probe = ProbeResult(
+        engines={"isce2": "2.6.5", "mintpy": "1.6.4", "snaphu": "2.0.7", "gdal": "3.8",
+                 "snap": "9", "pystamps": "0.3.4", "pyaps": "0.3.6"},
+        credentials={"earthdata": True, "cds": True, "gacos": False})
+    store.create_session("s1", "t")
+
+    sub = make_plan(store, "s1", registry=REGISTRY, probe=probe,
+                    scenario=scenario_of("subsidence"), workspace="ws")
+    assert sub.runnable()
+    sub_steps = {p.step_id: p for p in sub.steps}
+    assert sub_steps[7].params["max_temporal_baseline"] == 90
+    assert sub_steps[7].params["processor"] == "hyp3"  # 数据面默认仍是 HyP3
+    assert sub_steps[8].params["ramp"] == "linear"
+    assert sub_steps[9].method == "poly_periodic"
+    assert sub_steps[9].params["periods"] == [1]
+    assert sub_steps[10].params["figure_set"] == [
+        "velocity", "coherence", "mask", "points_timeseries"]
+
+    vol = make_plan(store, "s1", registry=REGISTRY, probe=probe,
+                    scenario=scenario_of("volcano"), workspace="ws")
+    assert vol.runnable()
+    vol_steps = {p.step_id: p for p in vol.steps}
+    assert vol_steps[8].params["ramp"] == "no"
+    assert vol_steps[9].method == "exponential"
+    # 核心仍是 11 步,没有顺手把分析步 20-28 拉进来
+    assert [p.step_id for p in vol.steps] == list(range(1, 12))

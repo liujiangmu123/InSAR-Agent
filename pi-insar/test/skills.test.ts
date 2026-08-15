@@ -83,7 +83,7 @@ describe("skill roots the launcher loads", () => {
 
   it("validates every skill without errors", () => {
     expect(report.errors).toEqual([]);
-    // 1 operator skill + 11 per-step skills + 4 scenario packs.
+    // 1 operator skill + 11 per-step skills + 6 scenario packs.
     expect(report.skills.length).toBeGreaterThanOrEqual(12);
   });
 
@@ -174,6 +174,8 @@ describe("00-insar-agent operator skill", () => {
       "permafrost",
       "landslide",
       "stripmap_coseismic",
+      "subsidence",
+      "volcano",
     ]) {
       expect(text).toContain(skill);
     }
