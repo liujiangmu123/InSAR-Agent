@@ -87,6 +87,10 @@ def test_monitor_contract(client):
     # 五阶段单字母映射
     letters = {s["step"]: s["stage_letter"] for s in data["steps"]}
     assert letters[1] == "V" and letters[3] == "R" and letters[4] == "P"
+    # 无 commands 行时耗时/尝试次数为空默认(真实耗时来自台账,不是 trace 跨度)
+    for s in data["steps"]:
+        assert s["duration"] is None and s["attempts"] == 0
+        assert {"duration", "attempts"} <= set(s)
     # 证据键存在(值可能为 None,取决于工作区)
     assert "evidence" in data
     # 默认模式 free
@@ -138,6 +142,22 @@ def test_monitor_reflects_simulated_run(client):
     # 模拟执行证据级封顶 runnable(证据阶梯诚实性)
     assert data["evidence"] is not None
     assert data["evidence"]["level"] == "runnable"
+
+
+def test_monitor_duration_from_last_settled_command(client):
+    """耗时取 commands 最后一条已结算行;attempts 计全部尝试(RESET 不删旧行)。"""
+    client.post("/api/sessions", json={"id": "sess-m"})
+    rid = _seed_run(client._home)
+    store = Store(Database(client._home / "insar.db"))
+    store.record_command(rid, 1, ["echo", "fail"], exit_code=1, duration=0.5, attempt=1)
+    store.record_command(rid, 1, ["echo", "ok"], exit_code=0, duration=1.9, attempt=2)
+
+    data = client.get("/api/monitor", params={"session": "sess-m"}).json()
+    by_step = {s["step"]: s for s in data["steps"]}
+    assert by_step[1]["duration"] == pytest.approx(1.9)
+    assert by_step[1]["attempts"] == 2
+    assert by_step[2]["duration"] is None
+    assert by_step[2]["attempts"] == 0
 
 
 def test_pi_journal_roundtrip(client):

@@ -100,6 +100,8 @@ export interface MonitorStep {
   failure_class: string | null;
   exit_code: number | null;
   run_ok: number | null;
+  duration: number | null;
+  attempts: number;
 }
 
 export interface MonitorCurrent {
@@ -179,7 +181,8 @@ export interface FiguresResponse {
 /**
  * One row of unpaged `GET /api/trace` (SQLite `trace` table; schema.sql).
  * `action` is a JSON string `{type,tool,input,output}`; `error_occurred` is 0/1.
- * Duration is not a column — derive it from `ts` when rendering a timeline.
+ * Duration is not a column: wall-clock time comes from `GET /api/monitor`
+ * (commands ledger, last settled row). Event `ts` is not used to compute duration.
  */
 export interface TraceEvent {
   id: number;

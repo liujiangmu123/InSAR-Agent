@@ -89,12 +89,24 @@ def create_bridge_router(store: Store, home: Path | str,
 
         rid = run["run_id"]
         steps = store.load_steps(rid)
+        # 耗时取 commands 台账最后一条已结算行,不用 trace 事件墙钟跨度:
+        # 单次尝试往往只有 1 条审计事件;RESET 重跑后旧行保留,max(ts)-min(ts)
+        # 会把失败到重跑之间的等待算进「耗时」。
+        cmd_meta: dict[int, dict] = {}
+        for c in store.commands_of(rid):
+            sid = int(c["step_id"])
+            slot = cmd_meta.setdefault(sid, {"attempts": 0, "duration": None})
+            slot["attempts"] += 1
+            if c["exit_code"] is not None:
+                dur = c["duration"]
+                slot["duration"] = float(dur) if dur is not None else None
         out_steps: list[dict] = []
         taints = 0
         current: dict | None = None
         for s in steps:
             if s.stale:
                 taints += 1
+            meta = cmd_meta.get(s.step_id, {})
             out_steps.append({
                 "step": s.step_id, "name": s.name, "capability": s.capability,
                 "method": s.method, "state": s.state, "stage": s.stage,
@@ -102,6 +114,8 @@ def create_bridge_router(store: Store, home: Path | str,
                 "stale": s.stale, "stale_reason": s.stale_reason,
                 "failure_class": s.failure_class, "exit_code": s.exit_code,
                 "run_ok": s.run_ok,
+                "duration": meta.get("duration"),
+                "attempts": int(meta.get("attempts", 0)),
             })
             if s.state == "running" and current is None:
                 current = {"step": s.step_id, "name": s.name,

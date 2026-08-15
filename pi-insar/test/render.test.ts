@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { MonitorResponse, MonitorStep } from "../src/backendClient.ts";
+import type { MonitorResponse, MonitorStep, TraceEvent } from "../src/backendClient.ts";
 import { renderPipelineRail, renderStatusLine, stepGlyph } from "../src/sidebar.ts";
+import { summarizeSteps, summarizeTrace } from "../src/tools.ts";
 
 const STEP_NAMES = [
   "数据获取",
@@ -30,6 +31,29 @@ function step(id: number, overrides: Partial<MonitorStep> = {}): MonitorStep {
     failure_class: null,
     exit_code: null,
     run_ok: null,
+    duration: null,
+    attempts: 0,
+    ...overrides,
+  };
+}
+
+function traceEvent(overrides: Partial<TraceEvent> = {}): TraceEvent {
+  return {
+    id: 1,
+    run_id: "r1",
+    session_id: "s1",
+    step_no: 24,
+    ts: 1000,
+    phase: "execute",
+    thought: null,
+    action: null,
+    observation: "ok",
+    error_occurred: 0,
+    error_type: null,
+    error_message: null,
+    revision_trigger: null,
+    confidence: null,
+    raw_response: null,
     ...overrides,
   };
 }
@@ -193,5 +217,43 @@ describe("renderStatusLine", () => {
     );
     expect(renderStatusLine(null)).toBe("insar: idle");
     expect(renderStatusLine(monitor({ run: null }))).toBe("insar: idle");
+  });
+});
+
+describe("summarizeTrace", () => {
+  const events = [
+    traceEvent({ id: 1, ts: 1_000, observation: "failed" }),
+    traceEvent({ id: 2, ts: 2_095, observation: "ok" }),
+  ];
+
+  it("does not derive duration from event ts when stepMeta is omitted", () => {
+    const text = summarizeTrace(events);
+    expect(text).toContain("  24 · execute · - · ok");
+    expect(text).not.toContain("18 min");
+  });
+
+  it("uses commands-ledger duration and attempt count from stepMeta", () => {
+    const stepMeta = new Map([["24", { duration: 1.9, attempts: 2 }]]);
+    const text = summarizeTrace(events, stepMeta);
+    expect(text).toContain("1.9 s ×2");
+    expect(text).not.toContain("18 min");
+  });
+});
+
+describe("summarizeSteps", () => {
+  it("appends ledger duration after flags, with ×N when retried", () => {
+    const text = summarizeSteps(
+      monitor({
+        steps: [
+          step(1, { state: "done", duration: 1.9, attempts: 2 }),
+          step(2, { state: "pending" }),
+          step(3, { state: "done", duration: 12.5, attempts: 1 }),
+        ],
+      }),
+    );
+    const lines = text.split("\n");
+    expect(lines[0]).toBe("  01 数据获取 · local_import · done · 1.9 s ×2");
+    expect(lines[1]).toBe("  02 辅助数据 · local_import · pending");
+    expect(lines[2]).toBe("  03 配准 · local_import · done · 12.5 s");
   });
 });

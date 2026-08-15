@@ -114,6 +114,12 @@ function parseJsonObject(raw: string, label: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+function formatStepDuration(duration: number | null, attempts: number): string | null {
+  if (duration == null) return null;
+  const label = formatDuration(duration);
+  return attempts > 1 ? `${label} ×${attempts}` : label;
+}
+
 /** One-line-per-step digest used by the planning/status tools. */
 export function summarizeSteps(monitor: MonitorResponse): string {
   return monitor.steps
@@ -125,7 +131,9 @@ export function summarizeSteps(monitor: MonitorResponse): string {
       ]
         .filter(Boolean)
         .join("/");
-      return `  ${String(step.step).padStart(2, "0")} ${step.name} · ${step.method ?? "-"} · ${flags}`;
+      const duration = formatStepDuration(step.duration, step.attempts);
+      const tail = duration ? ` · ${duration}` : "";
+      return `  ${String(step.step).padStart(2, "0")} ${step.name} · ${step.method ?? "-"} · ${flags}${tail}`;
     })
     .join("\n");
 }
@@ -176,7 +184,10 @@ function eventKeyBits(row: TraceEvent): string {
 }
 
 /** One line per step: `step → phase → duration → key event`. */
-function summarizeTrace(events: TraceEvent[]): string {
+export function summarizeTrace(
+  events: TraceEvent[],
+  stepMeta?: Map<string, { duration: number | null; attempts: number }>,
+): string {
   const groups = new Map<string, TraceEvent[]>();
   for (const row of events) {
     const key = row.step_no == null ? "—" : String(row.step_no);
@@ -186,13 +197,13 @@ function summarizeTrace(events: TraceEvent[]): string {
   }
   const lines: string[] = [];
   for (const [step, rows] of groups) {
-    const stamps = rows.map((row) => row.ts).filter((ts) => typeof ts === "number" && Number.isFinite(ts));
-    const duration = stamps.length >= 2 ? Math.max(...stamps) - Math.min(...stamps) : 0;
+    const meta = stepMeta?.get(step);
+    const duration = meta ? formatStepDuration(meta.duration, meta.attempts) : null;
     const phase = rows.map((row) => row.phase).find((value) => typeof value === "string" && value.length > 0) ?? "-";
     const keyEvent =
       [...rows].reverse().map(eventKeyBits).find((value) => value.length > 0) ?? "(no event text)";
     const label = step === "—" ? "—" : step.padStart(2, "0");
-    lines.push(`  ${label} · ${phase} · ${formatDuration(duration)} · ${keyEvent}`);
+    lines.push(`  ${label} · ${phase} · ${duration ?? "-"} · ${keyEvent}`);
   }
   return lines.join("\n");
 }
@@ -634,6 +645,18 @@ export function createInsarTools(client: BackendClient, controller: ModeControll
     async execute(_toolCallId, params, signal) {
       const args = params as { session: string; run_id?: string };
       const session = bind(args.session);
+      // Duration comes from the commands ledger (/api/monitor), fetched in parallel
+      // with the trace. A monitor miss (no run) must not fail this tool.
+      const monitorP = client.monitor(session, args.run_id, signal).then(
+        (monitor) =>
+          new Map(
+            monitor.steps.map((step) => [
+              String(step.step),
+              { duration: step.duration, attempts: step.attempts },
+            ]),
+          ),
+        () => undefined,
+      );
       let events: TraceEvent[];
       try {
         events = await client.trace(session, args.run_id, signal);
@@ -652,10 +675,11 @@ export function createInsarTools(client: BackendClient, controller: ModeControll
           events ?? [],
         );
       }
+      const stepMeta = await monitorP;
       const text = [
         `Trace: ${events.length} event(s) for session ${session}${args.run_id ? ` run ${args.run_id}` : ""}.`,
         "step → phase → duration → key event",
-        summarizeTrace(events),
+        summarizeTrace(events, stepMeta),
       ].join("\n");
       return result(text, events);
     },
