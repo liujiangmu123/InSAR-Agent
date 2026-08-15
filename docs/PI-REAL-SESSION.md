@@ -53,7 +53,7 @@ pwsh scripts/insar-pi.ps1 --insar-session real
 在 pi 对话里依次让模型执行并核对:
 
 1. **`insar_list_sessions`** → 列表含 `real`。
-2. **`insar_run_status`(session=`real`)** → 11 步全 `done`、五阶段 V、progress 100%、`simulated=false`、evidence 为 **audited**;侧栏轨道同步显示。
+2. **`insar_run_status`(session=`real`)** → 11 步全 `done`(2-6 云端 skipped)、progress 100%、`simulated=false`、evidence 为 **checked**(云端跳过步无 `hyp3_manifest.json` 的如实封顶,封顶原因在账本里可读;2026-08-12 创建时按旧阶梯记为 audited);侧栏轨道同步显示。
 3. **`insar_export_provenance`** → 真实台账(哈希、metrics 及 `reparsed_ok`)。
 4. **`insar_read_log`(任选一步)** → 真实执行日志。
 5. **`/insar-mode strict`** → 让模型试跑 `bash`,确认被 guard 拦截且给出 `insar_*` 引导话术;随后 `/insar-mode free` 恢复。
