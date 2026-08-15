@@ -29,7 +29,7 @@
 | # | 文件 | 内容 | 级 | 完成 | 提交号 |
 |---|---|---|---|---|---|
 | 1 | `10-phase01-windows-baseline.md` | Windows 基线:测试基建 + pi 安装 + PowerShell 启动器 | P0 | ☑ | `3002245` |
-| 2 | `11-phase02-llm-provider.md` | LLM 供应商:workspace/llm.json → pi(insar-llm) | P0 | ☐ | |
+| 2 | `11-phase02-llm-provider.md` | LLM 供应商:workspace/llm.json → pi(insar-llm) | P0 | ☑ | `fef99f0` |
 | 3 | `12-phase03-real-backend.md` | 真实数据后端一键脚本 + pi 真实走查手册 | P0 | ☑ | `fe302f8` |
 | 4 | `13-phase04-insar-theme.md` | InSAR 品牌换皮(insar-dark 主题) | P1 | ☑ | `c3ead5c` |
 | 5 | `20-phase05-tools-run-control.md` | 工具:resume / view_figure / run_trace(16→19) | P0 | ☐ | |

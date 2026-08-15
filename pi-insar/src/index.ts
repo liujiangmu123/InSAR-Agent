@@ -19,6 +19,7 @@ import { installGuard } from "./guard.ts";
 import { installModeControls, ModeController } from "./mode.ts";
 import { installSidebar, type SidebarOptions } from "./sidebar.ts";
 import { registerInsarTools } from "./tools.ts";
+import { installProvider } from "./provider.ts";
 
 export interface InsarExtensionOptions {
   client?: BackendClient;
@@ -31,6 +32,7 @@ export function createInsarExtension(options: InsarExtensionOptions = {}) {
     const client = options.client ?? new BackendClient(options.clientOptions ?? {});
     const controller = new ModeController(client);
 
+    installProvider(pi);
     registerInsarTools(pi, client, controller);
     installModeControls(pi, controller);
     installGuard(pi, controller);
@@ -58,3 +60,4 @@ export { decideBlock, installGuard, INSAR_TOOL_PREFIX, STRICT_ALLOWED_TOOLS } fr
 export { type FreedomMode, installModeControls, ModeController } from "./mode.ts";
 export { installSidebar, renderPipelineRail, renderStatusLine, stepGlyph } from "./sidebar.ts";
 export { createInsarTools, type InsarTool, registerInsarTools, toolsByName } from "./tools.ts";
+export { installProvider, loadLlmConfig, locateLlmConfig, PROVIDER_ID, registerInsarProvider } from "./provider.ts";

@@ -85,10 +85,24 @@ INSAR_HOME=<dir> INSAR_PORT=8873 .venv/bin/python -m insar_agent.api.app
 | Knob | Meaning |
 | --- | --- |
 | `INSAR_API_BASE` | Backend base URL (default `http://127.0.0.1:8873`) |
+| `INSAR_LLM_CONFIG` | Absolute path to an `llm.json` override (default `<repo>/workspace/llm.json`) |
 | `INSAR_PI_SKIP_HEALTH=1` | `scripts/insar-pi` only: start pi without the backend check |
 | `--insar-session <id>` | Bind this pi session to an existing InSAR session (sidebar starts immediately) |
 | `--insar-strict` | Start in strict reproducible mode |
 | `/insar-mode [free\|strict\|status]` | Show or switch the freedom mode at runtime |
+
+## LLM 供应商
+
+`insar-llm` is registered at extension load from `workspace/llm.json` (git-ignored; the
+only key source). The file's `base_url` / `chat_model` / optional `vision_model` /
+`api_key` are read at runtime; the key stays in memory and must never be logged or
+written elsewhere.
+
+- Set `INSAR_LLM_CONFIG` to an absolute path to use a different config file.
+- `.pi/settings.json` selects `insar-llm` and that file's `chat_model` as the project
+  default (`defaultProvider` / `defaultModel`).
+- If `llm.json` is missing or unreadable, pi starts as usual — `insar_*` tools still
+  work; this provider is simply absent (`pi --list-models` will not show `insar-llm`).
 
 ## Prompt and skills
 
@@ -149,6 +163,7 @@ they are parsed and validated before any HTTP call.
 | File | Responsibility |
 | --- | --- |
 | `src/backendClient.ts` | Typed `fetch` client; JSON, NDJSON streams and text endpoints; `AbortSignal` support |
+| `src/provider.ts` | `insar-llm` provider from `workspace/llm.json` (key in memory only) |
 | `src/tools.ts` | The `insar_*` tool definitions and `registerInsarTools` |
 | `src/mode.ts` | `ModeController` (in-memory mirror of the backend mode) + `/insar-mode` + CLI flags |
 | `src/guard.ts` | Pure `decideBlock(tool, mode)` + the exception-safe `tool_call` hook |
