@@ -7,11 +7,26 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const PYTHON = process.env.INSAR_TEST_PYTHON ?? "/workspace/.venv/bin/python";
+/** repo 根 = 本文件(pi-insar/test/)上两级 —— 平台无关,替代硬编码 /workspace。 */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+function defaultPython(cwd: string): string {
+  const venv =
+    process.platform === "win32"
+      ? join(cwd, ".venv", "Scripts", "python.exe")
+      : join(cwd, ".venv", "bin", "python");
+  if (existsSync(venv)) return venv;
+  return process.platform === "win32" ? "python" : "python3";
+}
+
+const CWD = process.env.INSAR_TEST_CWD ?? REPO_ROOT;
+const PYTHON = process.env.INSAR_TEST_PYTHON ?? defaultPython(CWD);
 const PORT = Number(process.env.INSAR_TEST_PORT ?? 8899);
 const HOST = "127.0.0.1";
 const READY_TIMEOUT_MS = 30_000;
@@ -45,12 +60,28 @@ async function waitForHealth(baseUrl: string, deadline: number): Promise<void> {
   );
 }
 
+/** Windows: python 退出后 SQLite -wal/-shm 句柄释放有竞态窗口,退避重试。 */
+async function rmWithRetry(target: string, attempts = 10): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rm(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= attempts || (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY")) {
+        throw error;
+      }
+      await new Promise((wake) => setTimeout(wake, 200 * attempt));
+    }
+  }
+}
+
 export async function setup(): Promise<void> {
   const baseUrl = `http://${HOST}:${PORT}`;
   home = await mkdtemp(join(tmpdir(), "pi-insar-test-"));
 
   child = spawn(PYTHON, ["-m", "insar_agent.api.app"], {
-    cwd: "/workspace",
+    cwd: CWD,
     env: {
       ...process.env,
       INSAR_HOME: home,
@@ -59,6 +90,9 @@ export async function setup(): Promise<void> {
       // Engines are absent in CI: the simulated executor is what makes a
       // key-free end-to-end run possible.
       INSAR_ALLOW_SIMULATED: "1",
+      // Windows 本机 probe 会隐式扫到 E:\miniforge3\envs\insar;钉一个不存在的
+      // 前缀,让套件保持与 CI 相同的诚实 simulated 路径,避免误触真实引擎。
+      INSAR_ENGINE_PREFIX: join(tmpdir(), "no-such-insar-engine"),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -86,7 +120,7 @@ export async function teardown(): Promise<void> {
   }
   child = undefined;
   if (home) {
-    await rm(home, { recursive: true, force: true });
+    await rmWithRetry(home);
     home = undefined;
   }
 }

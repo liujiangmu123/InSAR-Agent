@@ -23,6 +23,7 @@ const SYNC_SCRIPT = join(PACKAGE_DIR, "scripts", "sync-skills.mjs");
 const APPEND_SYSTEM = join(PACKAGE_DIR, "APPEND_SYSTEM.md");
 const OPERATOR_SKILL = join(PACKAGE_DIR, "skills", "00-insar-agent", "SKILL.md");
 const LAUNCHER = join(REPO_ROOT, "scripts", "insar-pi");
+const LAUNCHER_PS = join(REPO_ROOT, "scripts", "insar-pi.ps1");   // 常量区,紧邻既有 LAUNCHER
 
 interface SyncSkill {
   name: string;
@@ -212,6 +213,8 @@ describe("scripts/insar-pi launcher", () => {
     .join("\n");
 
   it("is executable", () => {
+    // Windows 无 Unix 权限位;可执行性由 shebang 与 git 跟踪保证,跳过位检查。
+    if (process.platform === "win32") return;
     expect(statSync(LAUNCHER).mode & 0o111).toBeGreaterThan(0);
   });
 
@@ -246,6 +249,24 @@ describe("scripts/insar-pi launcher", () => {
   it("explains how to start the backend when it is down", () => {
     expect(text).toContain("insar_agent.api.app");
     expect(text).toContain("INSAR_API_BASE");
+  });
+});
+
+describe("scripts/insar-pi.ps1 launcher (Windows)", () => {
+  const text = readFileSync(LAUNCHER_PS, "utf8");
+
+  it("loads the same extension, skills and system prompt as the bash launcher", () => {
+    expect(text).toContain("pi-insar\\src\\index.ts");
+    expect(text).toContain("pi-insar\\APPEND_SYSTEM.md");
+    expect(text).toContain("pi-insar\\skills\\00-insar-agent");
+    expect(text).toContain("src\\insar_agent\\registry\\scenario_packs");
+    expect(text).toContain("--append-system-prompt");
+  });
+
+  it("never passes capability-removing flags", () => {
+    for (const flag of ["--system-prompt ", "--no-extensions", "--no-skills", "--no-builtin-tools", "--tools "]) {
+      expect(text).not.toContain(flag);
+    }
   });
 });
 

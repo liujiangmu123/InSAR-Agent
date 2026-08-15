@@ -33,6 +33,24 @@ cd pi-insar
 npm install   # see "npm note" below if you regenerate the lockfile
 ```
 
+### Windows 本地开发(环境变量)
+
+测试会拉起一个一次性后端(端口 8899,临时 INSAR_HOME)。默认 Python 与工作目录已平台感知
+(仓库根 `.venv\Scripts\python.exe` / 仓库根),通常不必再设。仅当 venv 不在仓库根 `.venv`
+时才需要覆盖:
+
+```powershell
+# 仅当 venv 不在仓库根 .venv 时才需要:
+$env:INSAR_TEST_PYTHON = "E:\01所有项目\06定职讲师\00insaragent\.venv\Scripts\python.exe"
+$env:INSAR_TEST_CWD = "E:\01所有项目\06定职讲师\00insaragent"
+```
+
+本机若装了真实引擎(如 `E:\miniforge3\envs\insar`),probe 会隐式发现它。vitest 的
+`backend.globalSetup.ts` 已把测试后端的 `INSAR_ENGINE_PREFIX` 钉到不存在路径,
+套件保持诚实 simulated,不必再手动设。
+
+Windows 启动入口是 `pwsh scripts/insar-pi.ps1`(Git Bash 用户仍可用 `scripts/insar-pi`)。
+
 Run everything with one command (from anywhere):
 
 ```bash
