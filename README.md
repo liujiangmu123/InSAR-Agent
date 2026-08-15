@@ -24,7 +24,7 @@
 
 ## pi-insar(对话外壳)
 
-pi 是顶层 TUI;本仓库 `pi-insar/` 把 `insar_*` 工具接到既有 Python FastAPI 内核,不改可复现科学账本。Windows 入口:`pwsh scripts/insar-backend-real.ps1`(终端 A)然后 `pwsh scripts/insar-pi.ps1`(终端 B)。真实走查见 [`docs/PI-REAL-SESSION.md`](docs/PI-REAL-SESSION.md)。分析 run(升降轨分解 / 预测 / 反演桥)的目标形态见交付计划,未合入前不要当成已经实现。不要未经批准跑 `scripts/real_ridgecrest.py`。
+pi 是顶层 TUI;本仓库 `pi-insar/` 把 **31** 个 `insar_*` 工具接到既有 Python FastAPI 内核,不改可复现科学账本。Windows 入口:`pwsh scripts/insar-backend-real.ps1`(终端 A)然后 `pwsh scripts/insar-pi.ps1`(终端 B)。真实走查见 [`docs/PI-REAL-SESSION.md`](docs/PI-REAL-SESSION.md)。分析 run(掩膜 / 升降轨分解 / 预测 / 反演桥,步 20–28)与 6 个场景包的用法见 [`pi-insar/README.md`](pi-insar/README.md)。不要未经批准跑 `scripts/real_ridgecrest.py`。
 
 ## 特性(全部有测试守护)
 
