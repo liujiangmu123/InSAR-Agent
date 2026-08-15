@@ -31,7 +31,7 @@
 | 1 | `10-phase01-windows-baseline.md` | Windows 基线:测试基建 + pi 安装 + PowerShell 启动器 | P0 | ☑ | `3002245` |
 | 2 | `11-phase02-llm-provider.md` | LLM 供应商:workspace/llm.json → pi(insar-llm) | P0 | ☐ | |
 | 3 | `12-phase03-real-backend.md` | 真实数据后端一键脚本 + pi 真实走查手册 | P0 | ☑ | `fe302f8` |
-| 4 | `13-phase04-insar-theme.md` | InSAR 品牌换皮(insar-dark 主题) | P1 | ☐ | |
+| 4 | `13-phase04-insar-theme.md` | InSAR 品牌换皮(insar-dark 主题) | P1 | ☑ | `c3ead5c` |
 | 5 | `20-phase05-tools-run-control.md` | 工具:resume / view_figure / run_trace(16→19) | P0 | ☐ | |
 | 6 | `21-phase06-tools-analysis-query.md` | 工具:点位时序/产物/体检/路线/技能/能力闭集(19→25) | P0 | ☐ | |
 | 7 | `22-phase07-tools-export-gis.md` | 工具:GIS 导出 + AI 识图质检(25→27) | P0 | ☐ | |

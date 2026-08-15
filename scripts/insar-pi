@@ -23,6 +23,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 EXTENSION="${REPO_ROOT}/pi-insar/src/index.ts"
 APPEND_SYSTEM="${REPO_ROOT}/pi-insar/APPEND_SYSTEM.md"
+THEME="${REPO_ROOT}/pi-insar/themes/insar-dark.json"
 
 # Skill roots, kept in sync with pi-insar/scripts/sync-skills.mjs (SKILL_ROOTS).
 # pi recurses into a directory and loads every folder that holds a SKILL.md, so
@@ -72,5 +73,6 @@ for root in "${SKILL_ROOTS[@]}"; do
   [ -d "${root}" ] && PI_ARGS+=(--skill "${root}")
 done
 PI_ARGS+=(--append-system-prompt "${APPEND_SYSTEM}")
+[ -f "${THEME}" ] && PI_ARGS+=(--theme "${THEME}")
 
 exec pi "${PI_ARGS[@]}" "$@"

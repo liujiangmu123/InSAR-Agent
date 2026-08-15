@@ -250,6 +250,11 @@ describe("scripts/insar-pi launcher", () => {
     expect(text).toContain("insar_agent.api.app");
     expect(text).toContain("INSAR_API_BASE");
   });
+
+  it("wires the insar-dark theme additively", () => {
+    expect(text).toContain("--theme");
+    expect(text).toContain("insar-dark.json");
+  });
 });
 
 describe("scripts/insar-pi.ps1 launcher (Windows)", () => {
@@ -267,6 +272,11 @@ describe("scripts/insar-pi.ps1 launcher (Windows)", () => {
     for (const flag of ["--system-prompt ", "--no-extensions", "--no-skills", "--no-builtin-tools", "--tools "]) {
       expect(text).not.toContain(flag);
     }
+  });
+
+  it("wires the insar-dark theme additively", () => {
+    expect(text).toContain("--theme");
+    expect(text).toContain("insar-dark.json");
   });
 });
 
