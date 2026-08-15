@@ -558,6 +558,21 @@ export class BackendClient {
   setMode(session: string, mode: FreedomMode, signal?: AbortSignal): Promise<ModeResponse> {
     return this.json<ModeResponse>("POST", "/api/mode", { body: { session, mode }, signal });
   }
+
+  /** `POST /api/pi-journal` — out-of-ledger observation log (never provenance). */
+  journal(
+    entry: {
+      session: string;
+      tool: string;
+      mode?: string;
+      is_error?: boolean;
+      input_digest?: string;
+      ts?: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<AcceptedResponse> {
+    return this.json<AcceptedResponse>("POST", "/api/pi-journal", { body: entry, signal });
+  }
 }
 
 /** FastAPI errors are `{"detail": ...}`; fall back to the raw body. */

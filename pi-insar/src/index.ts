@@ -20,6 +20,7 @@ import { installModeControls, ModeController } from "./mode.ts";
 import { installSidebar, type SidebarOptions } from "./sidebar.ts";
 import { registerInsarTools } from "./tools.ts";
 import { installProvider } from "./provider.ts";
+import { installJournal } from "./journal.ts";
 
 export interface InsarExtensionOptions {
   client?: BackendClient;
@@ -36,6 +37,7 @@ export function createInsarExtension(options: InsarExtensionOptions = {}) {
     registerInsarTools(pi, client, controller);
     installModeControls(pi, controller);
     installGuard(pi, controller);
+    installJournal(pi, client, controller);
     if (options.sidebar !== false) installSidebar(pi, client, controller, options.sidebar ?? {});
 
     pi.on("session_start", async (_event, ctx) => {
@@ -61,3 +63,4 @@ export { type FreedomMode, installModeControls, ModeController } from "./mode.ts
 export { installSidebar, renderPipelineRail, renderStatusLine, stepGlyph } from "./sidebar.ts";
 export { createInsarTools, type InsarTool, registerInsarTools, toolsByName } from "./tools.ts";
 export { installProvider, loadLlmConfig, locateLlmConfig, PROVIDER_ID, registerInsarProvider } from "./provider.ts";
+export { digestInput, installJournal } from "./journal.ts";

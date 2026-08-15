@@ -36,7 +36,7 @@
 | 6 | `21-phase06-tools-analysis-query.md` | 工具:点位时序/产物/体检/路线/技能/能力闭集(19→25) | P0 | ☐ | |
 | 7 | `22-phase07-tools-export-gis.md` | 工具:GIS 导出 + AI 识图质检(25→27) | P0 | ☐ | |
 | 8 | `23-phase08-tools-report-delivery.md` | 工具:报告/图注/复现包/顾问(27→31) | P0 | ☐ | |
-| 9 | `24-phase09-pi-journal.md` | free 模式台账外日志 pi-journal | P1 | ☐ | |
+| 9 | `24-phase09-pi-journal.md` | free 模式台账外日志 pi-journal | P1 | ☑ | `07ecb71` |
 | 10 | `30-phase10-postprocess-capabilities.md` | 分析 run 机制 + 掩膜/校正占位/分解/统计(步 20-24) | P0 | ☐ | |
 | 11 | `31-phase11-correction-capabilities.md` | 校正链:解缠误差/电离层/板块运动/不确定度 | P0 | ☐ | |
 | 12 | `32-phase12-figure-system.md` | 出图体系:图集/网络图/相干矩阵/剖面/KMZ(步 25) | P0 | ☐ | |

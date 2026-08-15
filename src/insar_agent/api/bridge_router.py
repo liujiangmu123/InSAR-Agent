@@ -18,6 +18,7 @@ InSAR 能力作 pi 扩展经 HTTP 调本后端。本 router 提供扩展**新增
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -41,6 +42,16 @@ DEFAULT_MODE = "free"
 class ModeBody(BaseModel):
     session: str
     mode: str
+
+
+class JournalBody(BaseModel):
+    """pi 侧一次工具调用的台账外记录(观察日志,非 provenance)。"""
+    session: str
+    tool: str
+    mode: str | None = None
+    is_error: bool | None = None
+    input_digest: str | None = None   # 截断后的入参摘要,扩展侧负责截断
+    ts: float | None = None           # 扩展侧时钟;服务端另记 received_at
 
 
 def create_bridge_router(store: Store, home: Path | str,
@@ -136,5 +147,35 @@ def create_bridge_router(store: Store, home: Path | str,
         data[body.session] = body.mode
         _save_modes(data)
         return {"session": body.session, "mode": body.mode}
+
+    journal_path = Path(home) / "pi_journal.ndjson"
+
+    @router.post("/pi-journal")
+    def append_journal(body: JournalBody) -> dict:
+        """台账外(out-of-ledger)追加:回答"自由模式下 agent 做了什么"。
+
+        只追加、不进 run provenance、不参与证据阶梯 —— 与科学账本物理分离,
+        绝不为科学结论背书(设计红线,对齐 PLAN-pi-foundation-P0 §3)。
+        """
+        record = body.model_dump()
+        record["received_at"] = time.time()
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        with journal_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return {"accepted": True}
+
+    @router.get("/pi-journal")
+    def read_journal(limit: int = Query(200, ge=1, le=2000)) -> dict:
+        try:
+            lines = journal_path.read_text("utf-8").splitlines()
+        except FileNotFoundError:
+            return {"entries": [], "total": 0}
+        entries = []
+        for line in lines[-limit:]:
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue  # 半行写入(进程被杀)容忍:读端点不因坏行 500
+        return {"entries": entries, "total": len(lines)}
 
     return router

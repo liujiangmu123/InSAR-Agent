@@ -126,3 +126,21 @@ def test_monitor_reflects_simulated_run(client):
     # 模拟执行证据级封顶 runnable(证据阶梯诚实性)
     assert data["evidence"] is not None
     assert data["evidence"]["level"] == "runnable"
+
+
+def test_pi_journal_roundtrip(client):
+    r = client.post("/api/pi-journal", json={
+        "session": "sess-j", "tool": "bash", "mode": "free",
+        "is_error": False, "input_digest": "git status", "ts": 1755229000.0})
+    assert r.status_code == 200 and r.json() == {"accepted": True}
+
+    data = client.get("/api/pi-journal").json()
+    assert data["total"] == 1
+    entry = data["entries"][0]
+    assert entry["tool"] == "bash" and entry["mode"] == "free"
+    assert entry["received_at"] > 0
+
+
+def test_pi_journal_validates_and_tolerates_missing_file(client):
+    assert client.get("/api/pi-journal").json() == {"entries": [], "total": 0}
+    assert client.post("/api/pi-journal", json={"tool": "bash"}).status_code == 422
