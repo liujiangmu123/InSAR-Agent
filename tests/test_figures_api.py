@@ -441,7 +441,7 @@ def test_figure_script_compiles_with_tier_and_sidecar_contract(tmp_path):
     assert "_browse.png" in script and "_thumb.png" in script
     assert "write_sidecar" in script and "save_tiers" in script
     # params 摘要以 Python 字面量注入(roma 已升级为 vik)
-    assert "{'dpi': 300, 'cmap': 'vik', 'format': 'png+pdf'}" in script
+    assert "{'dpi': 300, 'cmap': 'vik', 'format': 'png+pdf', 'figure_set': ['velocity']}" in script
     # REVIEW-r2 P2-14:经纬度栅格纵横校正 + 全 NaN 自守必须在脚本里
     assert "set_aspect" in script
     assert "全 NaN" in script and "sys.exit(2)" in script
