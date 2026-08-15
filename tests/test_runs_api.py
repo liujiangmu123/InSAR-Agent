@@ -90,7 +90,7 @@ def test_runs_contract_fields(env):
 
     old = by_id[RUN_OLD]
     assert set(old) == {"run_id", "parent_run_id", "created_at",
-                        "status", "scenario", "steps"}
+                        "status", "scenario", "simulated", "steps"}
     assert old["status"] == "failed"
     assert old["scenario"] == "quake"
     assert old["created_at"] == 1000.0

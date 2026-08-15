@@ -24,7 +24,19 @@ _HASHES = {"task_hash": "t0", "args_hash": "a0",
 
 
 @pytest.fixture()
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
+    # 密封 probe:本文件端到端必须走模拟引擎,禁止宿主 MintPy 真跑
+    from insar_agent.runtime.probe import ProbeResult
+
+    def empty_probe(*args, **kwargs):
+        return ProbeResult(
+            engines={k: None for k in ("isce2", "mintpy", "snaphu", "gdal", "snap",
+                                       "pystamps", "pyaps")},
+            credentials={"earthdata": False, "cds": False, "gacos": False},
+            disk_free_gb=100.0, cpu_count=8)
+
+    monkeypatch.setattr("insar_agent.loop.driver.probe_environment", empty_probe)
+    monkeypatch.setenv("INSAR_ALLOW_SIMULATED", "1")
     home = tmp_path / "home"
     app = create_app(home=home)
     with TestClient(app) as c:

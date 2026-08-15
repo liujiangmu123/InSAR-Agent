@@ -30,6 +30,7 @@ from insar_agent.audit.contract import Threshold, load_contract
 from insar_agent.audit.runok import evaluate_run_ok
 from insar_agent.core.filehash import fingerprint_target
 from insar_agent.core.store import StageConflict, StepRow, Store
+from insar_agent.engines import ToolMissing
 from insar_agent.registry.model import Capability
 from insar_agent.runtime.backend_select import backend_for_job_dir
 from insar_agent.runtime.discover import discover_artifacts, missing_message
@@ -120,8 +121,13 @@ async def execute_step(
     try:
         # ---------------- PREPARED:渲染配置 + 校验输入 ----------------
         if step.stage_lt("PREPARED"):
-            plan = ctx.builder(cap=cap, method=step.method, params=step.params,
-                               run=run, workspace=ctx.workspace)
+            try:
+                plan = ctx.builder(cap=cap, method=step.method, params=step.params,
+                                   run=run, workspace=ctx.workspace)
+            except ToolMissing as exc:
+                raise StepExecutionError("tool_missing", str(exc)) from exc
+            except ValueError as exc:
+                raise StepExecutionError("contract_broken", str(exc)) from exc
             missing_inputs = [
                 art for art in cap.inputs
                 if store.find_artifact(run_id, art) is None
@@ -141,8 +147,13 @@ async def execute_step(
 
         # ---------------- LAUNCHED:意图落盘 → 启动 ----------------
         if step.stage_lt("LAUNCHED"):
-            plan = ctx.builder(cap=cap, method=step.method, params=step.params,
-                               run=run, workspace=ctx.workspace)
+            try:
+                plan = ctx.builder(cap=cap, method=step.method, params=step.params,
+                                   run=run, workspace=ctx.workspace)
+            except ToolMissing as exc:
+                raise StepExecutionError("tool_missing", str(exc)) from exc
+            except ValueError as exc:
+                raise StepExecutionError("contract_broken", str(exc)) from exc
             attempt = store.command_attempts(run_id, step_id) + 1
             job_dir = _job_dir(ctx, run_id, step_id, attempt)
             log_path = job_dir / "job.log"

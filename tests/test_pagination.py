@@ -211,12 +211,15 @@ def test_api_default_shapes_unchanged(api):
     c, st = api["client"], api["store"]
     ses = c.get("/api/sessions").json()
     assert isinstance(ses, list)
-    assert ses == st.list_sessions()  # 老代码路径原样(逐字段)
+    def _undecorate(row: dict) -> dict:
+        return {k: v for k, v in row.items() if k not in ("project_name", "project_root")}
+    assert [_undecorate(r) for r in ses] == st.list_sessions()  # 装饰字段外逐字段同 store
     runs = c.get("/api/runs", params={"session": "sess-a"}).json()
     assert set(runs) == {"session", "runs"} and len(runs["runs"]) == 10
     trace = c.get("/api/trace", params={"session": "sess-a"}).json()
     assert isinstance(trace, list) and len(trace) == 12
-    assert c.get("/api/sessions", params={"include_archived": "1"}).json() \
+    assert [_undecorate(r) for r in
+            c.get("/api/sessions", params={"include_archived": "1"}).json()] \
         == st.list_sessions(include_archived=True)
 
 
@@ -240,7 +243,7 @@ def test_api_runs_pagination_status_and_counts(api):
     page1 = c.get("/api/runs", params={"session": "sess-a", "limit": 3}).json()
     assert set(page1) == {"session", "runs", "next_cursor"}
     assert set(page1["runs"][0]) == {"run_id", "parent_run_id", "created_at",
-                                     "status", "scenario", "steps"}  # 窄集契约不变
+                                     "status", "scenario", "simulated", "steps"}
     got, cursor = list(page1["runs"]), page1["next_cursor"]
     while cursor is not None:
         page = c.get("/api/runs", params={"session": "sess-a", "limit": 3,

@@ -101,6 +101,10 @@ def test_real_mode_routing():
     assert resolve_builder(REGISTRY[10], "figure_journal", simulated=False) is figures.build
     assert resolve_builder(REGISTRY[11], "coherence_mask", simulated=False) is qa.build
     assert resolve_builder(REGISTRY[11], "crossval_ps_sbas", simulated=False) is qa.build
+    from insar_agent.engines import mintpy_post, passthrough, predict
+    assert resolve_builder(REGISTRY[21], "passthrough", simulated=False) is passthrough.build
+    assert resolve_builder(REGISTRY[23], "asc_desc_horz_vert", simulated=False) is mintpy_post.build
+    assert resolve_builder(REGISTRY[27], "extrapolate_fitted", simulated=False) is predict.build
     with pytest.raises(ToolMissing):
         resolve_builder(REGISTRY[5], "none", simulated=False)  # 未实现 → 显式拒绝
 

@@ -104,7 +104,8 @@ def client() -> httpx.AsyncClient:
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
             base_url=api_base(), timeout=http_timeout(),
-            transport=_config.get("transport"))
+            transport=_config.get("transport"),
+            trust_env=False)  # 本地后端不走系统代理,否则空端口会变成 HTTP 502
     return _client
 
 

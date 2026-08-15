@@ -119,7 +119,8 @@ def test_mixed_keywords_resolve_by_scenario_priority():
     是规则层的已知边界,无法判定时应交 LLM/表单。
     """
     keys = [s.key for s in SCENARIOS]
-    assert keys == ["stripmap_coseismic", "quake", "permafrost", "landslide"]
+    assert keys == ["stripmap_coseismic", "quake", "volcano", "permafrost",
+                    "subsidence", "landslide"]
     assert classify_text("滑坡区的地震形变").key == "quake"
     assert classify_text("青藏高原的滑坡").key == "permafrost"
     # 无更高优先级关键词时,滑坡文本回到 landslide
