@@ -143,7 +143,7 @@ describe("00-insar-agent operator skill", () => {
   const text = readFileSync(OPERATOR_SKILL, "utf8");
 
   it("documents every registered insar_ tool", () => {
-    expect(TOOL_NAMES).toHaveLength(25);
+    expect(TOOL_NAMES).toHaveLength(31);
     for (const name of TOOL_NAMES) expect(text, `operator skill misses ${name}`).toContain(name);
   });
 

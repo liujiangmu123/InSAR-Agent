@@ -14,19 +14,36 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Static, type TSchema, Type } from "typebox";
 import type {
   ActionName,
+  AdviseAction,
+  AdviseResponse,
   ArtifactsResponse,
   BackendClient,
   CapabilityInfo,
+  CaptionResponse,
   DeliverAs,
   DoctorResponse,
+  ExportFormat,
+  ExportOptionsResponse,
+  ExportProduct,
   MonitorResponse,
   RecommendResponse,
+  ReportResponse,
+  ReportSection,
   SkillResponse,
   StreamResult,
   TimeseriesPointResponse,
   TraceEvent,
 } from "./backendClient.ts";
-import { ACTIONS, BackendError, DELIVER_AS, FREEDOM_MODES } from "./backendClient.ts";
+import {
+  ACTIONS,
+  BackendError,
+  DELIVER_AS,
+  EXPORT_FORMATS,
+  EXPORT_PRODUCTS,
+  FREEDOM_MODES,
+  REPORT_SECTIONS,
+  resolveExportDir,
+} from "./backendClient.ts";
 import { isFreedomMode, type ModeController } from "./mode.ts";
 import { renderPipelineRail } from "./sidebar.ts";
 
@@ -258,6 +275,79 @@ function formatRecommend(data: RecommendResponse): string {
 function skillToMarkdown(skill: SkillResponse): string {
   const sections = Object.entries(skill.sections).flatMap(([name, text]) => [`## ${name}`, "", text, ""]);
   return [`# ${skill.name}`, "", skill.description, "", ...sections].join("\n");
+}
+
+function renderExportMatrix(opts: ExportOptionsResponse): string {
+  const head = `run ${opts.run}${opts.simulated ? " (simulated — data-product export refused)" : ""}`;
+  const lines = opts.products.flatMap((row) =>
+    Object.entries(row.formats).map(([fmt, cell]) => {
+      const status = cell.available ? "ok" : (cell.reason ?? "unavailable");
+      return `  ${row.product}/${fmt}  ${status}`;
+    }),
+  );
+  return `${head}\n${lines.join("\n")}`;
+}
+
+function adviseToolHint(action: AdviseAction): string {
+  if (action.kind === "chat_prefill") {
+    return `insar_plan_run / reply with: ${action.text ?? ""}`;
+  }
+  if (action.kind === "api_action") {
+    const endpoint = action.endpoint ?? "";
+    if (endpoint.includes("/resume")) return "insar_resume";
+    if (endpoint.includes("/pipeline")) return "insar_execute_run";
+    if (endpoint.includes("/report/draft")) return "insar_report section=methods";
+    if (endpoint.includes("/report/results")) return "insar_report section=results";
+    if (endpoint.includes("/report/full")) return "insar_report section=full";
+    if (endpoint.includes("/report/caption")) return "insar_figure_caption";
+    if (endpoint.includes("/export")) return "insar_export_product";
+    if (endpoint.includes("/repro-bundle")) return "insar_repro_bundle";
+    if (endpoint.includes("/skills")) return "insar_read_skill";
+    if (endpoint.includes("/vision-qa")) return "insar_vision_qa";
+    return `${action.method ?? "GET"} ${endpoint}`;
+  }
+  if (action.kind === "open_tab") {
+    if (action.tab === "env") return "insar_env_probe / insar_doctor";
+    if (action.tab === "audit") return "insar_export_provenance";
+    if (action.tab === "figures" || action.tab === "images") return "insar_view_figure";
+    return `inspect via insar_run_status (tab ${action.tab ?? "?"})`;
+  }
+  return action.kind;
+}
+
+function renderAdvise(doc: AdviseResponse): string {
+  if (doc.suggestions.length === 0) {
+    return `run ${doc.run_id} · ${doc.status}: no suggestions (${doc.note ?? doc.context ?? "none"}).`;
+  }
+  const head = [
+    `run ${doc.run_id} · ${doc.status}`,
+    doc.evidence_level ? `evidence ${doc.evidence_level}` : undefined,
+    doc.context,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const cards = doc.suggestions.map((item) => {
+    const tool = adviseToolHint(item.action);
+    return `  [${item.id}] ${item.title}\n    why: ${item.why}\n    do: ${tool}`;
+  });
+  return `${head}\n${cards.join("\n")}`;
+}
+
+function renderReport(section: ReportSection, doc: ReportResponse): string {
+  const body = doc.markdown ?? doc.draft ?? "";
+  const head = [
+    `run ${doc.run_id} · section ${section}`,
+    doc.llm_polish === false ? "polish rejected → deterministic skeleton (numbers verified)" : undefined,
+    doc.saved ? `saved ${doc.path ?? "workspace"}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return `${head}\n\n${body}`;
+}
+
+function renderCaption(doc: CaptionResponse): string {
+  const polish = doc.llm_polish ? "llm polish kept" : "deterministic skeleton";
+  return `run ${doc.run_id} · ${doc.figure} (${polish})\n\nZH: ${doc.zh}\n\nEN: ${doc.en}`;
 }
 
 function formatTimeseries(data: TimeseriesPointResponse): string {
@@ -964,6 +1054,164 @@ export function createInsarTools(client: BackendClient, controller: ModeControll
     },
   });
 
+  const exportProduct = typed({
+    name: "insar_export_product",
+    label: "InSAR Export Product",
+    description:
+      "Export a real data product for downstream use. Omit `format` to list what is " +
+      "available for this run (product × format matrix with honest reasons when a " +
+      "format is unavailable). Give `format` to write the file and get its path. " +
+      "GeoTIFF/Shapefile for GIS, KMZ for Google Earth, CSV for spreadsheets, HDF5 for MintPy. " +
+      "Simulated runs are refused on purpose: placeholder bytes must never be delivered " +
+      "as data products.",
+    parameters: Type.Object({
+      session: SessionParam,
+      run_id: RunIdParam,
+      product: Type.Optional(StringEnum(EXPORT_PRODUCTS, "Which product to export")),
+      format: Type.Optional(StringEnum(EXPORT_FORMATS, "Output format; omit to list availability")),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as {
+        session: string;
+        run_id?: string;
+        product?: ExportProduct;
+        format?: ExportFormat;
+      };
+      const session = bind(args.session);
+      if (!args.format || !args.product) {
+        const opts = await client.exportOptions(session, args.run_id, signal);
+        return result(renderExportMatrix(opts), opts);
+      }
+      const out = await client.exportProduct(
+        session,
+        args.product,
+        args.format,
+        resolveExportDir(),
+        args.run_id,
+        signal,
+      );
+      return result(
+        `exported ${args.product} as ${args.format}\n` +
+          `path ${out.savedTo}\nsize ${out.bytes} bytes${out.reused ? " (reused cached conversion)" : ""}`,
+        out,
+      );
+    },
+  });
+
+  const visionQa = typed({
+    name: "insar_vision_qa",
+    label: "InSAR Vision QA",
+    description:
+      "Have the model actually look at a run's figure and judge quality (unwrapping " +
+      "jumps, residual atmospheric fringes, coverage holes, colour-scale sanity). " +
+      "Returns a structured verdict recorded against the run — not a free-form opinion. " +
+      "Omit `figure` to list existing reviews and available figure names.",
+    parameters: Type.Object({
+      session: SessionParam,
+      run_id: RunIdParam,
+      figure: Type.Optional(Type.String({ description: "Figure file name; omit to list reviews / available names" })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { session: string; run_id?: string; figure?: string };
+      const session = bind(args.session);
+      if (!args.figure) {
+        const [reviews, listing] = await Promise.all([
+          client.visionQaList(session, args.run_id, signal),
+          client.figures(session, args.run_id, signal),
+        ]);
+        const names =
+          listing.figures.length === 0
+            ? "no figures yet"
+            : listing.figures.map((figure) => `  ${figure.name}`).join("\n");
+        const n = reviews.items.length;
+        return result(
+          `Vision QA reviews: ${n}. Available figures:\n${names}\nCall again with figure=<name> to review.`,
+          { reviews, figures: listing },
+        );
+      }
+      const review = await client.visionQa(
+        { session, ...(args.run_id === undefined ? {} : { run_id: args.run_id }), figure: args.figure },
+        signal,
+      );
+      const ok = review["ok"];
+      const error = review["error"];
+      const text =
+        ok === false
+          ? `Vision QA not applied: ${String(error ?? "unknown")}`
+          : `Vision QA recorded for ${args.figure} (run ${String(review["run"] ?? args.run_id ?? "latest")}).`;
+      return result(text, review);
+    },
+  });
+
+  const report = typed({
+    name: "insar_report",
+    label: "InSAR Report Section",
+    description:
+      "Generate a provenance-backed report section for a run. " +
+      "`methods` = paper methods section, `results` = results section (QA metrics + " +
+      "velocity statistics), `full` = the assembled report. " +
+      "Every number comes from the run's ledger and is cross-checked; when the model " +
+      "polish fails validation the deterministic skeleton is returned instead " +
+      "(`llm_polish: false`) — that is a correct outcome, not an error. " +
+      "ALWAYS use this instead of writing a methods or results section yourself.",
+    parameters: Type.Object({
+      session: SessionParam,
+      run_id: RunIdParam,
+      section: StringEnum(REPORT_SECTIONS, "Which section to produce"),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { session: string; run_id?: string; section: ReportSection };
+      const doc = await client.report(args.section, bind(args.session), args.run_id, signal);
+      return result(renderReport(args.section, doc), doc);
+    },
+  });
+
+  const figureCaption = typed({
+    name: "insar_figure_caption",
+    label: "InSAR Figure Caption",
+    description:
+      "Bilingual (zh/en) paper caption for one figure. Numbers come from the sidecar and ledger. " +
+      "Use this instead of writing a caption from memory.",
+    parameters: Type.Object({
+      session: SessionParam,
+      run_id: RunIdParam,
+      figure: Type.String({ description: "Figure file name as listed by insar_view_figure" }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { session: string; run_id?: string; figure: string };
+      const doc = await client.caption(bind(args.session), args.figure, args.run_id, signal);
+      return result(renderCaption(doc), doc);
+    },
+  });
+
+  const reproBundle = typed({
+    name: "insar_repro_bundle",
+    label: "InSAR Repro Bundle",
+    description:
+      "Download the reproduction zip for a finished run (ledger, run.sh, methods.md, qa.json, " +
+      "figures, MANIFEST with per-file sha256). Only done runs; in-progress runs are refused.",
+    parameters: Type.Object({ session: SessionParam, run_id: RunIdParam }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { session: string; run_id?: string };
+      const out = await client.reproBundle(bind(args.session), resolveExportDir(), args.run_id, signal);
+      return result(`repro bundle\npath ${out.savedTo}\nsize ${out.bytes} bytes`, out);
+    },
+  });
+
+  const adviseNext = typed({
+    name: "insar_advise_next",
+    label: "InSAR Advise Next",
+    description:
+      "Deterministic next-step suggestion cards for a finished/failed/interrupted run " +
+      "(why + the matching insar_* tool). Do not improvise the next scientific action.",
+    parameters: Type.Object({ session: SessionParam, run_id: RunIdParam }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { session: string; run_id?: string };
+      const doc = await client.advise(bind(args.session), args.run_id, signal);
+      return result(renderAdvise(doc), doc);
+    },
+  });
+
   return [
     health,
     createSession,
@@ -990,6 +1238,12 @@ export function createInsarTools(client: BackendClient, controller: ModeControll
     doctor,
     recommendRoute,
     readSkill,
+    exportProduct,
+    visionQa,
+    report,
+    figureCaption,
+    reproBundle,
+    adviseNext,
   ];
 }
 

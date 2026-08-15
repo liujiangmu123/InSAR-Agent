@@ -114,7 +114,12 @@ class Method:
 
 @dataclass(frozen=True)
 class Capability:
-    """一个流水线步骤的完整声明。"""
+    """一个流水线步骤的完整声明。
+
+    group 只影响规划时是否入选(core 入主链,analysis 仅分析 run),
+    不影响执行、账本、指纹的任何语义 —— 执行器始终能按 step_id
+    在全量注册表里查到声明。
+    """
 
     id: int
     name: str
@@ -134,6 +139,7 @@ class Capability:
     replay: str = "never"  # never | safe(absorb-E1)
     version: str = "1"  # 显式版本逃逸阀(§5.3)
     phase: str = ""  # 轨迹 phase 名(§7.2 面板7)
+    group: str = "core"  # core = 主处理链(默认);analysis = 按需规划的分析步骤
 
     def param_kinds(self) -> dict[str, str]:
         return {k: p.kind for k, p in self.params.items()}

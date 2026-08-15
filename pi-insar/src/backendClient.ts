@@ -9,6 +9,9 @@
  * only once the backend has finished the work.
  */
 
+import { mkdir, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+
 export const DEFAULT_BASE_URL = "http://127.0.0.1:8873";
 
 /** Delivery semantics for queued interventions (`store.DELIVER_AS`). */
@@ -29,6 +32,15 @@ export type ActionName = (typeof ACTIONS)[number];
 
 export const FREEDOM_MODES = ["free", "strict"] as const;
 export type FreedomMode = (typeof FREEDOM_MODES)[number];
+
+export const EXPORT_PRODUCTS = ["velocity", "velocity_std", "timeseries"] as const;
+export type ExportProduct = (typeof EXPORT_PRODUCTS)[number];
+
+export const EXPORT_FORMATS = ["h5", "csv", "gtiff", "kmz", "shp"] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+
+export const REPORT_SECTIONS = ["methods", "results", "full"] as const;
+export type ReportSection = (typeof REPORT_SECTIONS)[number];
 
 export interface HealthResponse {
   ok: boolean;
@@ -301,6 +313,85 @@ export interface SkillResponse {
   description: string;
   applies_to: string[];
   sections: Record<string, string>;
+}
+
+export interface ExportFormatCell {
+  available: boolean;
+  reason: string | null;
+}
+
+export interface ExportProductRow {
+  product: string;
+  source: string | null;
+  formats: Record<string, ExportFormatCell>;
+}
+
+export interface ExportOptionsResponse {
+  run: string;
+  simulated: boolean;
+  engine: { available: boolean; reason: string | null };
+  products: ExportProductRow[];
+}
+
+export interface SavedFile {
+  savedTo: string;
+  bytes: number;
+  reused: boolean;
+  mediaType: string;
+}
+
+export interface ReportResponse {
+  run_id: string;
+  draft?: string;
+  markdown?: string;
+  llm_polish?: boolean;
+  facts_used?: unknown;
+  saved?: boolean;
+  path?: string | null;
+  ok?: boolean;
+}
+
+export interface CaptionResponse {
+  run_id: string;
+  figure: string;
+  zh: string;
+  en: string;
+  llm_polish: boolean;
+  saved?: boolean;
+}
+
+export interface AdviseAction {
+  kind: string;
+  text?: string;
+  method?: string;
+  endpoint?: string;
+  body?: unknown;
+  params?: unknown;
+  tab?: string;
+  step?: number;
+  download?: boolean;
+}
+
+export interface AdviseSuggestion {
+  id: string;
+  title: string;
+  why: string;
+  action: AdviseAction;
+}
+
+export interface AdviseResponse {
+  run_id: string;
+  status: string;
+  context?: string;
+  suggestions: AdviseSuggestion[];
+  note?: string;
+  evidence_level?: string | null;
+  polish_source?: string;
+}
+
+export function resolveExportDir(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env.INSAR_EXPORT_DIR?.trim();
+  return raw && raw.length > 0 ? raw : join(process.cwd(), "exports");
 }
 
 export interface DatasetsResponse {
@@ -813,6 +904,101 @@ export class BackendClient {
     return this.json<SkillResponse>("GET", `/api/skills/${stepId}`, { signal });
   }
 
+  exportOptions(session: string, runId?: string, signal?: AbortSignal): Promise<ExportOptionsResponse> {
+    return this.json<ExportOptionsResponse>("GET", "/api/export/options", {
+      query: { session, run_id: runId },
+      signal,
+    });
+  }
+
+  /**
+   * Download an exported data product into `destDir`. Simulated runs are
+   * refused by the backend with HTTP 409 — that error is rethrown as-is.
+   */
+  exportProduct(
+    session: string,
+    product: ExportProduct,
+    fmt: ExportFormat,
+    destDir: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<SavedFile> {
+    return this.saveDownload("/api/export", destDir, `${product}.${fmt}`, {
+      query: { session, product, fmt, run_id: runId },
+      signal,
+    });
+  }
+
+  visionQa(
+    body: { session: string; run_id?: string; figure: string },
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    return this.json<Record<string, unknown>>("POST", "/api/vision-qa", { body, signal });
+  }
+
+  visionQaList(
+    session: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<{ run: string | null; items: unknown[] }> {
+    return this.json<{ run: string | null; items: unknown[] }>("GET", "/api/vision-qa", {
+      query: { session, run: runId },
+      signal,
+    });
+  }
+
+  report(
+    section: ReportSection,
+    session: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<ReportResponse> {
+    const path =
+      section === "methods"
+        ? "/api/report/draft"
+        : section === "results"
+          ? "/api/report/results"
+          : "/api/report/full";
+    return this.json<ReportResponse>("POST", path, {
+      body: { session, ...(runId === undefined ? {} : { run_id: runId }) },
+      signal,
+    });
+  }
+
+  caption(
+    session: string,
+    figure: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<CaptionResponse> {
+    return this.json<CaptionResponse>("POST", "/api/report/caption", {
+      body: { session, figure, ...(runId === undefined ? {} : { run_id: runId }) },
+      signal,
+    });
+  }
+
+  /** Reproduction zip: ledger + run.sh + methods.md + qa.json + figures + MANIFEST. */
+  reproBundle(
+    session: string,
+    destDir: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<SavedFile> {
+    const fallback = runId ? `insar-repro-${runId.slice(0, 24)}.zip` : "insar-repro.zip";
+    return this.saveDownload("/api/repro-bundle", destDir, fallback, {
+      query: { session, run_id: runId },
+      accept: "application/zip",
+      signal,
+    });
+  }
+
+  advise(session: string, runId?: string, signal?: AbortSignal): Promise<AdviseResponse> {
+    return this.json<AdviseResponse>("GET", "/api/advise", {
+      query: { session, run_id: runId },
+      signal,
+    });
+  }
+
   /** `POST /api/pi-journal` — out-of-ledger observation log (never provenance). */
   journal(
     entry: {
@@ -827,6 +1013,36 @@ export class BackendClient {
   ): Promise<AcceptedResponse> {
     return this.json<AcceptedResponse>("POST", "/api/pi-journal", { body: entry, signal });
   }
+
+  private async saveDownload(
+    path: string,
+    destDir: string,
+    fallbackName: string,
+    opts: {
+      query?: Record<string, QueryValue> | undefined;
+      signal?: AbortSignal | undefined;
+      accept?: string | undefined;
+    } = {},
+  ): Promise<SavedFile> {
+    const response = await this.send("GET", path, {
+      query: opts.query ?? {},
+      accept: opts.accept ?? "application/octet-stream",
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const name = safeFileName(
+      filenameFromDisposition(response.headers.get("content-disposition"), fallbackName),
+    );
+    await mkdir(destDir, { recursive: true });
+    const savedTo = join(destDir, name);
+    await writeFile(savedTo, bytes);
+    return {
+      savedTo,
+      bytes: bytes.byteLength,
+      reused: response.headers.get("x-export-reused") === "1",
+      mediaType: response.headers.get("content-type") ?? "application/octet-stream",
+    };
+  }
 }
 
 /** FastAPI errors are `{"detail": ...}`; fall back to the raw body. */
@@ -840,6 +1056,27 @@ function describeError(body: string): string {
     // not JSON
   }
   return body.slice(0, 500);
+}
+
+function filenameFromDisposition(header: string | null, fallback: string): string {
+  if (!header) return fallback;
+  const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(header);
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"+|"+$/g, ""));
+    } catch {
+      // keep looking
+    }
+  }
+  const plain = /filename="([^"]+)"/i.exec(header) ?? /filename=([^;]+)/i.exec(header);
+  if (plain?.[1]) return plain[1].trim();
+  return fallback;
+}
+
+/** Keep only a path-safe basename so a Content-Disposition cannot escape destDir. */
+function safeFileName(name: string): string {
+  const base = basename(name.replace(/\\/g, "/"));
+  return base.length > 0 ? base : "download.bin";
 }
 
 /** Iterate a web `ReadableStream` without relying on async-iterator support. */

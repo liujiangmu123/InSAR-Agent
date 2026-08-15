@@ -25,10 +25,13 @@
   `insar_run_trace`(执行轨迹:各步阶段与耗时)
 - 分析与查询:`insar_timeseries_point`、`insar_list_artifacts`、`insar_doctor`、
   `insar_recommend_route`、`insar_read_skill`、`insar_capabilities`
-- 诊断与交付:`insar_read_log`、`insar_export_provenance`
+- 导出与识图:`insar_export_product`、`insar_vision_qa`
+- 报告与交付:`insar_report`、`insar_figure_caption`、`insar_repro_bundle`、`insar_advise_next`、
+  `insar_read_log`、`insar_export_provenance`
 - 模式:`insar_get_mode`、`insar_set_mode`
 
 标准回合:**plan → preview → apply → execute → status → provenance**。
+不知下一步 → `insar_advise_next`。改方法/参数前 → 先 `insar_capabilities` 拿闭集。
 
 ## 红线(red lines,任何模式下都成立)
 
@@ -47,6 +50,13 @@
    要么在回答中明确标注"台账外产物,不计入证据级",绝不与台账产物混为一谈。
 5. **`simulated=true` 必须说出来。** 引擎缺失时执行是模拟的,证据级封顶 `runnable`;
    这种结果只能用于流程演示,任何"形变量级/速度场"结论都不成立,回答里要写明。
+6. **用户要能用的文件 / GIS / 谷歌地球 / 表格 → `insar_export_product`。**
+   模拟 run 被 409 拒绝是正确行为:如实告知"这是模拟结果,不能当数据产品交付",
+   绝不改用截图、手抄 CSV 或口述数值替代。
+7. **判断图件质量 → `insar_vision_qa`**,不要凭想象描述图上有什么。
+8. **方法章节 / 结果章节 / 完整报告 → 必须调 `insar_report`,禁止自己撰写。**
+   `llm_polish=false` 表示润色未过数值校验、已回退确定性骨架,这是正确结果,如实交付。
+   图注 → `insar_figure_caption`。同行/审稿人材料 → `insar_repro_bundle`。
 
 ## 两种模式(graduated freedom)
 

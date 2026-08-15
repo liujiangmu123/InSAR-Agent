@@ -21,12 +21,18 @@ class ToolMissing(RuntimeError):
 
 
 def resolve_builder(cap: Capability, method_id: str, *, simulated: bool):
-    """路由到构建器:simulated 一律合成;真实模式先按方法特判,再按引擎。
+    """路由到构建器:passthrough/register_sources 永远物化真文件;
+    其余 simulated 走合成;真实模式先按方法特判,再按引擎。
 
     真实模式下没有实现的方法必须显式 ToolMissing —— 绝不静默回退到合成构建器
     往真实 run 里注入假产物。
     """
     from insar_agent.engines import simulate
+
+    # 规范路径物化:真实文件硬链接/拷贝,绝不走 simulate(禁止注入合成产物)
+    if method_id in ("passthrough", "register_sources"):
+        from insar_agent.engines import passthrough
+        return passthrough.build
 
     if simulated:
         return simulate.build
@@ -42,6 +48,11 @@ def resolve_builder(cap: Capability, method_id: str, *, simulated: bool):
     if method_id in ("coherence_mask", "crossval_ps_sbas", "loop_closure"):
         from insar_agent.engines import qa
         return qa.build
+    if method_id in ("asc_desc_horz_vert", "raster_diff", "mask_by_coherence",
+                     "subset_lalo", "spatial_average", "temporal_average",
+                     "transection", "timeseries_rms", "plate_motion_itrf"):
+        from insar_agent.engines import mintpy_post
+        return mintpy_post.build
 
     method = cap.method(method_id)
     engine = method.engine if method else "-"

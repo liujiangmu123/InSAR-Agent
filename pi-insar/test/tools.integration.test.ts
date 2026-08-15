@@ -47,7 +47,7 @@ beforeAll(() => {
 
 describe("insar_* tools against a live backend", () => {
   it("registers every tool under the insar_ prefix", () => {
-    expect(tools.size).toBe(25);
+    expect(tools.size).toBe(31);
     for (const name of tools.keys()) expect(name.startsWith("insar_")).toBe(true);
     // Overriding a built-in would replace it for the whole pi session.
     for (const builtin of ["read", "bash", "write", "edit", "grep", "find", "ls"]) {
@@ -340,5 +340,52 @@ describe("insar_* tools against a live backend", () => {
 
   it("insar_recommend_route fails honestly for an unknown dataset", async () => {
     await expect(call("insar_recommend_route", { dataset_id: "no-such-dataset" })).rejects.toThrow(/404/);
+  });
+
+  it("insar_export_product lists the availability matrix", async () => {
+    const { text } = await call("insar_export_product", { session: SESSION, run_id: runId });
+    expect(text).toMatch(/velocity/);
+  });
+
+  it("insar_export_product refuses to export a simulated run", async () => {
+    await expect(
+      call("insar_export_product", { session: SESSION, run_id: runId, product: "velocity", format: "gtiff" }),
+    ).rejects.toThrow(/409|模拟/);
+  });
+
+  it("insar_vision_qa lists figures when no name is given", async () => {
+    const { text } = await call("insar_vision_qa", { session: SESSION, run_id: runId });
+    expect(text).toMatch(/Vision QA|figures/i);
+  });
+
+  it("insar_report returns a deterministic skeleton without an LLM", async () => {
+    const { text } = await call("insar_report", { session: SESSION, run_id: runId, section: "methods" });
+    expect(text).toMatch(/方法|Methods/);
+  });
+
+  it("insar_report full marks a simulated run as not scientific evidence", async () => {
+    const { text } = await call("insar_report", { session: SESSION, run_id: runId, section: "full" });
+    expect(text).toMatch(/模拟|不构成科学证据/);
+  });
+
+  it("insar_advise_next returns deterministic suggestion cards", async () => {
+    const { text, details } = await call("insar_advise_next", { session: SESSION, run_id: runId });
+    const payload = details as { suggestions: unknown[] };
+    expect(Array.isArray(payload.suggestions)).toBe(true);
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  it("insar_repro_bundle writes a real zip for a finished run", async () => {
+    const { text, details } = await call("insar_repro_bundle", { session: SESSION, run_id: runId });
+    const saved = details as { savedTo: string; bytes: number };
+    expect(saved.bytes).toBeGreaterThan(0);
+    expect(saved.savedTo.length).toBeGreaterThan(0);
+    expect(text).toContain("repro bundle");
+  });
+
+  it("insar_figure_caption fails honestly when the figure is missing", async () => {
+    await expect(
+      call("insar_figure_caption", { session: SESSION, run_id: runId, figure: "no-such-figure.png" }),
+    ).rejects.toThrow(/404|不存在/);
   });
 });

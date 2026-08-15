@@ -42,7 +42,8 @@ class PlanResult:
 
 def _plan_methods(registry: dict[int, Capability], probe: ProbeResult, *,
                   scenario: Scenario | None, allow_simulated: bool,
-                  overrides: dict[int, dict] | None = None):
+                  overrides: dict[int, dict] | None = None,
+                  groups: tuple[str, ...] = ("core",)):
     """为每一步选方法/参数;返回 (choices, problems)。"""
     choices: dict[int, PlannedStep] = {}
     problems: list[str] = []
@@ -50,6 +51,8 @@ def _plan_methods(registry: dict[int, Capability], probe: ProbeResult, *,
     cloud_done = set(scenario.cloud_completed) if scenario else set()
     for sid in sorted(registry):
         cap = registry[sid]
+        if cap.group not in groups:
+            continue  # 分组过滤:核心 run 不排分析步,分析 run 不重跑主链
         prefer = None
         params = cap.default_params()
         if scenario and sid in scenario.step_overrides:
@@ -90,6 +93,12 @@ def _plan_methods(registry: dict[int, Capability], probe: ProbeResult, *,
             blocked = {f.method.id: f.blocked_reason for f in feas}
             problems.append(f"第 {sid} 步({cap.name})无可行方法:{blocked}")
             continue
+        if (picked.method.id == "plate_motion_itrf"
+                and not str(params.get("plate") or "").strip()):
+            problems.append(
+                f"第 {sid} 步({cap.name})选择 plate_motion_itrf 时 plate 必填"
+                f"(ITRF2014-PMM 板块名,如 NorthAmerica)")
+            continue
         choices[sid] = PlannedStep(
             step_id=sid, name=cap.name, method=picked.method.id, params=params,
             state="pending", simulated=picked.simulated,
@@ -104,13 +113,16 @@ def make_plan(store: Store, session_id: str, *, registry: dict[int, Capability],
               overrides: dict[int, dict] | None = None,
               allow_simulated: bool = False,
               agent_hash: str | None = None,
-              git_head: str | None = None, git_dirty: bool | None = None) -> PlanResult:
+              git_head: str | None = None, git_dirty: bool | None = None,
+              groups: tuple[str, ...] = ("core",)) -> PlanResult:
     choices, problems = _plan_methods(registry, probe, scenario=scenario,
-                                      allow_simulated=allow_simulated, overrides=overrides)
+                                      allow_simulated=allow_simulated,
+                                      overrides=overrides, groups=groups)
     simulated = any(c.simulated for c in choices.values())
     run_id = new_run_id()
     tool_versions = probe.tool_versions()
-    store.create_run(run_id, session_id, workspace=workspace, intent=intent or {},
+    store.create_run(run_id, session_id, workspace=workspace,
+                     intent={**(intent or {}), "groups": list(groups)},
                      scenario=scenario.key if scenario else None, simulated=simulated,
                      tool_versions=tool_versions, agent_hash=agent_hash,
                      git_head=git_head, git_dirty=git_dirty)
@@ -158,6 +170,13 @@ def fork_run(store: Store, parent_run_id: str, *, registry: dict[int, Capability
             errors = cap.validate_params(patch)
             if errors:
                 raise ValueError(f"参数校验失败:{errors}")
+        merged_method = new_method if new_method is not None else parent_steps[sid].method
+        merged_params = dict(parent_steps[sid].params)
+        merged_params.update(patch or {})
+        if (merged_method == "plate_motion_itrf"
+                and not str(merged_params.get("plate") or "").strip()):
+            raise ValueError("plate_motion_itrf 要求 plate 必填"
+                             "(ITRF2014-PMM 板块名,如 NorthAmerica)")
 
     run_id = new_run_id("fork")
     store.create_run(run_id, parent["session_id"], workspace=parent["workspace"],

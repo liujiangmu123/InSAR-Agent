@@ -54,6 +54,8 @@ mintpy.network.tempBaseMax  = {temp_base_max}
 mintpy.network.perpBaseMax  = {perp_base_max}
 mintpy.networkInversion.weightFunc  = no
 ##---------corrections:
+mintpy.unwrapError.method           = {unwrap_error}
+mintpy.ionosphericDelay.method      = {iono_method}
 mintpy.troposphericDelay.method     = {tropo_method}
 mintpy.deramp                       = {ramp}
 mintpy.topographicResidual          = {dem_error}
@@ -64,6 +66,9 @@ mintpy.solidEarthTides              = {solid_earth_tides}
 mintpy.timeFunc.polynomial  = {poly_order}
 mintpy.timeFunc.periodic    = {periods}
 mintpy.timeFunc.stepDate    = {step_date}
+##---------velocity uncertainty:
+mintpy.timeFunc.uncertaintyQuantification = {uncertainty}
+mintpy.timeFunc.bootstrapCount            = {bootstrap_count}
 ##---------other:
 mintpy.plot = no
 """
@@ -109,7 +114,8 @@ def render_cfg(run: dict, *, this_step: int, this_method: str, this_params: dict
     m9 = _chain_method(run, 9, this_method if this_step == 9 else "linear")
 
     tropo = {"tropo_era5_pyaps": "pyaps", "tropo_gacos": "gacos",
-             "tropo_height_corr": "height_correlation"}.get(m8, "pyaps")
+             "tropo_height_corr": "height_correlation",
+             "tropo_opera": "opera"}.get(m8, "pyaps")
     periods = p9.get("periods", []) if m9 == "poly_periodic" else []
     step_date = str(p9.get("step_date", "") or "") if m9 == "step" else ""
     # 垂直基线阈值(C6):0/未设 → 渲染 no(对齐 MintPy 上游 perpBaseMax=auto(no);
@@ -129,6 +135,8 @@ def render_cfg(run: dict, *, this_step: int, this_method: str, this_params: dict
         reference_lalo=os.environ.get("INSAR_REFERENCE_LALO", "391.5e4,45e4"),
         temp_base_max=p7.get("max_temporal_baseline", 120),
         perp_base_max=(str(perp) if perp else "no"),
+        unwrap_error=p7.get("unwrap_error_method", "no"),
+        iono_method=p8.get("iono_method", "no"),
         tropo_method=tropo,
         ramp=p8.get("ramp", "no"),  # 兜底与注册表默认一致(C1:上游 deramp=no)
         dem_error="yes" if p8.get("dem_error", True) else "no",
@@ -142,6 +150,8 @@ def render_cfg(run: dict, *, this_step: int, this_method: str, this_params: dict
         poly_order=p9.get("poly_order", 1),
         periods=",".join(str(x) for x in periods) if periods else "auto",
         step_date=step_date or "auto",
+        uncertainty=p9.get("uncertainty", "residue"),
+        bootstrap_count=int(p9.get("bootstrap_count", 400)),
     )
 
 

@@ -311,6 +311,14 @@ PIPELINE: tuple[Capability, ...] = (
                                             "auto=no);场景参考:ERS 级 130 m(Berardino 2002)"
                                             "、L 波段 ALOS ≤1800 m(Yunjun 2019 §5.1)"),
             "parallel_workers": Param(4, kind="resource", type="int", min=1, max=16),
+            # 解缠误差改正(C 新增):发生在 invert_network 之前,MintPy 上游默认 no。
+            # bridging 适合被水体/低相干带分隔的连通域;phase_closure 用闭合环冗余,
+            # 需要网络冗余度(pairs 数)支撑;两者可叠加(Yunjun et al. 2019 §4.2)
+            "unwrap_error_method": Param(
+                "no", kind="science", type="str",
+                enum=("no", "bridging", "phase_closure", "bridging+phase_closure"),
+                hint="解缠误差改正:no=不改正(上游默认);bridging=连通域桥接;"
+                     "phase_closure=闭合环法(需网络冗余);可叠加"),
         },
         artifacts=(
             ArtifactSpec("timeseries",
@@ -344,6 +352,9 @@ PIPELINE: tuple[Capability, ...] = (
                    requires_credentials=("gacos",)),
             Method("tropo_height_corr", "tropo_height_corr", "mintpy",
                    why="无气象数据时的降级方案(证据级别下降)", requires_engines=("mintpy",)),
+            Method("tropo_opera", "tropo_opera", "mintpy",
+                   why="OPERA 对流层产品(需产品已在位)", requires_engines=("mintpy",),
+                   extra="cfg: troposphericDelay.method=opera;无产品时运行期诚实失败"),
         ),
         default_method="tropo_era5_pyaps",
         params={
@@ -355,6 +366,14 @@ PIPELINE: tuple[Capability, ...] = (
             # 默认对齐实测基准配置 RidgecrestSenDT71.txt(未启用 SET);
             # 另:conda-forge pysolid 的 Fortran DLL 在 Windows 上加载失败,开启前须验证
             "solid_earth_tides": Param(False, kind="science", type="bool"),
+            # 电离层改正(L 波段/长波长场景重要;C 波段短时序通常可忽略)。
+            # 诚实声明:split_spectrum 需要 ISCE-2 stack 处理器产出的分频谱干涉对,
+            # HyP3 云端路线没有这些输入 —— 选了它,MintPy 会在运行期以真实报错失败,
+            # 由 triage 如实呈现;不做静默降级
+            "iono_method": Param(
+                "no", kind="science", type="str", enum=("no", "split_spectrum"),
+                hint="电离层改正:split_spectrum 需 ISCE2 stack 分频谱产物"
+                     "(HyP3 路线无此输入,勿选);L 波段(ALOS)建议开启"),
         },
         artifacts=(
             # 输出文件名随配置组合变化(InSAR_Agent mintpy.py:343-344 的教训):候选全列
@@ -396,6 +415,13 @@ PIPELINE: tuple[Capability, ...] = (
             "periods": Param([1, 0.5], kind="science", type="list"),
             "poly_order": Param(1, kind="science", type="int", min=0, max=3),
             "step_date": Param("", kind="science", type="str"),
+            # 速度不确定度(Phase 13 预测的输入):residue=残差传播(上游默认,最快);
+            # covariance=时序协方差传播;bootstrap=自助抽样(最稳健,最慢,默认 400 次)
+            "uncertainty": Param("residue", kind="science", type="str",
+                                 enum=("residue", "covariance", "bootstrap"),
+                                 hint="velocityStd 的估计方式;bootstrap 最稳健但慢"),
+            "bootstrap_count": Param(400, kind="science", type="int", min=50, max=5000,
+                                     hint="仅 uncertainty=bootstrap 时生效"),
         },
         artifacts=(
             ArtifactSpec("velocity", ("mintpy/velocity.h5", "products/velocity.h5", "velocity.h5"),
@@ -478,7 +504,153 @@ PIPELINE: tuple[Capability, ...] = (
     ),
 )
 
-REGISTRY: dict[int, Capability] = {c.id: c for c in PIPELINE}
+# ITRF2014-PMM 板块名闭集(拼写 Antartica 对齐 MintPy 上游,不要改成 Antarctica)
+_ITRF_PLATES = (
+    "Antartica", "Arabia", "Australia", "Eurasia", "India", "Nazca",
+    "NorthAmerica", "Nubia", "Pacific", "SouthAmerica", "Somalia",
+)
+
+ANALYSIS: tuple[Capability, ...] = (
+    Capability(
+        id=20, name="分析输入", phase="分析", group="analysis", deps=(),
+        methods=(Method("register_sources", "register_sources", "-",
+                        why="登记并校验待分析的源产物(不复制、不改写)", recommend=True),),
+        default_method="register_sources",
+        params={
+            # 相对 run 工作区的路径(与第 3 步 stripmap 的路径参数同形态,进指纹)
+            "primary": Param("mintpy/velocity.h5", kind="science", type="str",
+                             hint="主源产物路径(升轨速度场 / 待分析时序)"),
+            "secondary": Param("", kind="science", type="str",
+                               hint="次源产物路径(降轨速度场);单源分析留空"),
+            "primary_run": Param("", kind="science", type="str",
+                                 hint="主源 run_id,仅作溯源记录"),
+            "secondary_run": Param("", kind="science", type="str", hint="次源 run_id"),
+        },
+        artifacts=(
+            # register_sources 把 params 路径物化为规范链首(NTFS 硬链接优先、拷贝兜底,
+            # 数据是真实的,只是换了规范位置)—— 后续步骤全部读固定的规范路径,零决策
+            ArtifactSpec("src_primary", ("analysis/source.h5",), kind="DATA", policy="stat"),
+            ArtifactSpec("src_secondary", ("analysis/source_2.h5",), kind="DATA",
+                         policy="stat", required=False),
+        ),
+        run_ok=(RunOkCheck("exit_code", equals=0),
+                RunOkCheck("artifact_exists", id="src_primary")),
+        timeouts=Timeouts(idle=120, total=600), disk=DiskEstimate("0.01"),
+        io="light", replay="safe",
+    ),
+    Capability(
+        id=21, name="掩膜子集", phase="分析", group="analysis", deps=(20,),
+        methods=(
+            Method("mask_by_coherence", "mask.py --mask maskTempCoh.h5", "mintpy",
+                   why="按时相相干掩膜剔除不可信像元", recommend=True,
+                   requires_engines=("mintpy",)),
+            Method("subset_lalo", "subset.py --lat/--lon", "mintpy",
+                   why="裁到研究区,后续统计与出图都更快", requires_engines=("mintpy",)),
+            Method("passthrough", "passthrough", "-", why="不做掩膜/裁剪,直接透传上游产物"),
+        ),
+        default_method="passthrough",
+        params={
+            "mask_file": Param("mintpy/maskTempCoh.h5", kind="science", type="str"),
+            "subset_lat": Param("", kind="science", type="str", hint="如 35.6:36.0,留空=不裁"),
+            "subset_lon": Param("", kind="science", type="str", hint="如 -117.9:-117.2"),
+        },
+        artifacts=(ArtifactSpec("masked", ("analysis/masked.h5",), kind="VELOCITY",
+                                layout="mintpy_h5", policy="content"),),
+        inputs=("src_primary",),
+        run_ok=(RunOkCheck("exit_code", equals=0), RunOkCheck("artifact_exists", id="masked")),
+        timeouts=Timeouts(idle=600, total=1800), disk=DiskEstimate("1"), io="medium",
+    ),
+    Capability(
+        id=22, name="速度场校正", phase="分析", group="analysis", deps=(21,),
+        methods=(
+            Method("passthrough", "passthrough", "-",
+                   why="不做速度场级校正,规范链透传", recommend=True),
+            # 本机实测存在:mintpy.cli.plate_motion(ITRF2014-PMM 刚性板块运动改正)。
+            # 用全球参考框架(如与 GNSS 对比)时必须做;局地相对形变可不做。
+            # 双源(升降轨)时对 primary/secondary 各自按其几何改正
+            Method("plate_motion_itrf", "plate_motion.py", "mintpy",
+                   why="扣除 ITRF 刚性板块运动:长波长速度偏差的主要来源之一",
+                   requires_engines=("mintpy",),
+                   extra="需几何文件(geometryRadar.h5/geometryGeo.h5)在位"),
+        ),
+        default_method="passthrough",
+        params={
+            "plate": Param("", kind="science", type="str",
+                           enum=("",) + _ITRF_PLATES,
+                           hint="板块名(ITRF2014-PMM;选 plate_motion_itrf 时必填;"
+                                "取值 " + "/".join(_ITRF_PLATES) + ";"
+                                "拼写 Antartica 对齐 MintPy 上游)"),
+        },
+        artifacts=(
+            ArtifactSpec("corrected", ("analysis/corrected.h5",), kind="DATA", policy="stat"),
+            ArtifactSpec("corrected_2", ("analysis/corrected_2.h5",), kind="DATA",
+                         policy="stat", required=False),
+        ),
+        inputs=("masked",),
+        run_ok=(RunOkCheck("exit_code", equals=0), RunOkCheck("artifact_exists", id="corrected")),
+        timeouts=Timeouts(idle=600, total=1800), disk=DiskEstimate("1"), io="light",
+    ),
+    Capability(
+        id=23, name="几何分解", phase="分析", group="analysis", deps=(22,),
+        methods=(
+            Method("asc_desc_horz_vert", "asc_desc2horz_vert.py", "mintpy",
+                   why="升降轨 LOS 分解为垂直 + 水平(默认东西向)—— InSAR 解译标准动作",
+                   recommend=True, requires_engines=("mintpy",),
+                   extra="需双源(analysis/corrected.h5 + corrected_2.h5),"
+                        "且两源已地理编码到同一分辨率与范围"),
+            Method("raster_diff", "diff.py", "mintpy",
+                   why="两期/两源相减(变化量、与参考解的差异)", requires_engines=("mintpy",)),
+            Method("passthrough", "passthrough", "-", why="单源分析,不做分解"),
+        ),
+        default_method="passthrough",
+        params={
+            "horz_az_angle": Param(-90.0, kind="science", min=-180, max=180,
+                                   hint="关心的水平方向方位角(度),自北起逆时针为正;"
+                                        "-90=东西向(MintPy 上游默认);跨断层可设为断层走向"),
+            "use_geometry_files": Param(False, kind="science", type="bool",
+                                        hint="用逐像元入射/方位角替代常量元数据"),
+        },
+        artifacts=(ArtifactSpec("decomposed", ("analysis/decomposed.h5",),
+                                kind="VELOCITY", layout="mintpy_h5", policy="content"),),
+        inputs=("corrected",),
+        run_ok=(RunOkCheck("exit_code", equals=0),
+                RunOkCheck("artifact_exists", id="decomposed"),
+                RunOkCheck("not_all_nan", id="decomposed")),
+        timeouts=Timeouts(idle=900, total=3600), disk=DiskEstimate("2"),
+        cpu=4, mem_gb=8, io="medium",
+    ),
+    Capability(
+        id=24, name="统计剖面", phase="分析", group="analysis", deps=(23,),
+        methods=(
+            Method("spatial_average", "spatial_average.py", "mintpy",
+                   why="区域平均(沉降漏斗强度、参考区稳定性)", requires_engines=("mintpy",)),
+            Method("temporal_average", "temporal_average.py", "mintpy",
+                   why="时段平均(季节项、年际对比)", requires_engines=("mintpy",)),
+            Method("transection", "plot_transection.py", "mintpy",
+                   why="剖面:跨断层/跨漏斗的形变梯度", recommend=True,
+                   requires_engines=("mintpy",)),
+            Method("timeseries_rms", "timeseries_rms.py", "mintpy",
+                   why="残差 RMS:噪声水平与参考日期选择依据", requires_engines=("mintpy",)),
+        ),
+        default_method="transection",
+        params={
+            "start_lalo": Param("", kind="science", type="str", hint="剖面起点 lat,lon"),
+            "end_lalo": Param("", kind="science", type="str", hint="剖面终点 lat,lon"),
+            "aoi_lalo": Param("", kind="science", type="str",
+                              hint="统计区 lat0:lat1,lon0:lon1"),
+            "dataset": Param("", kind="science", type="str",
+                             hint="h5 内数据集名(分解产物用 vertical/east);空=默认"),
+        },
+        artifacts=(ArtifactSpec("measure", ("analysis/measure.json", "analysis/transect.txt"),
+                                kind="REPORT", policy="content"),),
+        inputs=("decomposed",),
+        run_ok=(RunOkCheck("exit_code", equals=0), RunOkCheck("artifact_exists", id="measure")),
+        timeouts=Timeouts(idle=600, total=1800), disk=DiskEstimate("0.2"),
+        io="light", replay="safe",
+    ),
+)
+
+REGISTRY: dict[int, Capability] = {c.id: c for c in (*PIPELINE, *ANALYSIS)}
 
 
 def capability_of(step_id: int) -> Capability:
@@ -492,7 +664,7 @@ def step_def(step_id: int) -> Capability:
 def downstream_of(step_id: int) -> list[int]:
     """反向依赖 BFS,不含自身(与 prototype state.js downstreamOf 对齐)。"""
     rev: dict[int, list[int]] = {}
-    for cap in PIPELINE:
+    for cap in REGISTRY.values():
         for dep in cap.deps:
             rev.setdefault(dep, []).append(cap.id)
     seen: set[int] = set()

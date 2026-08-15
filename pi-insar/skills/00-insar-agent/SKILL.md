@@ -36,6 +36,12 @@ insar_doctor                 # 秒级只读体检;环境异常不要用 bash 自
 insar_recommend_route        # 数据集 → 处理路线优劣对比
 insar_read_skill             # 按需取第 N 步科学知识
 insar_capabilities           # 每步方法 id 闭集;apply_change 前必看
+insar_export_product         # 导出 h5/csv/gtiff/kmz/shp(模拟 run 409 拒绝)
+insar_vision_qa              # 看图做结构化质检
+insar_report                 # 方法/结果/完整报告(禁止自撰)
+insar_figure_caption         # 双语论文图注
+insar_repro_bundle           # 复现包 zip(同行/审稿人)
+insar_advise_next            # 确定性下一步建议卡
 insar_read_log               # 失败步骤的日志尾巴
 insar_export_provenance      # kind=ledger(证据文档)/ kind=run_sh(等价裸命令脚本)
 ```
@@ -69,6 +75,10 @@ insar_export_provenance      # kind=ledger(证据文档)/ kind=run_sh(等价裸�
 | 点位形变数值 | `insar_timeseries_point`(禁止目测) |
 | 环境体检 / 选路线 / 读步骤知识 | `insar_doctor` / `insar_recommend_route` / `insar_read_skill` |
 | 改方法前拿闭集 | `insar_capabilities` |
+| GIS/谷歌地球/表格交付 | `insar_export_product`(模拟 run 的 409 是正确拒绝) |
+| 看图判质量 | `insar_vision_qa` |
+| 方法/结果/完整报告/图注/复现包 | `insar_report` / `insar_figure_caption` / `insar_repro_bundle`(禁止自撰报告) |
+| 不知道下一步 | `insar_advise_next` |
 | 读代码、读文档、查目录、算一个临时统计、写一次性脚本 | 自由用 pi 的 `read`/`bash`/`grep`(free 模式下) |
 
 判据一句话:**会影响科学结论或产物的动作走工具层;只为"我自己看懂"的动作随便跑。**
@@ -148,12 +158,15 @@ runnable → checked → audited → calibrated → validated → publishable
 
 ## 6. 绝不编造数值
 
-速率、相干、`unwrap_coverage`、闭合环 RMS、阈值、耗时、run_id、产物路径 —— 一切数字只有三个合法来源:
-`insar_run_status`、`insar_read_log`、`insar_export_provenance`、`insar_run_trace`、`insar_timeseries_point`。
+速率、相干、`unwrap_coverage`、闭合环 RMS、阈值、耗时、run_id、产物路径 —— 一切数字只有这些合法来源:
+`insar_run_status`、`insar_read_log`、`insar_export_provenance`、`insar_run_trace`、
+`insar_timeseries_point`、`insar_report`、QA 指标。
 
 - 查不到 → 说"未记录/需要先跑第 N 步",不要估、不要引用别的 run 的数、不要给"大约"。
 - 质量门 PENDING 只 warning 不硬停 → 如实说 warning,不要说"通过"。
 - 引用时带上 run_id 与 step 号,别人才能复核。
+- 用户要方法/结果/完整报告 → **必须**调 `insar_report`,禁止自己写章节
+  (`llm_polish=false` 是正确回退,不要再润色)。
 
 ## 7. 分支与干预语义
 
@@ -199,3 +212,14 @@ runnable → checked → audited → calibrated → validated → publishable
 4. 拿 `simulated=true` 的 run 谈形变量级。
 5. 忽略 `taints > 0` 就下结论。
 6. 报数不带 run_id/step,或把 `rerunMinutes: null` 说成"很快"。
+7. 从图上目测位移,或自己撰写方法/结果章节(绕过事实闭集)。
+8. 把模拟 run 的 409 导出拒绝翻译成"我帮你估一个数"。
+
+## 11. 交付剧本(用户说"给我一份完整成果")
+
+1. `insar_run_status`          确认 run 终态与证据级别
+2. `insar_vision_qa`           看主图,确认没有明显质量问题
+3. `insar_report` section=full 生成完整报告
+4. `insar_export_product`      导出 GeoTIFF(GIS)与 KMZ(汇报);模拟 run 会 409,如实转达
+5. `insar_repro_bundle`        打包复现包
+
