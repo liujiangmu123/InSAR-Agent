@@ -18,6 +18,13 @@
 | `reference/AGENT_PRODUCTS_LEARNING.md` | codex/gemini-cli/OpenHands/cline + snakemake/dvc 定向调研(absorb-E~P) |
 | `reference/COMPARISON_LEARNING.md` | redun/aiida/agentic-swmm 等对照学习(absorb-A~D) |
 | `reference/PI_FRAMEWORK_ANALYSIS.md` | pi 框架对标与吸收决议(absorb-E1~E8) |
+| `docs/PI-REAL-SESSION.md` | pi 真实数据走查手册(Ridgecrest audited 读回;重型新 run 须批准) |
+| `pi-insar/README.md` | pi 对话外壳:Windows 入口、工具面、与 Python 内核的接线 |
+| `pi-insar/docs/plan/00-README.md` | pi-insar 全流程交付计划(Phase 01-16)索引 |
+
+## pi-insar(对话外壳)
+
+pi 是顶层 TUI;本仓库 `pi-insar/` 把 `insar_*` 工具接到既有 Python FastAPI 内核,不改可复现科学账本。Windows 入口:`pwsh scripts/insar-backend-real.ps1`(终端 A)然后 `pwsh scripts/insar-pi.ps1`(终端 B)。真实走查见 [`docs/PI-REAL-SESSION.md`](docs/PI-REAL-SESSION.md)。分析 run(升降轨分解 / 预测 / 反演桥)的目标形态见交付计划,未合入前不要当成已经实现。不要未经批准跑 `scripts/real_ridgecrest.py`。
 
 ## 特性(全部有测试守护)
 
