@@ -36,7 +36,19 @@ runs/
 *.log
 logs/
 
+# .pi 项目资源:junction/硬链接,内容真身在 pi-insar/ 与 skills/(勿重复入库;
+# .pi/extensions 与 settings.json 是真文件,正常入库)
+.pi/skills/
+.pi/themes/
+.pi/APPEND_SYSTEM.md
+
 # 编辑器
 .vscode/
 .idea/
 .DS_Store
+
+# .pi 项目资源:junction/硬链接指向仓库内真身(pi-insar/、skills/、scenario_packs),
+# 入库会把内容重复一份;启动器会自动重建。extensions/ 与 settings.json 正常入库。
+.pi/skills/
+.pi/themes/
+.pi/APPEND_SYSTEM.md
