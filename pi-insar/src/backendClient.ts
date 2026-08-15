@@ -144,6 +144,49 @@ export interface ModeResponse {
   mode: string;
 }
 
+/** One entry of `GET /api/figures` — a real on-disk figure artifact. */
+export interface FigureEntry {
+  step: number;
+  artId: string;
+  name: string;
+  path: string;
+  kind: string;
+  size: number;
+  mtime: number;
+  url: string;
+  fullUrl: string;
+  thumbUrl: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface FiguresResponse {
+  run: string | null;
+  figures: FigureEntry[];
+}
+
+/**
+ * One row of unpaged `GET /api/trace` (SQLite `trace` table; schema.sql).
+ * `action` is a JSON string `{type,tool,input,output}`; `error_occurred` is 0/1.
+ * Duration is not a column — derive it from `ts` when rendering a timeline.
+ */
+export interface TraceEvent {
+  id: number;
+  run_id: string | null;
+  session_id: string | null;
+  step_no: number | null;
+  ts: number;
+  phase: string | null;
+  thought: string | null;
+  action: string | null;
+  observation: string | null;
+  error_occurred: number;
+  error_type: string | null;
+  error_message: string | null;
+  revision_trigger: string | null;
+  confidence: number | null;
+  raw_response: string | null;
+}
+
 export interface DatasetsResponse {
   roots: unknown[];
   datasets: unknown[];
@@ -557,6 +600,46 @@ export class BackendClient {
 
   setMode(session: string, mode: FreedomMode, signal?: AbortSignal): Promise<ModeResponse> {
     return this.json<ModeResponse>("POST", "/api/mode", { body: { session, mode }, signal });
+  }
+
+  /** `POST /api/resume` — reattach runs left `running` after a backend restart. */
+  resume(session: string, signal?: AbortSignal): Promise<StreamResult> {
+    return this.ndjson("/api/resume", { session }, signal);
+  }
+
+  figures(session: string, runId?: string, signal?: AbortSignal): Promise<FiguresResponse> {
+    return this.json<FiguresResponse>("GET", "/api/figures", {
+      query: { session, run_id: runId },
+      signal,
+    });
+  }
+
+  /**
+   * Fetch one artifact image by the relative `fullUrl` a `figures()` entry
+   * carries (e.g. `/api/artifact-file?session=...&art_id=...`). Bytes + media
+   * type straight from the backend's closed image-extension set.
+   */
+  async artifactImage(
+    relativeUrl: string,
+    signal?: AbortSignal,
+  ): Promise<{ bytes: Uint8Array; mediaType: string }> {
+    const response = await this.send("GET", relativeUrl, {
+      accept: "image/*",
+      ...(signal ? { signal } : {}),
+    });
+    const mediaType = (response.headers.get("content-type") ?? "image/png").split(";")[0]?.trim() || "image/png";
+    return { bytes: new Uint8Array(await response.arrayBuffer()), mediaType };
+  }
+
+  /**
+   * Unpaged `GET /api/trace` — execution-audit rows (phase / observation / errors).
+   * No run → `[]` (HTTP 200). A run owned by another session → HTTP 404.
+   */
+  trace(session: string, runId?: string, signal?: AbortSignal): Promise<TraceEvent[]> {
+    return this.json<TraceEvent[]>("GET", "/api/trace", {
+      query: { session, run_id: runId },
+      signal,
+    });
   }
 
   /** `POST /api/pi-journal` — out-of-ledger observation log (never provenance). */

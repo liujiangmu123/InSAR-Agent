@@ -27,6 +27,9 @@ insar_run_status             # 计划长什么样 / 现在跑到哪 / 证据级 
 insar_preview_change         # (可选)某处方法或参数改动的影响面与重跑代价
 insar_apply_change           # (可选)落实改动:SET_METHOD / SET_PARAMS
 insar_execute_run            # 执行(可只跑 step_ids 子集),返回时执行流已结束
+insar_resume                 # 后端重启后接回 running;已结算步骤绝不重跑
+insar_view_figure            # 列出/内联查看 run 的真实图件产物(省略 name 列出)
+insar_run_trace              # 执行轨迹:各步阶段与耗时(排障/写报告的时间线)
 insar_read_log               # 失败步骤的日志尾巴
 insar_export_provenance      # kind=ledger(证据文档)/ kind=run_sh(等价裸命令脚本)
 ```
@@ -38,6 +41,8 @@ insar_export_provenance      # kind=ledger(证据文档)/ kind=run_sh(等价裸�
   在这一步就能看出来。
 - **`insar_execute_run` 是长调用**:它消费后端执行流直到结束才返回。要中途干预用
   `insar_intervene`(PAUSE / PLAY / KILL / RESET / SKIP;RESET 与 SKIP 必须带 `target` 步号)。
+- **断点续跑分工**:`insar_resume` 接回后端重启后仍为 `running` 的 run(已结算步骤绝不重跑);
+  推进计划里还 `pending` 的步骤用 `insar_execute_run`,不要拿 resume 当"再跑一遍"。
 - **`run_id` 可省**:省略即"该会话最近一次 run"。跨越多个 run(比较、fork)时一定写全,
   否则你会把结论安到错的 run 上。
 - **参数是 JSON 对象字符串**:`params_json='{"looks_range": 4}'`、
@@ -48,10 +53,13 @@ insar_export_provenance      # kind=ledger(证据文档)/ kind=run_sh(等价裸�
 | 动作 | 走哪条路 |
 | --- | --- |
 | 跑/续跑/重跑任何一步科学处理 | `insar_execute_run`(禁止手拼 ISCE2/MintPy/snaphu 命令) |
+| 后端重启后接回仍 `running` 的 run | `insar_resume`(已结算步骤绝不重跑;pending 用 execute) |
 | 改方法、改科学参数 | `insar_preview_change` → `insar_apply_change` |
 | 中止、跳过、复位、暂停 | `insar_intervene` |
 | 比较两种处理选择 | `insar_fork_run`(复用未受影响的步骤)后各自 `insar_execute_run` |
 | 看状态、看日志、看产物清单 | `insar_run_status` / `insar_read_log` / `insar_export_provenance` |
+| 看真实图件(列出或内联) | `insar_view_figure`(省略 `name` 列出;给 `name` 内联) |
+| 看各步阶段与耗时 | `insar_run_trace` |
 | 读代码、读文档、查目录、算一个临时统计、写一次性脚本 | 自由用 pi 的 `read`/`bash`/`grep`(free 模式下) |
 
 判据一句话:**会影响科学结论或产物的动作走工具层;只为"我自己看懂"的动作随便跑。**
@@ -132,7 +140,7 @@ runnable → checked → audited → calibrated → validated → publishable
 ## 6. 绝不编造数值
 
 速率、相干、`unwrap_coverage`、闭合环 RMS、阈值、耗时、run_id、产物路径 —— 一切数字只有三个合法来源:
-`insar_run_status`、`insar_read_log`、`insar_export_provenance`。
+`insar_run_status`、`insar_read_log`、`insar_export_provenance`、`insar_run_trace`。
 
 - 查不到 → 说"未记录/需要先跑第 N 步",不要估、不要引用别的 run 的数、不要给"大约"。
 - 质量门 PENDING 只 warning 不硬停 → 如实说 warning,不要说"通过"。

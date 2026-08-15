@@ -47,7 +47,7 @@ beforeAll(() => {
 
 describe("insar_* tools against a live backend", () => {
   it("registers every tool under the insar_ prefix", () => {
-    expect(tools.size).toBe(16);
+    expect(tools.size).toBe(19);
     for (const name of tools.keys()) expect(name.startsWith("insar_")).toBe(true);
     // Overriding a built-in would replace it for the whole pi session.
     for (const builtin of ["read", "bash", "write", "edit", "grep", "find", "ls"]) {
@@ -280,5 +280,31 @@ describe("insar_* tools against a live backend", () => {
     });
     expect((details as MonitorResponse).run).toBeNull();
     expect(text).toContain("has no run yet");
+  });
+
+  it("insar_resume returns a clean stream when nothing is running", async () => {
+    const { text } = await call("insar_resume", { session: SESSION });
+    expect(text).toContain("Resume finished");
+  });
+
+  it("insar_view_figure lists real figure artifacts (possibly none) and rejects unknown names", async () => {
+    const listing = await call("insar_view_figure", { session: SESSION });
+    expect(listing.text).toMatch(/figures|no figure artifacts/i);
+    const missing = await call("insar_view_figure", { session: SESSION, name: "no-such-figure.png" });
+    expect(missing.text).toContain("No figure named");
+  });
+
+  it("insar_run_trace renders a per-step timeline for a finished run", async () => {
+    const { text, details } = await call("insar_run_trace", { session: SESSION, run_id: runId });
+    expect(Array.isArray(details)).toBe(true);
+    expect((details as unknown[]).length).toBeGreaterThan(0);
+    expect(text).toMatch(/step → phase → duration → key event/);
+  });
+
+  it("insar_run_trace honestly reports no run when the session has none", async () => {
+    const emptySession = `${SESSION}-norun`;
+    await call("insar_create_session", { session: emptySession, name: "empty-trace" });
+    const outcome = await call("insar_run_trace", { session: emptySession });
+    expect(outcome.text).toMatch(/404|no run/i);
   });
 });

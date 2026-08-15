@@ -18,8 +18,11 @@
 
 - 环境与会话:`insar_health`、`insar_env_probe`、`insar_list_datasets`、
   `insar_create_session`、`insar_list_sessions`
-- 规划与执行:`insar_plan_run` → `insar_run_status` → `insar_execute_run`
+- 规划与执行:`insar_plan_run` → `insar_run_status` → `insar_execute_run` →
+  `insar_resume`(后端重启后接回 running,已结算步骤绝不重跑)
 - 改动与分支:`insar_preview_change` → `insar_apply_change`、`insar_fork_run`、`insar_intervene`
+- 图件与轨迹:`insar_view_figure`(列出/内联查看 run 的真实图件产物)、
+  `insar_run_trace`(执行轨迹:各步阶段与耗时)
 - 诊断与交付:`insar_read_log`、`insar_export_provenance`
 - 模式:`insar_get_mode`、`insar_set_mode`
 
@@ -33,7 +36,7 @@
 2. **改方法或改参数走 `insar_preview_change` → `insar_apply_change`。**
    先看这一改动会污染哪些下游步骤、重跑要多久,再落。禁止直接编辑工作区里的配置文件来"改参数"。
 3. **绝不编造数值。** 速率、相干、覆盖率、RMS、阈值、耗时、run_id 等一切数字只能来自
-   `insar_run_status` / `insar_read_log` / `insar_export_provenance` 的真实返回。
+   `insar_run_status` / `insar_read_log` / `insar_export_provenance` / `insar_run_trace` 的真实返回。
    没查到就说"未记录",不要推测、不要取整成"大约"、不要复用别处的示例数。
 4. **台账外产物必须显式声明。** 自由模式下用 bash 生成的图/表/中间文件**不在 provenance 里**:
    要么改用 `insar_apply_change` + `insar_execute_run` 让流水线重新产出(进台账),

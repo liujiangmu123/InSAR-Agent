@@ -18,8 +18,9 @@ import type {
   DeliverAs,
   MonitorResponse,
   StreamResult,
+  TraceEvent,
 } from "./backendClient.ts";
-import { ACTIONS, DELIVER_AS, FREEDOM_MODES } from "./backendClient.ts";
+import { ACTIONS, BackendError, DELIVER_AS, FREEDOM_MODES } from "./backendClient.ts";
 import { isFreedomMode, type ModeController } from "./mode.ts";
 import { renderPipelineRail } from "./sidebar.ts";
 
@@ -133,6 +134,44 @@ function streamNote(stream: StreamResult): string {
   if (stream.truncated) parts.push(`${stream.events.length} kept`);
   if (stream.malformed > 0) parts.push(`${stream.malformed} malformed`);
   return parts.join(", ");
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "?";
+  if (seconds < 0.05) return "<0.1 s";
+  if (seconds < 60) return `${seconds.toFixed(1)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds - minutes * 60;
+  return `${minutes} min ${rest.toFixed(0)} s`;
+}
+
+function eventKeyBits(row: TraceEvent): string {
+  const bits = [row.observation, row.revision_trigger, row.error_type, row.error_message]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value.length > 0);
+  return bits[0] ?? "";
+}
+
+/** One line per step: `step → phase → duration → key event`. */
+function summarizeTrace(events: TraceEvent[]): string {
+  const groups = new Map<string, TraceEvent[]>();
+  for (const row of events) {
+    const key = row.step_no == null ? "—" : String(row.step_no);
+    const list = groups.get(key) ?? [];
+    list.push(row);
+    groups.set(key, list);
+  }
+  const lines: string[] = [];
+  for (const [step, rows] of groups) {
+    const stamps = rows.map((row) => row.ts).filter((ts) => typeof ts === "number" && Number.isFinite(ts));
+    const duration = stamps.length >= 2 ? Math.max(...stamps) - Math.min(...stamps) : 0;
+    const phase = rows.map((row) => row.phase).find((value) => typeof value === "string" && value.length > 0) ?? "-";
+    const keyEvent =
+      [...rows].reverse().map(eventKeyBits).find((value) => value.length > 0) ?? "(no event text)";
+    const label = step === "—" ? "—" : step.padStart(2, "0");
+    lines.push(`  ${label} · ${phase} · ${formatDuration(duration)} · ${keyEvent}`);
+  }
+  return lines.join("\n");
 }
 
 function typed<T extends TSchema>(definition: ToolDefinition<T, unknown, unknown>): InsarTool {
@@ -290,6 +329,115 @@ export function createInsarTools(client: BackendClient, controller: ModeControll
         .filter(Boolean)
         .join("\n");
       return result(text, { monitor, events: tailEvents(stream) });
+    },
+  });
+
+  const resume = typed({
+    name: "insar_resume",
+    label: "InSAR Resume",
+    description:
+      "Reattach runs left `running` after a backend restart (step-level resume). " +
+      "Settled steps are never re-executed — work continues from the ledger. " +
+      "For pending steps of a planned run use insar_execute_run instead.",
+    parameters: Type.Object({ session: SessionParam }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { session: string };
+      const session = bind(args.session);
+      const stream = await client.resume(session, signal);
+      const monitor = await client.monitor(session, undefined, signal);
+      controller.observeRemote(monitor.mode);
+      const text = [
+        `Resume finished (${streamNote(stream)}).`,
+        monitor.run ? summarizeMonitor(monitor) : `Session ${session} has no run yet.`,
+      ].join("\n");
+      return result(text, { monitor, events: tailEvents(stream) });
+    },
+  });
+
+  const viewFigure = typed({
+    name: "insar_view_figure",
+    label: "InSAR View Figure",
+    description:
+      "List a run's real figure artifacts, or inline one figure as an image " +
+      "(interferograms, velocity maps, time series …). Omit `name` to list; give " +
+      "`name` to view. Figures come from the run's artifact ledger only.",
+    parameters: Type.Object({
+      session: SessionParam,
+      run_id: RunIdParam,
+      name: Type.Optional(
+        Type.String({ description: "Figure file name exactly as returned by the list call" }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { session: string; run_id?: string; name?: string };
+      const session = bind(args.session);
+      const listing = await client.figures(session, args.run_id, signal);
+      if (!args.name) {
+        if (listing.figures.length === 0) {
+          return result(`Run ${listing.run ?? "?"} has no figure artifacts yet.`, listing);
+        }
+        const lines = listing.figures.map(
+          (f) => `  step ${String(f.step).padStart(2, "0")} · ${f.name} · ${Math.round(f.size / 1024)} KiB`,
+        );
+        return result(`Run ${listing.run}: ${listing.figures.length} figures\n${lines.join("\n")}`, listing);
+      }
+      const figure = listing.figures.find((f) => f.name === args.name);
+      if (!figure) {
+        const available = listing.figures.map((f) => `  ${f.name}`).join("\n");
+        return result(`No figure named ${args.name}.\nAvailable:\n${available}`, listing);
+      }
+      const image = await client.artifactImage(figure.fullUrl, signal);
+      return {
+        content: [
+          {
+            type: "image" as const,
+            data: Buffer.from(image.bytes).toString("base64"),
+            mimeType: image.mediaType,
+          },
+          {
+            type: "text" as const,
+            text: `step ${figure.step} · ${figure.name} (${image.mediaType}, ${Math.round(figure.size / 1024)} KiB)`,
+          },
+        ],
+        details: figure,
+      };
+    },
+  });
+
+  const runTrace = typed({
+    name: "insar_run_trace",
+    label: "InSAR Run Trace",
+    description:
+      "Execution timeline of a run: one line per step with phase, duration and key events. " +
+      "Use this to see what actually happened and where a run stalled — do not guess from logs.",
+    parameters: Type.Object({ session: SessionParam, run_id: RunIdParam }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as { session: string; run_id?: string };
+      const session = bind(args.session);
+      let events: TraceEvent[];
+      try {
+        events = await client.trace(session, args.run_id, signal);
+      } catch (error) {
+        if (error instanceof BackendError && error.status === 404) {
+          return result(
+            `no run (HTTP 404): ${error.message}`,
+            { status: 404, body: error.body },
+          );
+        }
+        throw error;
+      }
+      if (!Array.isArray(events) || events.length === 0) {
+        return result(
+          `No run (empty trace for session ${session}${args.run_id ? `, run_id ${args.run_id}` : ""}).`,
+          events ?? [],
+        );
+      }
+      const text = [
+        `Trace: ${events.length} event(s) for session ${session}${args.run_id ? ` run ${args.run_id}` : ""}.`,
+        "step → phase → duration → key event",
+        summarizeTrace(events),
+      ].join("\n");
+      return result(text, events);
     },
   });
 
@@ -609,6 +757,9 @@ export function createInsarTools(client: BackendClient, controller: ModeControll
     planRun,
     runStatus,
     executeRun,
+    resume,
+    viewFigure,
+    runTrace,
     previewChange,
     applyChange,
     intervene,
