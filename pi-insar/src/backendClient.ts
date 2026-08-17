@@ -9,6 +9,7 @@
  * only once the backend has finished the work.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
@@ -455,10 +456,40 @@ export interface BackendClientOptions {
 
 type QueryValue = string | number | boolean | undefined | null;
 
-/** Trailing-slash-insensitive base URL from the environment. */
-export function resolveBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+const DESKTOP_CONFIG_REL = join(".pi", "insar-desktop.json");
+
+function stripTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+/** Read apiBase from the workspace Desktop hint; ignore missing/invalid files. */
+function readDesktopApiBase(cwd: string): string | undefined {
+  const path = join(cwd, DESKTOP_CONFIG_REL);
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { apiBase?: unknown };
+    if (typeof parsed.apiBase !== "string") return undefined;
+    const apiBase = parsed.apiBase.trim();
+    return apiBase.length > 0 ? apiBase : undefined;
+  } catch {
+    return undefined; // 坏 JSON 不能阻断扩展加载,回落到默认 8873
+  }
+}
+
+/**
+ * Trailing-slash-insensitive base URL: INSAR_API_BASE, then workspace
+ * `.pi/insar-desktop.json` `apiBase`, then {@link DEFAULT_BASE_URL}.
+ */
+export function resolveBaseUrl(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+): string {
   const raw = env.INSAR_API_BASE?.trim();
-  return (raw && raw.length > 0 ? raw : DEFAULT_BASE_URL).replace(/\/+$/, "");
+  if (raw) return stripTrailingSlash(raw);
+  // 未走 insar-pi-desktop.ps1 时 Desktop 主进程/worker 往往没有 INSAR_API_BASE
+  const fromDesktop = readDesktopApiBase(cwd);
+  if (fromDesktop) return stripTrailingSlash(fromDesktop);
+  return stripTrailingSlash(DEFAULT_BASE_URL);
 }
 
 /**

@@ -16,3 +16,12 @@ git commit -m "chore(pi-insar): pi 升级至 <版本> —— typecheck/测试/�
 ```
 
 回滚:任一步失败且无法当场修复,恢复 devDependency 版本号并 `npm i`,不留半升级状态。
+
+## Desktop SDK(与 CLI 分轨,2026-08-15)
+
+- CLI / `pi-insar` devDependency:**0.84.2**(不变)。
+- pi Desktop 壳 v0.5.7 bundled:**0.83.0**。D0–D3 允许 builtin 0.83.0 跑本仓库 `.pi/extensions`。
+- **不要**为对齐去改壳 `package.json` 的 `pi-coding-agent` 版本。
+- D4 正式对齐:Desktop 设置 → SDK → global 0.84.2 → 重启 worker。回退:同一页切回 builtin。
+- 破坏性差异逐条记本附录,不 patch `src/main/sdk-loader.ts`。
+- 执行记录:切换是用户机器 userData 里的 `sdk/current.json`,不进本仓库。走查清单见 `pi-insar/docs/desktop-walkthrough.md` D4。

@@ -6,9 +6,7 @@
    / implicit(隐式发现,未固化)/ None;
 2. engine_prefix 检查的 message 在隐式命中时写「自动发现引擎环境:…(未固化,建议保存)」;
 3. 一键保存链路(向导「使用自动发现的环境」按钮 → POST /save 现有端点)后来源转 explicit;
-4. GET /status?force=1 透传 probe_wsl_engines_cached(force=…) 穿透 WSL 探测缓存;
-5. 前端关键渲染串静态断言(向导本体是 DOM 闭包,Node 单测只覆盖纯函数
-   engineSourceBadge —— tests/js/setup_badge.test.mjs;其余渲染串在此防倒退)。
+4. GET /status?force=1 透传 probe_wsl_engines_cached(force=…) 穿透 WSL 探测缓存。
 """
 
 from __future__ import annotations
@@ -24,10 +22,6 @@ import insar_agent.api.setup_router as sr
 import insar_agent.runtime.wsl_probe as wp
 from insar_agent.api.setup_router import setup_router
 from insar_agent.runtime.probe import ProbeResult
-
-ROOT = Path(__file__).resolve().parents[1]
-_SETUP_JS = ROOT / "prototype" / "js" / "setup.js"
-_SETUP_CSS = ROOT / "prototype" / "css" / "setup.css"
 
 _ENVS = ("INSAR_ENGINE_PREFIX", "INSAR_HYP3_SOURCE")
 
@@ -223,26 +217,3 @@ def test_force_penetrates_wsl_probe_cache(client, monkeypatch):
     assert calls["n"] == 2
     client.get("/api/setup/status")          # force 的新结果已回填缓存
     assert calls["n"] == 2
-
-
-# ---------------- 前端关键渲染串静态断言(防倒退) ----------------
-
-def test_setup_js_key_render_strings():
-    """setup.js 的向导本体是 DOM 闭包无法在 Node 里整体单测:关键渲染串静态锁定。"""
-    text = _SETUP_JS.read_text(encoding="utf-8")
-    # 第 1 步:引擎行来源徽标(纯函数出口 + 渲染类名)
-    assert "export function engineSourceBadge" in text
-    assert "setup-src" in text
-    # 「重新检测」force 语义:穿透后端 WSL 探测缓存
-    assert "/api/setup/status?force=1" in text
-    # 第 3 步:预填 discovered_prefix + 一键固化按钮
-    assert "discovered_prefix" in text
-    assert "prefix_source" in text
-    assert "使用自动发现的环境" in text
-    assert "自动发现引擎环境" in text
-
-
-def test_setup_css_has_badge_and_discovered_styles():
-    text = _SETUP_CSS.read_text(encoding="utf-8")
-    assert ".setup-check .msg .setup-src" in text   # 来源徽标
-    assert ".setup-discovered" in text              # 第 3 步自动发现提示框

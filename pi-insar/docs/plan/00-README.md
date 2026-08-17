@@ -12,6 +12,7 @@
 | 20-24 | Phase 05-09:工具面补全(16 → 31 个工具)+ pi-journal |
 | 30-35 | Phase 10-15:科学能力扩展(注册表驱动,0 个新工具) |
 | 40-44 | Phase 16 收口 + 附录 A-D |
+| 50-52 | 桌面工业化(50/51)+ 领域研究与后续路线依据(52) |
 
 ## 第一部分:背景阅读(执行前通读一遍)
 
@@ -44,6 +45,9 @@
 | 14 | `34-phase14-inversion-bridge.md` | 反演桥:GBIS/Kite/GMT/QGIS 标准导出(步 28) | P1 | ☑ | `64a7ed9` |
 | 15 | `35-phase15-scenario-packs.md` | 多源数据接入(8 种处理器)+ 沉降/火山场景包 + 剧本 | P0 | ☑ | `df89d2e` |
 | 16 | `40-phase16-docs-and-final.md` | 文档收口 + 最终全量验收 | P0 | ☑ | `1e438e1` |
+| 17 | `50-phase-desktop-insar.md` | Phase D0-D5:pi Desktop 工业化(源码壳 + InSAR 适配 + 自打包) | P0 | ☐ | |
+| 18 | `51-phase-desktop-ui.md` | Phase U0-U3:桌面 InSAR 化(右栏工作台:轨道/数据/图件 + chrome) | P0 | ☐ | |
+| 19 | `52-research-insar-domain.md` | 领域研究(读,不执行):数据×方法×产物×应用 + R1-R6 后续波次建议 | 读 | ☐ | |
 
 ## 第三部分:附录(随用随查)
 

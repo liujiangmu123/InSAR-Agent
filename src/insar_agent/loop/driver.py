@@ -71,7 +71,7 @@ _DATASET_KIND_LABELS = {"hyp3": "HyP3 产品", "alos_raw": "ALOS 原始条带",
 #: 数据集清单缓存 TTL(秒):与 /api/datasets 的清单缓存同一口径
 _DATASETS_TTL_S = 60.0
 
-#: 自主循环动作闭集(LOOP-CONTRACT §1,与 prototype/js/agentloop.js ACTION_META 对齐)
+#: 自主循环动作闭集(LOOP-CONTRACT §1,与 CYCLE_ACTION_TYPES 对齐)
 LOOP_ACTIONS = ("search_data", "inspect_file", "check_env", "list_data", "status",
                 "plan", "execute", "set_params", "set_method", "thinking",
                 "install_engine", "list_files",

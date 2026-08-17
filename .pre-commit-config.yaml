@@ -20,13 +20,3 @@ repos:
         args: [--markdown-linebreak-ext=md]
       - id: end-of-file-fixer
       - id: check-yaml
-
-  # 本仓自有门禁:CSS 括号配平 + @media 断点清单一致性(纯 stdlib,零依赖)
-  - repo: local
-    hooks:
-      - id: check-css-syntax
-        name: CSS 语法与断点清单检查(scripts/check_css_syntax.py)
-        entry: python scripts/check_css_syntax.py
-        language: system
-        files: ^prototype/css/.*\.css$
-        pass_filenames: false

@@ -2,7 +2,7 @@
 
 不依赖 B2 的 provider.chat 落地:注入「带 chat 方法的假 provider」,按 ChatOutcome
 契约形状(content/tool_calls/finish_reason/route_index 四字段)返回脚本应答。
-盯防:动作闭集(10 项,与 prototype/js/agentloop.js ACTION_META 对齐)、say 收束、
+盯防:动作闭集(10 项,与 CYCLE_ACTION_TYPES 对齐)、say 收束、
 越界动作丢弃留 say、坏形状整体拒绝(BrainUnavailable)、route_pin 透传、
 enabled 闸门、user 消息形状(目标/状态/逐周期摘要,每条硬截 300 字)、
 converse 校验纪律的复用与循环专属三动作(search_data/inspect_file/thinking)。
@@ -11,9 +11,7 @@ converse 校验纪律的复用与循环专属三动作(search_data/inspect_file/
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import pytest
 
@@ -316,7 +314,7 @@ def test_first_cycle_has_empty_summary_placeholder():
 # ---------------- 提示词:动作闭集完整性(与前端 ACTION_META 对齐) ----------------
 
 def test_cycle_action_types_closed_set():
-    assert CYCLE_ACTION_TYPES == CONTRACT_ACTIONS  # 顺序随前端 ACTION_META
+    assert CYCLE_ACTION_TYPES == CONTRACT_ACTIONS
     assert set(CONVERSE_ACTION_TYPES) < set(CYCLE_ACTION_TYPES)  # 循环闭集是超集
 
 
@@ -330,17 +328,6 @@ def test_prompt_declares_every_action_and_stays_small():
     for banned in ("snaphu", "isce", "mintpy", "gdal", "python", "bash", "pip",
                    "http", "c:\\", "/usr", "/data", "./"):
         assert banned not in CYCLE_SYSTEM.lower(), f"提示词不应含 {banned!r}"
-
-
-def test_action_closed_set_matches_frontend_action_meta():
-    """跨工件守护:CYCLE_ACTION_TYPES 与 prototype/js/agentloop.js 的 ACTION_META
-    键集逐项一致(事件契约已锁死,LOOP-CONTRACT §1)。"""
-    js_path = (Path(__file__).resolve().parent.parent / "prototype" / "js"
-               / "agentloop.js")
-    block = re.search(r"ACTION_META\s*=\s*\{(.*?)\n\};",
-                      js_path.read_text("utf-8"), re.S).group(1)
-    keys = re.findall(r"^\s*(\w+):\s*\{", block, re.M)
-    assert set(keys) == set(CYCLE_ACTION_TYPES) and len(keys) == len(CYCLE_ACTION_TYPES)
 
 
 def test_cycle_on_delta_taps_say_field():

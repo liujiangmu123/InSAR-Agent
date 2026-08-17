@@ -52,6 +52,17 @@ pwsh scripts/insar-pi.ps1 --insar-strict
 pwsh scripts/insar-pi.ps1 --insar-session real
 ```
 
+### Desktop 源码启动
+
+从源码跑 pi Desktop（`justhil/pi-app`），不要下安装包。后端先起，再：
+
+```powershell
+pwsh scripts/insar-pi-desktop.ps1
+pwsh scripts/insar-pi-desktop.ps1 -PiAppRoot E:\SoftApp\pi-app
+```
+
+启动器顺序：找 `PiAppRoot` → 自愈 `.pi` junction → 写入进程环境 `INSAR_API_BASE` → 探活 8873 → 缺 `electron.exe` 则跑 `install.js`（可设 `ELECTRON_MIRROR`）→ 缺 `better_sqlite3.node` 则调用 `scripts/fix-pi-desktop-sqlite.ps1` → `npm run dev`。请在窗口里打开工作区 = 仓库根。
+
 Git Bash users can still use `scripts/insar-pi`. Both launchers check
 `GET $INSAR_API_BASE/api/health` first and print how to start the backend if it is down
 (they never spawn it), then exec pi with **additive flags only**: `-e pi-insar/src/index.ts`,
@@ -90,7 +101,7 @@ INSAR_HOME=<dir> INSAR_PORT=8873 .venv/bin/python -m insar_agent.api.app
 | --- | --- |
 | `INSAR_API_BASE` | Backend base URL (default `http://127.0.0.1:8873`) |
 | `INSAR_LLM_CONFIG` | Absolute path to an `llm.json` override (default `<repo>/workspace/llm.json`) |
-| `INSAR_PI_SKIP_HEALTH=1` | `scripts/insar-pi` / `scripts/insar-pi.ps1` only: start pi without the backend check |
+| `INSAR_PI_SKIP_HEALTH=1` | `scripts/insar-pi` / `insar-pi.ps1` / `insar-pi-desktop.ps1`: start without the backend check |
 | `--insar-session <id>` | Bind this pi session to an existing InSAR session (sidebar starts immediately) |
 | `--insar-strict` | Start in strict reproducible mode |
 | `/insar-mode [free\|strict\|status]` | Show or switch the freedom mode at runtime |

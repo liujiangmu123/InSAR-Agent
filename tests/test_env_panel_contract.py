@@ -1,14 +1,11 @@
-"""环境面板前后端契约测试（防契约漂移）。
+"""环境探测 API 契约测试（防契约漂移）。
 
-prototype/js/envlive.js 是「环境」面板的实时数据模块，消费两个端点：
+锁定两个端点字段:
   - GET /api/env          → probe.{engines,credentials,wsl.engine_probe,
                             disk_free_gb,disk_total_gb,cpu_count,mem_gb,
                             python,platform} + thresholds[{key,value,source,ref,status}]
   - GET /api/setup/status → ready + checks[{key,ok,message,fix_hint,required}]
                             + agent/engine/data/disk 摘要
-
-本文件把 envlive.js 实际读取的字段清单写成断言：后端改动若删改任一字段，
-这里先红，而不是等到面板在浏览器里静默显示成空白。
 """
 
 from __future__ import annotations

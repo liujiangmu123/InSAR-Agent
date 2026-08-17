@@ -1,7 +1,9 @@
 # 绕过 VS 18 BuildTools 编译 better-sqlite3 时的 C1001(LTCG/Ox 内部错误)。
 # 仅改 PiAppRoot/node_modules/better-sqlite3 的 gyp,然后 electron-rebuild。
+# 由 scripts/insar-pi-desktop.ps1 调用;也可单独跑:
 #   pwsh -File scripts/fix-pi-desktop-sqlite.ps1
 #   pwsh -File scripts/fix-pi-desktop-sqlite.ps1 -PiAppRoot E:\SoftApp\pi-app
+# Skip rebuild when marker .insar-vs18-noltcg and better_sqlite3.node both exist.
 param(
   [string]$PiAppRoot = $(if ($env:INSAR_PI_DESKTOP_ROOT) { $env:INSAR_PI_DESKTOP_ROOT } else { "E:\SoftApp\pi-app" })
 )
@@ -13,6 +15,17 @@ if (-not (Test-Path (Join-Path $mod "binding.gyp"))) {
 }
 
 $marker = Join-Path $mod ".insar-vs18-noltcg"
+$sqliteNode = Join-Path $mod "build\Release\better_sqlite3.node"
+# 已成功: 有 .node。marker 表示 gyp 补丁已打过;两者都在则绝不再编译。
+if (Test-Path -LiteralPath $sqliteNode) {
+  if (Test-Path -LiteralPath $marker) {
+    Write-Host "fix-pi-desktop-sqlite: 已有 marker 与 better_sqlite3.node,跳过编译"
+  } else {
+    Write-Host "fix-pi-desktop-sqlite: 已有 better_sqlite3.node,跳过编译"
+  }
+  exit 0
+}
+
 if (-not (Test-Path $marker)) {
   $gypi = Join-Path $mod "deps\common.gypi"
   $raw = Get-Content $gypi -Raw
@@ -58,6 +71,11 @@ if (-not (Test-Path $marker)) {
 
 $build = Join-Path $mod "build"
 if (Test-Path $build) { Remove-Item -Recurse -Force $build }
-Set-Location $PiAppRoot
-npx --yes @electron/rebuild -f -w better-sqlite3
-exit $LASTEXITCODE
+Push-Location $PiAppRoot
+try {
+  npx --yes "@electron/rebuild" -f -w better-sqlite3
+  $code = $LASTEXITCODE
+} finally {
+  Pop-Location
+}
+exit $code

@@ -261,24 +261,31 @@ describe("scripts/insar-pi launcher", () => {
 
 describe("scripts/insar-pi.ps1 launcher (Windows)", () => {
   const text = readFileSync(LAUNCHER_PS, "utf8");
+  const code = text
+    .split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n");
 
-  it("loads the same extension, skills and system prompt as the bash launcher", () => {
+  it("self-heals .pi resources instead of re-passing skill flags", () => {
     expect(text).toContain("pi-insar\\src\\index.ts");
     expect(text).toContain("pi-insar\\APPEND_SYSTEM.md");
-    expect(text).toContain("pi-insar\\skills\\00-insar-agent");
+    expect(text).toContain("pi-insar\\skills");
     expect(text).toContain("src\\insar_agent\\registry\\scenario_packs");
-    expect(text).toContain("--append-system-prompt");
+    expect(text).toContain(".pi\\skills");
+    expect(text).toContain(".pi\\themes");
+    expect(text).toContain(".pi\\extensions\\insar.ts");
+    expect(code).not.toContain("--append-system-prompt");
   });
 
   it("never passes capability-removing flags", () => {
     for (const flag of ["--system-prompt ", "--no-extensions", "--no-skills", "--no-builtin-tools", "--tools "]) {
-      expect(text).not.toContain(flag);
+      expect(code).not.toContain(flag);
     }
   });
 
-  it("wires the insar-dark theme additively", () => {
-    expect(text).toContain("--theme");
-    expect(text).toContain("insar-dark.json");
+  it("lets .pi/themes/insar-dark.json load via project discovery", () => {
+    expect(text).toContain("pi-insar\\themes");
+    expect(code).not.toContain("--theme");
   });
 });
 

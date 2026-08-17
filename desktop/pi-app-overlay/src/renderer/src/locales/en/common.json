@@ -1,0 +1,173 @@
+{
+  "app": {
+    "name": "InSAR Agent",
+    "status": {
+      "idle": "Idle",
+      "ready": "Ready",
+      "running": "Running",
+      "failed": "Failed"
+    }
+  },
+  "sidebar": {
+    "sessions": "Sessions",
+    "settings": "Settings",
+    "openProject": "Open folder",
+    "tempChat": "Temp chat",
+    "newTempChat": "New temp chat",
+    "newChat": "New chat",
+    "clickToAdd": "Click + to create",
+    "removeProjectConfirm": "Remove project \"{{name}}\" from list? The folder will not be deleted.",
+    "removeFailed": "Remove failed",
+    "removed": "Removed from list",
+    "removeFromList": "Remove from list",
+    "revealInExplorer": "Reveal in File Explorer",
+    "revealFailed": "Could not open path",
+    "noSessions": "No sessions",
+    "toggleSubagents": "Toggle subagents for {{title}}",
+    "openSubagentSession": "Open {{agent}} subagent session",
+    "subagentSessionUnavailable": "{{agent}} subagent session is not available yet",
+    "conversations": "Conversations",
+    "firstMsgIsTitle": "First message is the title",
+    "projects": "Projects",
+    "rename": "Rename",
+    "delete": "Delete",
+    "renamed": "Renamed",
+    "renameFailed": "Rename failed",
+    "renameTempChat": "Rename temp chat",
+    "renameSession": "Rename session",
+    "renameMissingFile": "Cannot rename: session file path is missing",
+    "deleted": "Deleted",
+    "deleteFailed": "Delete failed",
+    "deleteMissingFile": "Cannot delete: session file path is missing",
+    "deleteSessionConfirm": "Delete session \"{{name}}\"? Its pi session file will be permanently removed.",
+    "deleteConfirm": "Delete \"{{name}}\"? Directory and pi sessions will be removed."
+  },
+  "composer": {
+    "placeholder": "Message or / command",
+    "send": "Send",
+    "stop": "Stop",
+    "selectProjectFirst": "Open a project first"
+  },
+  "panel": {
+    "review": "Review",
+    "trellis": "Trellis",
+    "run": "Run",
+    "context": "Context",
+    "tree": "Tree",
+    "files": "Files",
+    "reviewDesc": "Git changes & diff (read-only)",
+    "runDesc": "Current turn status & usage",
+    "contextDesc": "Session context preview",
+    "treeDesc": "Session tree / rewind (like /tree)",
+    "filesDesc": "Workspace file preview & explorer",
+    "unregistered": "Unregistered panel: {{id}}"
+  },
+  "settings": {
+    "title": "Settings",
+    "general": "General",
+    "appearance": "Appearance",
+    "pi": "Pi",
+    "extensions": "Extensions",
+    "resources": "Resources",
+    "diagnostics": "Diagnostics",
+    "theme": {
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System"
+    }
+  },
+  "timeline": {
+    "placeholder": "Send a message to start",
+    "emptyWorkspace": "Open a folder, or start a temp chat under Chats",
+    "loadOlder": "Scroll up or tap to load older messages",
+    "loadingSession": "Loading session…"
+  },
+  "review": {
+    "scope": {
+      "turn": "Turn",
+      "session": "Session",
+      "git": "Git"
+    },
+    "empty": "No file changes",
+    "copyPath": "Copy path"
+  },
+  "topbar": {
+    "project": "Current project",
+    "session": "Current session",
+    "back": "Back",
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar",
+    "expandRightPanel": "Expand right panel",
+    "collapseRightPanel": "Collapse right panel",
+    "insarWorkbench": "InSAR workbench"
+  },
+  "home": {
+    "whatToDoInBefore": "What would you like to do in",
+    "whatToDoInAfter": "?",
+    "selectProject": "Choose a project",
+    "newChat": "New chat",
+    "hintWithProject": "Type a message to start, or pick a past chat from the sidebar",
+    "hintNoProject": "Type to start chatting, or choose a project folder above",
+    "pickerTitle": "Choose project",
+    "noRecentProjects": "No recent projects",
+    "openOtherFolder": "Open another folder…",
+    "firstMsgIsTitle": "First message becomes the chat title"
+  },
+  "save": "Save",
+  "saving": "Saving…",
+  "saveFailed": "Save failed",
+  "settingsSaved": "Settings saved",
+  "unsavedChanges": "Unsaved changes",
+  "allChangesSaved": "All changes saved",
+  "discard": "Discard",
+  "reverted": "Reverted to last saved",
+  "operationFailed": "Operation failed",
+  "reload": "Reload",
+  "refresh": "Refresh",
+  "loading": "Loading…",
+  "cancel": "Cancel",
+  "confirm": "OK",
+  "close": "Close",
+  "back": "Back",
+  "error": "Error",
+  "retry": "Retry",
+  "newSession": "New session",
+  "loadingSettings": "Loading settings…",
+  "resetToDefault": "Reset to default",
+  "errorBoundary": {
+    "renderFailed": "Render failed",
+    "unknown": "Unknown error"
+  },
+  "window": {
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "close": "Close"
+  },
+  "sessionReload": {
+    "success": "Session data refreshed",
+    "failed": "Refresh failed",
+    "title": "Refresh session data (sync with CLI)"
+  },
+  "commandPalette": {
+    "title": "Command palette",
+    "placeholder": "Type a command…",
+    "empty": "No matching commands",
+    "footer": "↑↓ navigate · Enter run · Esc close",
+    "close": "Close",
+    "settings": "Open settings",
+    "focusComposer": "Focus composer",
+    "openPanel": "Open {{panel}} panel",
+    "sessionTree": "Open session tree",
+    "shortcuts": "Keyboard shortcuts"
+  },
+  "shortcuts": {
+    "title": "Keyboard shortcuts",
+    "commandPalette": "Open command palette",
+    "thisSheet": "Show this shortcuts list",
+    "sessionTree": "Open session tree overlay",
+    "restoreQueue": "Restore queued message into composer",
+    "stopOrDismiss": "Stop run / dismiss overlay",
+    "navOnly": "Navigation only — no new agent capabilities."
+  }
+}

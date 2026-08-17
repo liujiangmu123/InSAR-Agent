@@ -29,7 +29,8 @@
 | `src/insar_agent/audit/` | 证据阶梯、run_ok、阈值台账 | ⚠️ 只增阈值条目,不改判定逻辑 |
 | `src/insar_agent/report/` | 方法/结果/图注/全文/复现包/建议 | ⚠️ 已完备,原则上只接线 |
 | `src/insar_agent/api/*_router.py` | 22 个 HTTP router(见 `05-backend-capability-inventory.md`) | ✅ 少量新增端点 |
-| `prototype/` | 旧 Web UI(后端仍挂载) | ❌ 冻结,不投入 |
+| `desktop/pi-app-overlay/` | pi Desktop 工作台补丁镜像 | ✅ Desktop 工业化 |
+| `scripts/insar-pi-desktop.ps1` | 桌面产品启动器 | ✅ |
 | `workspace/realtest/` | **真实验收资产**(Ridgecrest audited run) | ❌ 只读,禁改禁删 |
 | `workspace/llm.json` | LLM 配置(git 忽略,唯一密钥真源) | ❌ 只读 |
 | `docs/` | 主项目设计文档(AGENT-DESIGN / AGENT-LOOP 等) | ⚠️ 只在 Phase 16 收口时补 |

@@ -83,7 +83,7 @@ CONVERSE_ACTION_TYPES = ("plan", "execute", "status", "check_env", "list_data",
                          "set_params", "set_method")
 
 #: cycle(自主循环)动作闭集 = converse 闭集 + 循环专属三动作;命名与
-#: prototype/js/agentloop.js 的 ACTION_META 十项对齐(事件契约,LOOP-CONTRACT §1)。
+#: 自主循环动作闭集十项(事件契约,LOOP-CONTRACT §1)。
 CYCLE_ACTION_TYPES = ("search_data", "inspect_file", "check_env", "list_data", "status",
                       "plan", "execute", "set_params", "set_method", "thinking",
                       "install_engine", "list_files",

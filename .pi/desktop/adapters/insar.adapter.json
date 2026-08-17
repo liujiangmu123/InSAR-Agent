@@ -2,7 +2,7 @@
   "$schema": "pi-desktop-adapter/v1",
   "id": "insar",
   "displayName": "InSAR Agent",
-  "description": "InSAR 全流程：规划/执行/监控、出图识图、报告与复现包。扩展真身在项目 .pi/extensions + pi-insar/。",
+  "description": "InSAR 全流程：规划/执行/监控、报告与复现包。右栏工作台：流水线/数据/图件。扩展真身在项目 .pi/extensions + pi-insar/。出图识图见独立 figures 适配器。",
   "match": {
     "names": [
       "insar",
@@ -18,7 +18,6 @@
       "insar_run_status",
       "insar_execute_run",
       "insar_resume",
-      "insar_view_figure",
       "insar_run_trace",
       "insar_preview_change",
       "insar_apply_change",
@@ -37,14 +36,14 @@
       "insar_recommend_route",
       "insar_read_skill",
       "insar_export_product",
-      "insar_vision_qa",
       "insar_report",
       "insar_figure_caption",
       "insar_repro_bundle",
       "insar_advise_next"
     ],
     "commands": [
-      "/insar-mode"
+      "/insar-mode",
+      "/insar"
     ]
   },
   "tier": "partial",
@@ -57,7 +56,10 @@
   "config": {
     "localKeys": [
       "apiBaseHint",
-      "showInlineFigures"
+      "session",
+      "showInlineFigures",
+      "homeDir",
+      "exportsDir"
     ],
     "sections": [
       {
@@ -68,14 +70,35 @@
             "type": "text",
             "label": "INSAR_API_BASE 提示",
             "default": "http://127.0.0.1:8873",
-            "description": "扩展读进程环境变量 INSAR_API_BASE；此处仅备忘。改端口请在启动脚本或系统环境里设，再重启 Desktop。"
+            "description": "扩展读进程环境变量 INSAR_API_BASE；此处仅备忘。改端口请在启动脚本或系统环境里设，再重启 Desktop。insar-read 右栏优先读此字段。"
+          },
+          {
+            "key": "session",
+            "type": "text",
+            "label": "监控 session",
+            "default": "@latest",
+            "description": "insar-read 右栏 GET {apiBaseHint}/api/monitor?session=，并并行拉 datasets / figures；空或 @latest 取本机最近活动会话。"
           },
           {
             "key": "showInlineFigures",
             "type": "boolean",
             "label": "时间线尽量内联图件",
             "default": true,
-            "description": "桌面本地开关；图件由 insar_view_figure 以 image content 返回。"
+            "description": "桌面本地开关；图件由 insar_view_figure 以 image content 返回（media 卡在 figures 适配器）。"
+          },
+          {
+            "key": "homeDir",
+            "type": "text",
+            "label": "INSAR_HOME（相对工作区或绝对路径）",
+            "default": "workspace",
+            "description": "openPath 打开此目录。进程环境变量 INSAR_HOME 优先。真实验收常用 workspace/realtest。"
+          },
+          {
+            "key": "exportsDir",
+            "type": "text",
+            "label": "复现包/导出目录",
+            "default": "pi-insar/exports",
+            "description": "openPath 打开此目录。进程环境变量 INSAR_EXPORT_DIR 优先。"
           }
         ],
         "i18n": {
@@ -96,31 +119,92 @@
           "countPath": "ok",
           "label": "ok"
         }
+      },
+      {
+        "id": "open-home",
+        "type": "openPath",
+        "label": "打开 INSAR_HOME",
+        "url": "${homeDir}"
+      },
+      {
+        "id": "open-sessions",
+        "type": "openPath",
+        "label": "打开会话/run 目录",
+        "url": "${homeDir}/sessions"
+      },
+      {
+        "id": "open-exports",
+        "type": "openPath",
+        "label": "打开导出目录",
+        "url": "${exportsDir}"
       }
     ],
-    "note": "InSAR 扩展随项目 .pi/ 自动加载。自由模式 /insar-mode free|strict。流水线真源是后端 /api/monitor，与 CLI 共用同一账本。",
+    "note": "InSAR 扩展随项目 .pi/ 自动加载。自由模式默认；/insar-mode strict 后仅 read 与 insar_* 可执行。右栏工作台经 insar-read 聚合 /api/monitor、/api/datasets、/api/figures。插件页三个 openPath 打开 INSAR_HOME、sessions、exports。",
     "i18n": {
       "zh": {
-        "note": "InSAR 扩展随项目 .pi/ 自动加载。自由模式 /insar-mode free|strict。流水线真源是后端 /api/monitor，与 CLI 共用同一账本。"
+        "note": "InSAR 扩展随项目 .pi/ 自动加载。自由模式默认；/insar-mode strict 后仅 read 与 insar_* 可执行。右栏工作台：流水线/数据/图件。插件页可打开 INSAR_HOME、sessions、exports。"
       },
       "en": {
-        "note": "InSAR loads via project .pi/. Use /insar-mode free|strict. Pipeline truth is GET /api/monitor, shared with CLI."
+        "note": "InSAR loads via project .pi/. Default free; /insar-mode strict allows only read + insar_*. Workbench side panel: pipeline / datasets / figures. Plugin page openPath: INSAR_HOME, sessions, exports."
       }
     }
   },
+  "sidePanel": {
+    "stateProvider": "insar-read",
+    "panelComponent": "insar-pipeline",
+    "panelId": "adapter:insar",
+    "label": "InSAR",
+    "description": "工作台：流水线/数据/图件（与 CLI 同一账本）",
+    "icon": "Activity",
+    "defaultEnabled": true,
+    "defaultActive": true
+  },
   "slash": {
-    "/insar-mode": "notify"
+    "/insar-mode": "notify",
+    "/insar": "open-panel"
   },
   "i18n": {
     "zh": {
       "displayName": "InSAR Agent",
-      "description": "InSAR 全流程：规划/执行/监控、出图识图、报告与复现包",
-      "actionLabels": { "health": "探测后端" }
+      "description": "InSAR 全流程：规划/执行/监控、报告与复现包。右栏工作台：流水线/数据/图件。出图识图见独立 figures 适配器。",
+      "actionLabels": {
+        "health": "探测后端",
+        "open-home": "打开 INSAR_HOME",
+        "open-sessions": "打开会话目录",
+        "open-exports": "打开导出目录"
+      },
+      "fieldLabels": {
+        "apiBaseHint": "INSAR_API_BASE 提示",
+        "session": "监控 session",
+        "showInlineFigures": "时间线尽量内联图件",
+        "homeDir": "INSAR_HOME",
+        "exportsDir": "导出目录"
+      },
+      "sidePanel": {
+        "label": "InSAR",
+        "description": "工作台：流水线/数据/图件（与 CLI 同一账本）"
+      }
     },
     "en": {
       "displayName": "InSAR Agent",
-      "description": "Full InSAR pipeline: plan/run/monitor, figures, report, repro bundle",
-      "actionLabels": { "health": "Health check" }
+      "description": "Full InSAR pipeline: plan/run/monitor, report, repro bundle. Workbench: pipeline / datasets / figures. Timeline figures live on a separate adapter.",
+      "actionLabels": {
+        "health": "Health check",
+        "open-home": "Open INSAR_HOME",
+        "open-sessions": "Open sessions folder",
+        "open-exports": "Open exports folder"
+      },
+      "fieldLabels": {
+        "apiBaseHint": "INSAR_API_BASE hint",
+        "session": "Monitor session",
+        "showInlineFigures": "Inline figures on timeline",
+        "homeDir": "INSAR_HOME",
+        "exportsDir": "Exports directory"
+      },
+      "sidePanel": {
+        "label": "InSAR",
+        "description": "Workbench: pipeline / datasets / figures (same ledger as CLI)"
+      }
     }
   }
 }

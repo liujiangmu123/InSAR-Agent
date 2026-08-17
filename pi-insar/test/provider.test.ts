@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   installProvider,
@@ -51,5 +54,47 @@ describe("insar-llm provider registration", () => {
 
   it("returns undefined for unreadable config paths", () => {
     expect(loadLlmConfig("Z:\\definitely\\missing\\llm.json")).toBeUndefined();
+  });
+
+  it("prefers INSAR_LLM_CONFIG over the repo-relative path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-insar-llm-"));
+    try {
+      const explicit = join(dir, "llm.json");
+      writeFileSync(explicit, "{}");
+      expect(locateLlmConfig({ INSAR_LLM_CONFIG: explicit }, dir)).toBe(explicit);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("walks up from cwd for workspace/llm.json when the repo path is absent", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-insar-llm-walk-"));
+    try {
+      const nested = join(root, "a", "b", "c");
+      mkdirSync(nested, { recursive: true });
+      mkdirSync(join(root, "workspace"));
+      const llm = join(root, "workspace", "llm.json");
+      writeFileSync(llm, "{}");
+      const missingRepo = join(root, "no-such-repo");
+      expect(locateLlmConfig({}, nested, missingRepo)).toBe(llm);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the repo-relative path over a cwd walk candidate", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-insar-llm-prio-"));
+    try {
+      const repo = join(root, "repo");
+      const cwd = join(root, "here");
+      mkdirSync(join(repo, "workspace"), { recursive: true });
+      mkdirSync(join(cwd, "workspace"), { recursive: true });
+      const repoLlm = join(repo, "workspace", "llm.json");
+      writeFileSync(repoLlm, "{}");
+      writeFileSync(join(cwd, "workspace", "llm.json"), "{}");
+      expect(locateLlmConfig({}, cwd, repo)).toBe(repoLlm);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

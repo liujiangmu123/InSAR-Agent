@@ -1,12 +1,6 @@
-"""界面诚实化(0814B W6)的 API 侧验收。
+"""界面诚实化: /api/runs 每条 run 附 simulated 布尔。
 
-两条红线:
-  1. 生产静态挂载不暴露演示资产 —— *-demo.html 与 v2-backup/ 一律 404
-     (文件保留在源码树,check 套件按文件读取不受影响);
-  2. /api/runs 每条 run 附 simulated 布尔 —— 前端 run 切换器据此渲染
-     「模拟」徽章,演示执行的产物绝不冒充真实运行。
-
-密封:probe 打空桩(不受宿主 PATH/conda 影响,引擎全缺 → run 必为
+演示执行的产物绝不冒充真实运行。密封:probe 打空桩(引擎全缺 → run 必为
 simulated),INSAR_HOME 指向 pytest tmp_path。
 """
 
@@ -15,7 +9,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from insar_agent.api.app import PROTOTYPE_DIR, create_app
+from insar_agent.api.app import create_app
 
 
 @pytest.fixture()
@@ -43,29 +37,7 @@ def _drain(client: TestClient, url: str, body: dict) -> None:
             pass
 
 
-# ---------------- 1. 演示资产不对外服务 ----------------
-
-@pytest.mark.parametrize("path", [
-    "/fail-demo.html",
-    "/setup-demo.html",
-    "/v2-backup/",
-    "/v2-backup/index.v2.html",
-])
-def test_demo_assets_404(client, path):
-    """演示页与旧版 UI 快照在 8873 上一律 404(UIStaticFiles 瘦身层)。"""
-    assert client.get(path).status_code == 404
-
-
-def test_real_ui_still_served(client):
-    """瘦身层只拦演示资产:真实 UI(index.html 与模块 js)照常服务。"""
-    if not PROTOTYPE_DIR.exists():
-        pytest.skip("无 UI 目录的部署形态(INSAR_UI_DIR 未指向源码树)")
-    assert client.get("/").status_code == 200
-    assert client.get("/index.html").status_code == 200
-    assert client.get("/js/app.js").status_code == 200
-
-
-# ---------------- 2. /api/runs 的 simulated 标记 ----------------
+# ---------------- /api/runs 的 simulated 标记 ----------------
 
 def test_runs_carry_simulated_flag(client):
     """每条 run 附 simulated 布尔;空引擎密封环境下必为 True。"""

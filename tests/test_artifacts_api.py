@@ -4,7 +4,7 @@
   - 按步骤分组的结构:steps 升序、组内产物按 artId 升序、步骤名/方法来自
     steps 表、无产物的步骤不出组;
   - 字段清单钉死(防漂移):顶层/步骤/产物三层的键集合与
-    prototype/js/fileslive.js 逐字段读取一一对应;
+    本文件钉死的键集合一一对应;
   - fp 回三段完整编码(policy:algo:digest),不缩写;
   - size/mtime 落盘实测优先,文件缺失回落 DB 记录并标 exists=False;
     目录型产物沿用执行器口径(size/mtime 记 None);

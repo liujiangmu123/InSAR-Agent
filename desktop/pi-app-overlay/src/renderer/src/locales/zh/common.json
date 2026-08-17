@@ -1,0 +1,173 @@
+{
+  "app": {
+    "name": "InSAR Agent",
+    "status": {
+      "idle": "空闲",
+      "ready": "就绪",
+      "running": "运行中",
+      "failed": "失败"
+    }
+  },
+  "sidebar": {
+    "sessions": "会话列表",
+    "settings": "设置",
+    "openProject": "打开文件夹",
+    "tempChat": "临时对话",
+    "newTempChat": "新建临时对话",
+    "newChat": "新对话",
+    "clickToAdd": "点 + 新建",
+    "removeProjectConfirm": "从列表移除项目「{{name}}」？文件夹不会被删除。",
+    "removeFailed": "移除失败",
+    "removed": "已从列表移除",
+    "removeFromList": "从列表移除",
+    "revealInExplorer": "在资源管理器中显示",
+    "revealFailed": "无法打开路径",
+    "noSessions": "无会话",
+    "toggleSubagents": "展开或收起 {{title}} 的子 Agent",
+    "openSubagentSession": "打开 {{agent}} 子 Agent 会话",
+    "subagentSessionUnavailable": "{{agent}} 子 Agent 会话暂不可查看",
+    "conversations": "对话",
+    "firstMsgIsTitle": "首条消息即标题",
+    "projects": "项目",
+    "rename": "重命名",
+    "delete": "删除",
+    "renamed": "已重命名",
+    "renameFailed": "重命名失败",
+    "renameTempChat": "重命名临时对话",
+    "renameSession": "重命名会话",
+    "renameMissingFile": "无法重命名：缺少会话文件路径",
+    "deleted": "已删除",
+    "deleteFailed": "删除失败",
+    "deleteMissingFile": "无法删除：缺少会话文件路径",
+    "deleteSessionConfirm": "删除会话「{{name}}」？对应的 pi 会话文件将永久删除。",
+    "deleteConfirm": "删除「{{name}}」？目录与 pi 会话将一并移除。"
+  },
+  "composer": {
+    "placeholder": "消息或 / 命令",
+    "send": "发送",
+    "stop": "停止",
+    "selectProjectFirst": "请先打开项目"
+  },
+  "panel": {
+    "review": "Review",
+    "trellis": "Trellis",
+    "run": "Run",
+    "context": "Context",
+    "tree": "Tree",
+    "files": "文件",
+    "reviewDesc": "Git 变更与 diff（只读）",
+    "runDesc": "当前轮次状态与用量",
+    "contextDesc": "会话上下文预览",
+    "treeDesc": "会话树 / 回退（同 /tree）",
+    "filesDesc": "工作区文件预览与浏览",
+    "unregistered": "未注册面板: {{id}}"
+  },
+  "settings": {
+    "title": "设置",
+    "general": "常规",
+    "appearance": "外观",
+    "pi": "Pi",
+    "extensions": "插件",
+    "resources": "资源",
+    "diagnostics": "诊断",
+    "theme": {
+      "light": "浅色",
+      "dark": "深色",
+      "system": "跟随系统"
+    }
+  },
+  "timeline": {
+    "placeholder": "发一条消息开始",
+    "emptyWorkspace": "打开文件夹，或「对话」里新建临时对话",
+    "loadOlder": "上滑或点此加载更早消息",
+    "loadingSession": "加载会话…"
+  },
+  "review": {
+    "scope": {
+      "turn": "本轮",
+      "session": "本对话",
+      "git": "Git 工作区"
+    },
+    "empty": "暂无文件变更",
+    "copyPath": "复制路径"
+  },
+  "topbar": {
+    "project": "当前项目",
+    "session": "当前会话",
+    "back": "返回",
+    "expandSidebar": "展开侧边栏",
+    "collapseSidebar": "收起侧边栏",
+    "expandRightPanel": "展开右侧面板",
+    "collapseRightPanel": "收起右侧面板",
+    "insarWorkbench": "InSAR 工作台"
+  },
+  "home": {
+    "whatToDoInBefore": "要在",
+    "whatToDoInAfter": "中做什么？",
+    "selectProject": "选择项目",
+    "newChat": "新对话",
+    "hintWithProject": "输入消息开始新对话，或从左侧选择历史会话",
+    "hintNoProject": "直接输入开始对话，或点上方选择项目文件夹",
+    "pickerTitle": "选择项目",
+    "noRecentProjects": "暂无最近项目",
+    "openOtherFolder": "打开其他文件夹…",
+    "firstMsgIsTitle": "首条消息即对话标题"
+  },
+  "save": "保存",
+  "saving": "保存中…",
+  "saveFailed": "保存失败",
+  "settingsSaved": "设置已保存",
+  "unsavedChanges": "有未保存的更改",
+  "allChangesSaved": "所有更改已保存",
+  "discard": "放弃更改",
+  "reverted": "已还原为上次保存",
+  "operationFailed": "操作失败",
+  "reload": "重新加载",
+  "refresh": "刷新",
+  "loading": "加载中…",
+  "cancel": "取消",
+  "confirm": "确定",
+  "close": "关闭",
+  "back": "返回",
+  "error": "错误",
+  "retry": "重试",
+  "newSession": "新会话",
+  "loadingSettings": "加载设置…",
+  "resetToDefault": "恢复默认",
+  "errorBoundary": {
+    "renderFailed": "渲染失败",
+    "unknown": "未知错误"
+  },
+  "window": {
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "restore": "还原",
+    "close": "关闭"
+  },
+  "sessionReload": {
+    "success": "已刷新会话数据",
+    "failed": "刷新失败",
+    "title": "刷新会话数据（与 CLI 同步）"
+  },
+  "commandPalette": {
+    "title": "命令面板",
+    "placeholder": "输入命令…",
+    "empty": "无匹配命令",
+    "footer": "↑↓ 选择 · Enter 执行 · Esc 关闭",
+    "close": "关闭",
+    "settings": "打开设置",
+    "focusComposer": "聚焦输入框",
+    "openPanel": "打开 {{panel}} 面板",
+    "sessionTree": "打开会话树",
+    "shortcuts": "键盘快捷键"
+  },
+  "shortcuts": {
+    "title": "键盘快捷键",
+    "commandPalette": "打开命令面板",
+    "thisSheet": "显示本快捷键列表",
+    "sessionTree": "打开会话树浮层",
+    "restoreQueue": "将排队消息拉回输入框",
+    "stopOrDismiss": "停止运行 / 关闭浮层",
+    "navOnly": "仅导航 — 不新增 Agent 能力。"
+  }
+}

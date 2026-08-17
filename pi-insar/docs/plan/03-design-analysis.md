@@ -28,10 +28,9 @@
 - **系统提示注入**:`--append-system-prompt <文件路径>` 合法(已核实 args.ts:259 "Append text or file contents"),启动器现状正确,保持。
 - **上游升级影响**:所有定制走官方扩展点(registerProvider/registerTool/registerFlag/registerCommand/on/ui.setWidget/ui.setStatus/--theme),升级时唯二需要人工核对的是 **主题 token 清单是否新增**(themes.md)与 **扩展 API 签名 typecheck**。见 `43-appendix-pi-upgrade.md`。
 
-## 1.3 TUI 侧栏与 prototype/ Web UI 的关系
+## 1.3 产品界面
 
-- pi TUI 是唯一主交互面(Q3 决议)。`prototype/` 仍由后端挂载,定位降级为"后端自带的只读观测台"(调试看图用),**不再投入开发**,也不删除(删除是无收益的破坏性动作,且其静态文件不影响 pi 拓扑)。
-- 两者读同一后端、同一 SQLite,无状态冲突。TUI 看图的正解不是复活 Web UI,而是 `insar_view_figure` 工具把真实 run 产物图以 base64 内联进 pi 会话(pi 工具结果支持 `{type:"image"}` 内容块,已核实)。
+产品界面是 **pi Desktop**(左会话 / 中对话 / 右 InSAR 工作台只读)。旧网页 `prototype/` 与 Tauri 壳已删除,不再挂载、不再投入。操作只走对话里的 `insar_*` 工具,右栏不提供执行按钮。
 
 ## 1.4 远程会话 / pi-chat / MCP:均不做
 

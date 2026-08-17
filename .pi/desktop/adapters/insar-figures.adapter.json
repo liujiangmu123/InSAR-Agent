@@ -1,0 +1,31 @@
+{
+  "$schema": "pi-desktop-adapter/v1",
+  "id": "figures",
+  "displayName": "InSAR Figures",
+  "description": "insar_view_figure / insar_vision_qa 时间线 media 卡。不认领扩展包名，避免 applyPackageOverrides 整份替换主 adapter。流水线配置与右栏见 InSAR Agent。",
+  "match": {
+    "names": [
+      "figures"
+    ],
+    "tools": [
+      "insar_view_figure",
+      "insar_vision_qa"
+    ]
+  },
+  "tier": "partial",
+  "toolCard": {
+    "template": "media",
+    "icon": "Image",
+    "statusField": "$.output.text"
+  },
+  "i18n": {
+    "zh": {
+      "displayName": "InSAR 图件",
+      "description": "insar_view_figure / insar_vision_qa 时间线媒体卡。不认领扩展包名。流水线配置与右栏见 InSAR Agent。"
+    },
+    "en": {
+      "displayName": "InSAR Figures",
+      "description": "Media tool cards for insar_view_figure and insar_vision_qa. Does not claim the extension package. Pipeline config and side panel live on InSAR Agent."
+    }
+  }
+}

@@ -25,8 +25,8 @@
                状态与命令账本零漂移
 
 发现并小修的 bug(注明,修改在 src/insar_agent/loop/driver.py):
-    「假重跑」P1 —— UI 的改参重跑是两连发(prototype/js/backend.sse.js:
-    syncConfig 先排队 SET_PARAMS(steer),runPipeline 再显式 step_ids 执行)。
+    「假重跑」P1 —— 改参重跑是两连发(先排队 SET_PARAMS(steer),再显式
+    step_ids 执行)。
     steer 在首步检查点才被消费,而入口复位 pass 用的是消费前快照:被标脏的
     done 步骤 stage 仍停在 VERIFIED,五阶段幂等守卫把重跑空转成 no-op ——
     步骤卡照发 tool.end/step.end(exit 0),命令数却为 0,结果仍是旧配置,

@@ -1,0 +1,153 @@
+/* InSAR workbench tokens — scoped. Visual language from prototype tokens/rail (observation only). */
+
+.insar-panel {
+  --insar-ok: #159a46;
+  --insar-ok-weak: #f0fdf4;
+  --insar-ok-border: #bbf7d0;
+  --insar-ok-text: #15803d;
+  --insar-run: #2563eb;
+  --insar-run-weak: #eff6ff;
+  --insar-run-border: #bfdbfe;
+  --insar-run-text: #1d4ed8;
+  --insar-bad: #dc2626;
+  --insar-bad-weak: #fef2f2;
+  --insar-bad-border: #fecaca;
+  --insar-bad-text: #b91c1c;
+  --insar-stale: #ca4c0a;
+  --insar-stale-weak: #fff7ed;
+  --insar-stale-border: #fed7aa;
+  --insar-stale-text: #9a3412;
+  --insar-pend: #616a78;
+  --insar-pend-weak: #f1f2f4;
+  --insar-pend-border: #d3d7dd;
+  --insar-pend-text: #4b5563;
+  --insar-kind-hyp3: #2563eb;
+  --insar-kind-alos: #7c3aed;
+  --insar-kind-slc: #0f766e;
+  --insar-kind-dem: #a16207;
+  --insar-kind-unknown: #616a78;
+}
+
+.dark .insar-panel {
+  --insar-ok: #4ade80;
+  --insar-ok-weak: #052e16;
+  --insar-ok-border: #166534;
+  --insar-ok-text: #86efac;
+  --insar-run: #60a5fa;
+  --insar-run-weak: #172554;
+  --insar-run-border: #1e40af;
+  --insar-run-text: #93c5fd;
+  --insar-bad: #f87171;
+  --insar-bad-weak: #450a0a;
+  --insar-bad-border: #991b1b;
+  --insar-bad-text: #fca5a5;
+  --insar-stale: #fb923c;
+  --insar-stale-weak: #431407;
+  --insar-stale-border: #9a3412;
+  --insar-stale-text: #fdba74;
+  --insar-pend: #94a3b8;
+  --insar-pend-weak: #1e293b;
+  --insar-pend-border: #334155;
+  --insar-pend-text: #cbd5e1;
+  --insar-kind-hyp3: #60a5fa;
+  --insar-kind-alos: #c4b5fd;
+  --insar-kind-slc: #5eead4;
+  --insar-kind-dem: #facc15;
+  --insar-kind-unknown: #94a3b8;
+}
+
+.insar-panel .insar-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--insar-pend-border);
+  background: transparent;
+  color: var(--insar-pend-text);
+}
+.insar-panel .insar-chip b { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.insar-panel .insar-chip.zero { opacity: 0.45; }
+.insar-panel .insar-chip.is-done b { color: var(--insar-ok-text); }
+.insar-panel .insar-chip.is-running { border-color: var(--insar-run-border); }
+.insar-panel .insar-chip.is-running b { color: var(--insar-run-text); }
+.insar-panel .insar-chip.is-failed { border-color: var(--insar-bad-border); background: var(--insar-bad-weak); }
+.insar-panel .insar-chip.is-failed b { color: var(--insar-bad-text); }
+.insar-panel .insar-chip.is-stale { border-color: var(--insar-stale-border); background: var(--insar-stale-weak); }
+.insar-panel .insar-chip.is-stale b { color: var(--insar-stale-text); }
+.insar-panel .insar-chip.is-skipped b { color: var(--insar-ok-text); }
+.insar-panel .insar-chip.is-evidence { border-color: var(--insar-ok-border); color: var(--insar-ok-text); }
+.insar-panel .insar-chip.is-sim { border-color: var(--insar-stale-border); background: var(--insar-stale-weak); color: var(--insar-stale-text); }
+
+.insar-panel .insar-banner-sim {
+  font-size: 11px;
+  padding: 4px 10px;
+  background: var(--insar-stale-weak);
+  color: var(--insar-stale-text);
+  border-bottom: 1px solid var(--insar-stale-border);
+}
+
+.insar-panel .insar-node {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--insar-pend-border);
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.insar-panel .insar-node.is-done { background: var(--insar-ok); border-color: var(--insar-ok); color: #fff; }
+.insar-panel .insar-node.is-failed { background: var(--insar-bad); border-color: var(--insar-bad); color: #fff; }
+.insar-panel .insar-node.is-stale { background: var(--insar-stale); border-color: var(--insar-stale); color: #fff; }
+.insar-panel .insar-node.is-skipped {
+  background: transparent;
+  border-color: var(--insar-ok);
+  border-style: dashed;
+  color: var(--insar-ok-text);
+}
+.insar-panel .insar-node.is-pending { background: transparent; color: var(--insar-pend-text); }
+.insar-panel .insar-node.is-running {
+  background: var(--insar-run-weak);
+  border-color: var(--insar-run);
+  color: var(--insar-run-text);
+  animation: insar-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes insar-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 3px var(--insar-run-border); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .insar-panel .insar-node.is-running { animation: none; }
+}
+
+.insar-panel .insar-kind {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--insar-pend-border);
+}
+.insar-panel .insar-kind.hyp3 { color: var(--insar-kind-hyp3); border-color: var(--insar-kind-hyp3); }
+.insar-panel .insar-kind.alos_raw { color: var(--insar-kind-alos); border-color: var(--insar-kind-alos); }
+.insar-panel .insar-kind.slc_stack { color: var(--insar-kind-slc); border-color: var(--insar-kind-slc); }
+.insar-panel .insar-kind.dem { color: var(--insar-kind-dem); border-color: var(--insar-kind-dem); }
+.insar-panel .insar-kind.unknown { color: var(--insar-kind-unknown); }
+
+.insar-panel .insar-tab {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--insar-pend-text);
+}
+.insar-panel .insar-tab.is-on {
+  background: var(--insar-run-weak);
+  color: var(--insar-run-text);
+}

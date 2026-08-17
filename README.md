@@ -1,30 +1,38 @@
 # insar-agent
 
-<!-- CI 徽章占位:推送到 GitHub 后把 OWNER/REPO 换成真实仓库路径即点亮(工作流已就位:ci.yml / desktop.yml) -->
 [![ci](https://github.com/liujiangmu123/InSAR-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/liujiangmu123/InSAR-Agent/actions/workflows/ci.yml)
 
 可复现 InSAR 科学工作流 Agent:**参数级失效传播 + 步级断点续跑 + 完整 provenance**。
+
+产品界面是 **pi Desktop**(左会话 / 中对话 / 右 InSAR 工作台只读)。中栏对话是唯一操作面,31 个 `insar_*` 工具接到 Python FastAPI 内核;右栏只展示流水线状态、数据集和图件,不提供执行按钮。旧网页 `prototype/` 与 Tauri 壳已删除。
 
 ## 文档索引
 
 | 文档 | 内容 |
 |---|---|
-| `docs/USER-GUIDE.md` | **用户手册(研究者向,中文)**:五分钟上手/核心概念/功能手册/场景/排障 |
-| `docs/FEATURES-2026-08-13.md` | 2026-08-13 波次交付清单(功能/入口/一句话,含已知缺口) |
-| `docs/DESIGN.md` | 产品定稿:novelty、11 步 × 方法矩阵、桥梁地图、竞品分析 |
-| `docs/AGENT-DESIGN.md` | 架构定稿:七条硬约束 → 分层/五阶段执行器/指纹/SQLite/UI |
-| `docs/AGENT-LOOP.md` | 自主循环设计定稿(2026-08-14 波次):动机/事件契约/状态机/终止闭集/红线/降级矩阵 |
-| `docs/VALIDATION-isce2-wsl.md` | 最新实测:ISCE2 WSL 全链(ALOS Baja 同震对,2026-08-12 跑通) |
-| `reference/AGENT_PRODUCTS_LEARNING.md` | codex/gemini-cli/OpenHands/cline + snakemake/dvc 定向调研(absorb-E~P) |
-| `reference/COMPARISON_LEARNING.md` | redun/aiida/agentic-swmm 等对照学习(absorb-A~D) |
-| `reference/PI_FRAMEWORK_ANALYSIS.md` | pi 框架对标与吸收决议(absorb-E1~E8) |
-| `docs/PI-REAL-SESSION.md` | pi 真实数据走查手册(Ridgecrest audited 读回;重型新 run 须批准) |
-| `pi-insar/README.md` | pi 对话外壳:Windows 入口、工具面、与 Python 内核的接线 |
-| `pi-insar/docs/plan/00-README.md` | pi-insar 全流程交付计划(Phase 01-16)索引 |
+| `docs/DESIGN.md` | 产品定稿:novelty、11 步 × 方法矩阵、桥梁地图 |
+| `docs/AGENT-DESIGN.md` | 架构定稿:硬约束、分层、五阶段执行器、指纹、SQLite |
+| `docs/AGENT-LOOP.md` | 自主循环:事件契约、状态机、终止闭集、红线 |
+| `docs/LOOP-CONTRACT.md` | 自主循环开发契约(动作闭集) |
+| `docs/VALIDATION-isce2-wsl.md` | ISCE2 WSL 全链实测(ALOS Baja 同震对) |
+| `docs/WSL-SETUP.md` | WSL 引擎环境 |
+| `docs/PI-REAL-SESSION.md` | 真实数据走查(Ridgecrest audited 读回;重型新 run 须批准) |
+| `pi-insar/README.md` | 对话外壳:Windows 入口、工具面、与内核接线 |
+| `pi-insar/docs/plan/00-README.md` | 全流程交付计划索引 |
+| `desktop/README.md` | pi Desktop overlay 同步 |
 
-## pi-insar(对话外壳)
+## 怎么跑
 
-pi 是顶层 TUI;本仓库 `pi-insar/` 把 **31** 个 `insar_*` 工具接到既有 Python FastAPI 内核,不改可复现科学账本。Windows 入口:`pwsh scripts/insar-backend-real.ps1`(终端 A)然后 `pwsh scripts/insar-pi.ps1`(终端 B)。真实走查见 [`docs/PI-REAL-SESSION.md`](docs/PI-REAL-SESSION.md)。分析 run(掩膜 / 升降轨分解 / 预测 / 反演桥,步 20–28)与 6 个场景包的用法见 [`pi-insar/README.md`](pi-insar/README.md)。不要未经批准跑 `scripts/real_ridgecrest.py`。
+终端 A 起内核,终端 B 起桌面:
+
+```powershell
+pwsh scripts/insar-backend-real.ps1
+pwsh scripts/insar-pi-desktop.ps1
+```
+
+仅 TUI(不要桌面壳)时,终端 B 改用 `pwsh scripts/insar-pi.ps1`。真实走查见 [`docs/PI-REAL-SESSION.md`](docs/PI-REAL-SESSION.md)。分析 run(掩膜 / 升降轨分解 / 预测 / 反演桥,步 20–28)与场景包见 [`pi-insar/README.md`](pi-insar/README.md)。不要未经批准跑 `scripts/real_ridgecrest.py`。
+
+内核只提供 API(`http://127.0.0.1:8873`)。浏览器打开根路径得到 JSON 指引,不是产品界面。LLM 密钥只存本机 `workspace/llm.json`(pi Desktop 经 `insar-llm` 供应商读取);不配则规划走规则路径。
 
 ## 特性(全部有测试守护)
 
@@ -44,70 +52,30 @@ pi 是顶层 TUI;本仓库 `pi-insar/` 把 **31** 个 `insar_*` 工具接到既�
 - **run fork(参数试探分支)**:改第 6 步方法 → 1-5 步零重算复用父 run 产物,6-11 重跑。
 - **Brain 可整层拔除**:intent/select/triage/narrate/cycle 全部有无-LLM 降级路径;
   LLM 只做候选集内选择题(枚举索引),越界拒绝,截断整体拒绝,润色不许动数字。
-- **受约束的自主循环**(2026-08-14 波次):一个回合内 Agent 连续多周期工作——
+- **受约束的自主循环**:一个回合内 Agent 连续多周期工作——
   单周期单决策,动作白名单闭集,周期上限(默认 6,可调 1-12)+同签名熔断+审批门内置;
   execute 永远只产生确认卡绝不自启流水线;brain 拔除/无密钥时整回合退回单步路径
-  (设计 `docs/AGENT-LOOP.md`,用法 [§3.14](docs/USER-GUIDE.md#314-自主循环与联网检索);
-  守护测试 `tests/test_api_loop*.py`、`tests/test_brain_cycle.py`、`tests/test_net_search.py`、
-  `tests/test_subtasks.py` 等本波测试组,单步零回归由 `tests/test_converse.py` 锁死)。
-- **诚实模拟模式**:引擎缺失(本机无 WSL)时可走合成执行演示全流程,
+  (设计 `docs/AGENT-LOOP.md`;守护 `tests/test_api_loop*.py`、`tests/test_brain_cycle.py`、
+  `tests/test_net_search.py`、`tests/test_subtasks.py`,单步零回归由 `tests/test_converse.py` 锁死)。
+- **诚实模拟模式**:引擎缺失时可走合成执行演示全流程,
   日志/产物/账本全程显式标注 simulated,证据封顶 runnable。
 
-### 界面与体验(2026-08-13 波次,用法详见 [docs/USER-GUIDE.md](docs/USER-GUIDE.md))
-
-- **模型接入设置**:顶栏「模型」填密钥→获取模型→选对话/识图→测试;密钥只存本机([§3.1](docs/USER-GUIDE.md#31-模型接入设置))
-- **首访引导**:五步聚光灯,「?」按钮随时重看([§3.2](docs/USER-GUIDE.md#32-首访引导))
-- **斜杠命令**:输入框 `/` 触发,10 命令带候选补全与本地校验([§3.3](docs/USER-GUIDE.md#33-斜杠命令))
-- **干预回执卡**:每次操作的状态机回执(已记录→已入队→已生效)([§3.4](docs/USER-GUIDE.md#34-干预回执卡))
-- **计划 diff 卡**:重规划时行级标出新增/移除/方法/参数变化([§3.5](docs/USER-GUIDE.md#35-计划卡与计划更新对比))
-- **步骤技能面板**:每步「本步技能」五章节领域知识,失败自动展开处置([§3.6](docs/USER-GUIDE.md#36-步骤技能面板))
-- **影像双图对比**:卷帘/闪烁/并排三模式,A/B 点选([§3.7](docs/USER-GUIDE.md#37-影像双图对比))
-- **provenance 账本浏览**:证据树 + 干预时间线 + 论文引用块一键复制([§3.8](docs/USER-GUIDE.md#38-证据账本浏览与论文引用块))
-- **一键体检**:环境页六大类 21 项只读检查,异常带处置([§3.9](docs/USER-GUIDE.md#39-一键体检))
-- **诊断包导出**:失败日志+环境+DB 摘要打 zip,脱敏([§3.10](docs/USER-GUIDE.md#310-诊断包导出))
-- **运行队列**:run 级持久 FIFO 串行调度(并发=1,重启恢复)+ 消息排队 chip([§3.11](docs/USER-GUIDE.md#311-排队消息与运行))
-- **窄屏适配**:单栏/抽屉/细条三档响应式([§3.12](docs/USER-GUIDE.md#312-窄屏与分屏适配))
-- **MCP 接入**:8 工具暴露给 Claude Desktop / Cursor(见下节)([§3.13](docs/USER-GUIDE.md#313-mcp-接入))
-
-## 快速开始
+## 开发与测试
 
 ```powershell
-# 推荐:虚拟环境 + 可编辑安装
 python -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"        # 跑测试足够;真实 qa/出图另加 raster:".[dev,raster]"
-.venv\Scripts\python -m pytest tests/ -q     # 215 项测试(2026-08-12 全绿)
-.venv\Scripts\python scripts\check_frontend.py  # 前端质量门一键:JS 单测 + *.check.mjs + CSS/a11y 质检
-                                             # (零 npm 依赖;--only 名 可只跑单套件)
-.venv\Scripts\python scripts\check_desktop.py   # 桌面冻结包完整性矩阵一键:dist 缺失先构建,再 pytest -m desktop
-                                             # (功能矩阵与手工核验清单见 docs/DESKTOP-PARITY.md;--rebuild 强制重建)
+.venv\Scripts\python -m pytest tests/ -q
 
-# 机器高负载时(多代理并行开发/后台大任务):时序敏感用例(@pytest.mark.timing,
-# 心跳/双超时/宽限判定窗)可能被拖慢误判 —— 设系数放宽判定窗(断言语义不变):
+# 机器高负载时,时序敏感用例(@pytest.mark.timing)可能被拖慢误判 —— 设系数放宽判定窗:
 $env:INSAR_TEST_TIME_FACTOR = "3"
-.venv\Scripts\python -m pytest tests/ -q -m timing       # 只跑时序敏感组
-.venv\Scripts\python -m pytest tests/ -q -m "not timing" # 只跑常规组(CI 常规 job 同款)
-# 负载模拟验证(2 个忙循环进程占 ~50% 核 60s 自灭 × timing 组 3 遍):
+.venv\Scripts\python -m pytest tests/ -q -m timing
+.venv\Scripts\python -m pytest tests/ -q -m "not timing"
 .venv\Scripts\python scripts\stress_test_timing.py
-.venv\Scripts\python -m insar_agent.api.app  # http://127.0.0.1:8873(UI + API)
 
-# 可选:装 pre-commit 提交钩子(ruff / 尾空格 / EOF / YAML / CSS 质检,配置见 .pre-commit-config.yaml)
+# 可选:pre-commit(ruff / 尾空格 / EOF / YAML)
 .venv\Scripts\python.exe -m pip install pre-commit
 .venv\Scripts\pre-commit.exe install
-
-# 备选:不安装也能跑(tests/conftest.py 把 src 插入 sys.path;需全局 pytest)
-python -m pytest tests/ -q
-```
-
-浏览器打开 http://127.0.0.1:8873 ,先点顶栏「模型」配置 LLM(填密钥→获取模型→
-选对话/识图模型→测试→保存;密钥只存本机 workspace/llm.json,不配则规划走规则路径),
-再输入「Ridgecrest 地震同震形变」→ 确认执行。
-后端不可达或 file:// 打开时,前端自动回退到 mock 演示模式。
-
-只看原型(纯静态,零依赖,不起后端):
-
-```powershell
-cd prototype
-python -m http.server 8000              # 浏览器开 http://127.0.0.1:8000
 ```
 
 环境变量:
@@ -119,29 +87,27 @@ python -m http.server 8000              # 浏览器开 http://127.0.0.1:8000
 | `INSAR_ALLOW_SIMULATED` | 引擎缺失时允许模拟执行 | `1` |
 | `INSAR_LLM_BASE_URL` / `INSAR_LLM_API_KEY` / `INSAR_LLM_MODEL` | LLM(OpenAI 兼容);不配 = brain 禁用,手动流水线 | 无 |
 | `INSAR_LLM_FALLBACK_*` | 单跳备用路由 | 无 |
-| `INSAR_TAVILY_KEY` | 自主循环联网检索:配置后网页检索优先走 Tavily(net 层) | 无(用免密钥端点) |
-| `INSAR_ASF_SEARCH_BASE` / `INSAR_WEBSEARCH_BASE` / `INSAR_TAVILY_BASE` | 覆盖 ASF/网页/Tavily 检索基址(net 层;测试用它指向本地 mock 保持离线) | ASF / DuckDuckGo / Tavily 官方端点 |
-| `INSAR_TEST_TIME_FACTOR` | 仅测试:时序判定窗放宽系数(高负载并行开发用 3;产品超时语义不受影响) | `1` |
+| `INSAR_TAVILY_KEY` | 自主循环联网检索:配置后网页检索优先走 Tavily | 无(用免密钥端点) |
+| `INSAR_ASF_SEARCH_BASE` / `INSAR_WEBSEARCH_BASE` / `INSAR_TAVILY_BASE` | 覆盖检索基址(测试指向本地 mock) | 官方端点 |
+| `INSAR_TEST_TIME_FACTOR` | 仅测试:时序判定窗放宽系数 | `1` |
 
-## MCP server(Claude Desktop / Cursor 接入)
+## MCP server(可选)
 
-把本代理暴露为 MCP 工具集(会话/规划/执行/轮询/干预/溯源/图件),宿主 LLM 可直接驱动 InSAR 处理:
+内核也可暴露为 MCP 工具集。产品主路径仍是 pi Desktop 的 `insar_*` 闭集,不把 MCP 当作闸门旁的洞。
 
 ```powershell
-.venv\Scripts\pip install -e ".[mcp]"        # 官方 mcp SDK(>=2.0)+ httpx
-.venv\Scripts\python -m insar_agent.api.app  # 先起后端(MCP server 是它的 HTTP 薄包装)
-.venv\Scripts\python -m insar_agent.mcp     # stdio transport(宿主通常以子进程拉起,无需手动跑)
+.venv\Scripts\pip install -e ".[mcp]"
+.venv\Scripts\python -m insar_agent.api.app
+.venv\Scripts\python -m insar_agent.mcp
 ```
 
-工具清单、Claude Desktop / Cursor 的 mcpServers 配置示例与典型对话流程见
-[src/insar_agent/mcp/README.md](src/insar_agent/mcp/README.md);后端基址用环境变量
-`INSAR_API_BASE` 覆盖(默认 `http://127.0.0.1:8873`),验收测试见 `tests/test_mcp_server.py`。
+工具清单与宿主配置见 [src/insar_agent/mcp/README.md](src/insar_agent/mcp/README.md);基址 `INSAR_API_BASE`(默认 `http://127.0.0.1:8873`),验收 `tests/test_mcp_server.py`。
 
 ## 目录结构
 
 ```
-docs/            设计文档:DESIGN.md(产品)+ AGENT-DESIGN.md(架构)
-reference/       竞品与开源框架学习报告(absorb 决议台账)
+.pi/             Desktop 适配器(工作台默认打开)
+docs/            设计与实测:DESIGN / AGENT-DESIGN / AGENT-LOOP / VALIDATION
 src/insar_agent/
 ├── registry/    纯数据:11 步能力声明(方法/参数分类/产物候选/run_ok/超时/replay)
 ├── planner/     可行性收窄(带理由)→ 打分 → 计划/fork
@@ -149,14 +115,17 @@ src/insar_agent/
 ├── runtime/     作业目录契约(local/wsl)/双超时日志流/五阶段执行器/产物发现/环境探测
 ├── audit/       contract.yaml 阈值台账/run_ok 双判定/指标重解析/六级证据阶梯
 ├── brain/       LLM 门面(可拔除):intent/select/triage/narrate
-├── loop/        自主循环核心:事件驱动 driver(单步 turn + 多周期 converse_loop)/事件总线(监听隔离)/上下文预算/子任务池
-├── net/         联网检索薄层(纯 stdlib):ASF 归档检索/网页检索/并行扇出;只出查询词,凭据不进日志
-├── engines/     薄封装零决策:mintpy(--dostep) / isce2 / snaphu / pystamps / hyp3 / simulate
-│   └── bridges/ prep_isce(官方)+ isce2_to_pystamps(Phase 6,诚实接口边界)
+├── loop/        自主循环:事件驱动 driver / 事件总线 / 上下文预算 / 子任务池
+├── net/         联网检索薄层:ASF / 网页 / 并行扇出;只出查询词
+├── engines/     薄封装零决策:mintpy / isce2 / snaphu / pystamps / hyp3 / simulate
+│   └── bridges/ prep_isce + isce2_to_pystamps(诚实接口边界)
 ├── report/      run.sh 等价命令 / 方法章节模板
 └── api/         FastAPI:NDJSON 回合流 + SSE + 干预/预览/fork/导出
-prototype/       Web UI(零依赖);backend.sse.js 接真后端,mock 保留为离线演示
-tests/           215 项:哈希坑/幂等重放/reattach/孤儿/取消/超时/级联标脏/契约纪律/拔除守护/API
+pi-insar/        pi 扩展:31 个 insar_* 工具、守卫、技能、计划文档
+desktop/         仅 pi-app-overlay(壳补丁镜像);同步 scripts/sync-pi-app-overlay.ps1
+scripts/         启动器:insar-backend-real / insar-pi-desktop / insar-pi
+workspace/       INSAR_HOME:账本、会话、llm.json、真实验收数据
+tests/           契约/执行器/失效传播/Brain/API(不含旧网页 UI)
 ```
 
 ## Phase 状态
@@ -168,7 +137,7 @@ tests/           215 项:哈希坑/幂等重放/reattach/孤儿/取消/超时/�
 | 2 失效传播 | 级联标脏 + 原因分类 + 干预队列 | 完成 |
 | 3 审计 | contract.yaml / 证据阶梯 / provenance / run.sh | 完成 |
 | 4 Brain | intent/select/triage/narrate(可拔除有守护测试) | 完成 |
-| 5 API + 前端 | FastAPI + NDJSON/SSE + backend.sse.js | 完成 |
+| 5 API | FastAPI + NDJSON/SSE | 完成 |
 | 6 桥 | isce2_to_pystamps(主 novelty) | **接口边界,未实现**(需真值环境) |
 
 ## 真实数据验收(2026-08-12,Windows 原生,无 WSL)

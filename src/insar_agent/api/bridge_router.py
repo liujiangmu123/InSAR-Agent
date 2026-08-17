@@ -7,6 +7,8 @@ InSAR 能力作 pi 扩展经 HTTP 调本后端。本 router 提供扩展**新增
 - GET  /api/monitor  —— 侧边栏"被监控的流程"数据契约:11 步 × 五阶段 + 当前步 +
   进度 + 证据级 + 自由模式 + 脏标(taint)计数。纯读,不走 driver_of(不为未知
   会话建目录);证据用 run 行里的 workspace 路径按需算,失败降级为 None 不阻断。
+  session 省略或 @latest 时取本机 store 最近活动会话的最新 run(桌面右栏无
+  会话选择器);显式 session= 仍只看该会话,跨会话 run_id 仍 404。
 - GET/POST /api/mode —— 渐进式自由的会话级模式(free|strict)。以 home 下 JSON
   原子落盘持久化(tmp+replace),供严格模式闸门与 provenance 盖章读取。
 
@@ -37,6 +39,8 @@ _STAGE_LETTER = {
 _DONE_STATES = ("done", "skipped")
 FREEDOM_MODES = ("free", "strict")
 DEFAULT_MODE = "free"
+# 桌面右栏无会话选择器,用此哨兵(或省略 session)钉本机最近活动会话
+_LATEST_SESSION = "@latest"
 
 
 class ModeBody(BaseModel):
@@ -75,16 +79,41 @@ def create_bridge_router(store: Store, home: Path | str,
     def _mode_of(session: str) -> str:
         return _load_modes().get(session, DEFAULT_MODE)
 
+    def _empty_monitor(session: str) -> dict:
+        return {"session": session, "run": None, "steps": [], "current": None,
+                "progress": {"total": 0, "done": 0, "pct": 0},
+                "evidence": None, "mode": _mode_of(session), "taints": 0}
+
+    def _latest_active_session() -> str | None:
+        # 活动时间=最新 run(流水线在哪就钉哪);归档会话不进右栏;无 run 才回退创建序
+        seen: set[str] = set()
+        for run in store.list_runs():  # created_at DESC
+            sid = run["session_id"]
+            if sid in seen:
+                continue
+            seen.add(sid)
+            sess = store.get_session(sid)
+            if sess is not None and sess.get("archived") is None:
+                return sid
+        sessions = store.list_sessions()  # 未归档,created_at DESC
+        return sessions[0]["session_id"] if sessions else None
+
     @router.get("/monitor")
-    def monitor(session: str = Query(...), run_id: str | None = None) -> dict:
-        """侧边栏数据面。缺省取会话最新 run;无 run 返回空壳(mode 仍有效)。"""
+    def monitor(session: str | None = Query(None), run_id: str | None = None) -> dict:
+        """侧边栏数据面。缺省取会话最新 run;无 run 返回空壳(mode 仍有效)。
+
+        session 省略或 @latest:本机 store 最近活动会话;无任何会话则空壳。
+        """
+        if not session or session == _LATEST_SESSION:
+            resolved = _latest_active_session()
+            if resolved is None:
+                return _empty_monitor(_LATEST_SESSION)
+            session = resolved
         run = store.get_run(run_id) if run_id else store.latest_run(session)
         if run is None:
-            return {"session": session, "run": None, "steps": [], "current": None,
-                    "progress": {"total": 0, "done": 0, "pct": 0},
-                    "evidence": None, "mode": _mode_of(session), "taints": 0}
+            return _empty_monitor(session)
         if run["session_id"] != session:
-            # 跨会话不泄露其他 run 的存在(对齐 resolve_run 口径)
+            # 跨会话不泄露其他 run 的存在(对齐 resolve_run 口径);@latest 解析后同样校验
             raise HTTPException(404, "run 不存在或不属于该会话")
 
         rid = run["run_id"]

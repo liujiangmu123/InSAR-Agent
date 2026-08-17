@@ -7,8 +7,7 @@
      前置未满足时的推荐降级与解释);
   3. API 形状:GET /api/install/guide、POST /api/install/mark-done(未知引擎 400、
      mark-done 穿透 WSL 探测缓存 force=True、重探后 present 翻转);
-  4. 安全边界:路由面闭集(只有 guide/mark-done 两个端点,绝无代跑安装的端点);
-     前端/挂载的防漂移锚(installguide.js 引用两端点、index.html/app.py 接线)。
+  4. 安全边界:路由面闭集(只有 guide/mark-done 两个端点,绝无代跑安装的端点)。
 
 独立 FastAPI 实例挂 install_router,不经 create_app(同 test_setup_router 做法);
 探测全部密封(mock probe),不受宿主 PATH/conda/WSL 影响。
@@ -281,20 +280,6 @@ def test_router_surface_is_guide_and_confirm_only():
                        ("/api/install/mark-done", ("POST",))}
 
 
-# ---------------- 4. 防漂移锚(前端/挂载) ----------------
-
-def test_frontend_references_both_endpoints():
-    js = (ROOT / "prototype" / "js" / "installguide.js").read_text(encoding="utf-8")
-    assert "/api/install/guide" in js
-    assert "/api/install/mark-done" in js
-    # 前端七引擎闭集与后端一致(防两边漂移)
-    for engine in ENGINE_ORDER:
-        assert f"'{engine}'" in js
-
-
-def test_index_and_app_wiring():
-    html = (ROOT / "prototype" / "index.html").read_text(encoding="utf-8")
-    assert 'src="js/installguide.js"' in html
-    assert 'href="css/installguide.css"' in html
+def test_app_mounts_install_router():
     app_src = (ROOT / "src" / "insar_agent" / "api" / "app.py").read_text(encoding="utf-8")
     assert "create_install_router" in app_src

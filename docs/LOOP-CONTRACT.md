@@ -17,13 +17,13 @@
 5. 日志绝不进 LLM 上下文(只给摘要);联网只出查询词,不出数据;凭据不进日志不进 LLM。
 6. 执行类动作永远走五阶段执行器与运行锁,循环不得未经用户批准启动重型计算。
 
-## 1. 事件契约(前端 prototype/js/agentloop.js 已锁死,不可改动作闭集语义)
+## 1. 事件契约(动作闭集语义锁死,不可改)
 
 - 每周期一条:`{"t":"agent.cycle","n":i,"max":N,"action":"<action>"}`,n 从 1 递增;
   必须经 driver 的 `_emit`(NDJSON 回合流 + SSE 总线双通道)。
 - 周期内工具执行复用既有 `tool.start`/`tool.end`(id 配对、exit、summary)。
 - `say` = 正常终止;`note` = 预算耗尽/中断/降级收尾。
-- 动作闭集(与 agentloop.js ACTION_META 对齐):
+- 动作闭集(与 `CYCLE_ACTION_TYPES` 对齐):
   `search_data inspect_file check_env list_data status plan execute set_params set_method thinking`
 - `loop/events.py` 新增工厂 `agent_cycle(n: int, max_cycles: int, action: str) -> dict`(B1),
   并在 tests/test_e2e_contract.py 的事件类型注册表登记 "agent.cycle"(B1,参照 step.stage 先例)。
@@ -162,8 +162,7 @@ async def gather_limited(named_tasks: dict[str, Coroutine], *, limit: int = 3,
   假异步生成器,验证端点协议(开流前 400 / NDJSON 事件透传 / abort 控制位 / 会话隔离);
   与 tests/test_api.py 的密封 probe + _stream_events 模式一致。
 
-## 8. 配置面(B10 — 只改 src/insar_agent/brain/llm_config.py、src/insar_agent/api/llm_router.py、
-   模型设置前端 js(定位:顶栏「模型」面板对应的 prototype/js 模块)+ 对应测试)
+## 8. 配置面(B10 — 只改 src/insar_agent/brain/llm_config.py、src/insar_agent/api/llm_router.py + 对应测试)
 
 ```python
 def agent_loop_settings(home: Path) -> dict
@@ -175,18 +174,10 @@ def agent_loop_settings(home: Path) -> dict
 - 设置面板加「自主循环」开关与周期上限输入(零 npm,风格随既有面板);
 - 前端 js 若与 B6 所有权冲突(index.html 归 B6),只改自己的面板 js 文件,不碰 index.html。
 
-## 9. 前端(B6 — 只改 prototype/index.html、prototype/js/app.js、prototype/js/backend.sse.js、
-   prototype/js/backend.mock.js + tests/js 新测试)
+## 9. 前端(B6 — 已作废)
 
-- index.html:css link 区末尾(captions.css 后)加 agentloop.css;script 区末尾(memorypanel.js 后)
-  加 `<script type="module" src="js/agentloop.js"></script>`。
-- backend.sse.js:新增 `runConverse(text, token)`(POST /api/converse,NDJSON 消费同 runTurn);
-- app.js submit():优先走 runConverse,后端 404/405(旧后端)→ 当次回退 runTurn 并记忆到 S,
-  不重复探测;consume() 不需要认识 agent.cycle(未知事件静默丢弃,agentloop.js 自渲染)。
-- DEMO 徽章(FEATURES 缺口 2):后端探活成功后动态隐藏(诚实语义)。
-- backend.mock.js:仅 runConverse 通道织入 agent.cycle 剧本(runTurn 事件闭集锁定不变;
-  离线演示进度条走 runConverse 或 ?agentloopmock=1)。
-- 验证:node prototype/agentloop.check.mjs + python scripts/check_frontend.py。
+旧网页 UI(`prototype/`)已删除。产品界面是 pi Desktop(右栏 InSAR 工作台只读,
+操作只走对话里的 `insar_*` 工具)。事件契约仍由 `tests/test_e2e_contract.py` 锁定。
 
 ## 10. MCP(B9 — 只改 src/insar_agent/mcp/server.py、mcp/backend.py + tests/test_mcp_server.py 增补)
 
@@ -197,8 +188,7 @@ def agent_loop_settings(home: Path) -> dict
 
 ## 11. 文档(B7)与鲁棒性测试(B11)
 
-- B7 只改:docs/AGENT-LOOP.md(新建,正式设计文档)、docs/DESIGN.md、docs/AGENT-DESIGN.md、
-  docs/USER-GUIDE.md、docs/FEATURES-2026-08-13.md、README.md;不碰本契约文件。
+- B7 只改:docs/AGENT-LOOP.md、docs/DESIGN.md、docs/AGENT-DESIGN.md、README.md;不碰本契约文件。
 - B11 只新建:tests/test_api_loop_robustness.py(+可选 hypothesis):
   预算越界/非法 JSON/并发回合/会话隔离/取消风暴/事件形状不变量,converse_loop 打桩 + 真实端点两层。
 
@@ -211,13 +201,13 @@ def agent_loop_settings(home: Path) -> dict
 | B3 | brain/facade.py, tests/test_brain_cycle.py |
 | B4 | net/(新建), tests/test_net_search.py |
 | B5 | api/app.py, tests/test_api_loop.py |
-| B6 | prototype/index.html, prototype/js/app.js, prototype/js/backend.sse.js, prototype/js/backend.mock.js, tests/js/(新增一个 *.test.mjs) |
-| B7 | docs/AGENT-LOOP.md, docs/DESIGN.md, docs/AGENT-DESIGN.md, docs/USER-GUIDE.md, docs/FEATURES-2026-08-13.md, README.md |
+| B6 | (已作废)旧网页 UI 已删除 |
+| B7 | docs/AGENT-LOOP.md, docs/DESIGN.md, docs/AGENT-DESIGN.md, README.md |
 | B8 | loop/subtasks.py(新建), tests/test_subtasks.py |
 | B9 | mcp/server.py, mcp/backend.py, mcp/README.md, tests/test_mcp_server.py |
-| B10 | brain/llm_config.py, api/llm_router.py, 模型设置面板 js, 对应测试文件 |
+| B10 | brain/llm_config.py, api/llm_router.py, 对应测试文件 |
 | B11 | tests/test_api_loop_robustness.py(新建) |
-| (前置契约) | prototype/js/agentloop.js、prototype/css/agentloop.css、prototype/agentloop.check.mjs —— 锁定资产:动作闭集与事件语义是本契约 §1 的前置输入,改动需前后端两端同步 |
+| (前置契约) | CYCLE_ACTION_TYPES / LOOP-CONTRACT §1 —— 动作闭集与事件语义 |
 | (波次协调) | docs/LOOP-CONTRACT.md 本体(各单元不得改;台账类增补由验证波次统一落笔) |
 
 (src/insar_agent/ 前缀省略。)

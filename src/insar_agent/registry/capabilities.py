@@ -1,6 +1,6 @@
 """十一步流水线能力声明(纯数据)。
 
-与 prototype/js/state.js STEP_DEFS 逐项对齐;超时/资源/磁盘按 AGENT-DESIGN §1.1/§4.10/§4.11;
+超时/资源/磁盘按 AGENT-DESIGN §1.1/§4.10/§4.11;
 阈值一律引用 audit/contract.yaml 台账(threshold_key),PENDING 的只出 warning(§4.13)。
 
 注意:这里的数字凡无实测依据者,都只作为「声明结构」示例存在,不参与硬 gate ——
@@ -824,7 +824,7 @@ def step_def(step_id: int) -> Capability:
 
 
 def downstream_of(step_id: int) -> list[int]:
-    """反向依赖 BFS,不含自身(与 prototype state.js downstreamOf 对齐)。"""
+    """反向依赖 BFS,不含自身。"""
     rev: dict[int, list[int]] = {}
     for cap in REGISTRY.values():
         for dep in cap.deps:

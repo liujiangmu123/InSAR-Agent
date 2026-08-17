@@ -14,7 +14,7 @@
   3. 队列:存在性不泄漏、幂等去重、running 的 409、step_ids 校验、并发入队去重不变量。
   4. 诊断:run_id 注入、下载名白名单绕过、并发生成、超额裁剪。
   5. doctor:检查器崩溃隔离、并发单飞、超时与恢复。
-  6. 静态面:新增 js/css 的 Content-Type 与 CSP、llm.json 不经静态路由可达。
+  6. llm.json 不经任意静态路径可达。
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from fastapi.testclient import TestClient
 
 from conftest import TIME_FACTOR
 from insar_agent import doctor as doc
-from insar_agent.api.app import PROTOTYPE_DIR, create_app
+from insar_agent.api.app import create_app
 from insar_agent.api.doctor_router import create_doctor_router
 from insar_agent.brain.provider import BrainUnavailable
 from insar_agent.core.db import Database
@@ -633,36 +633,11 @@ class _patched_checkers:
         return False
 
 
-# ==================== 6. 静态面 ====================
-
-
-def test_static_new_assets_content_type_and_headers(client):
-    """新增 js/css 经静态根可达、Content-Type 正确,且带基础安全头。"""
-    if not (PROTOTYPE_DIR / "index.html").exists():
-        pytest.skip("无 UI 部署形态")
-    for path, want in (("/js/llmsettings.js", "javascript"),
-                       ("/js/queue.js", "javascript"),
-                       ("/js/doctorpanel.js", "javascript"),
-                       ("/js/diagexport.js", "javascript"),
-                       ("/css/llmsettings.css", "text/css")):
-        r = client.get(path)
-        assert r.status_code == 200, path
-        assert want in r.headers["content-type"], (path, r.headers["content-type"])
-        assert r.headers.get("X-Content-Type-Options") == "nosniff"
-
-
-def test_index_html_has_csp(client):
-    """首页 HTML 携带 CSP(frame-ancestors 'none'),回归护栏。"""
-    if not (PROTOTYPE_DIR / "index.html").exists():
-        pytest.skip("无 UI 部署形态")
-    r = client.get("/")
-    assert r.status_code == 200
-    csp = r.headers.get("Content-Security-Policy", "")
-    assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp
+# ==================== 6. 密钥文件不可经静态路径取出 ====================
 
 
 def test_llm_json_not_reachable_via_static_route(client, home):
-    """UI 目录(prototype)与 workspace 分离:workspace/llm.json 绝不经静态路由可达。"""
+    """workspace/llm.json 绝不经任意路径可达。"""
     client.post("/api/llm/config", json={
         "base_url": "https://api.example/v1", "api_key": LLM_KEY, "chat_model": "m"})
     assert (home / "llm.json").is_file()

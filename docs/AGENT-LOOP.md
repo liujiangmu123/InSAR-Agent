@@ -81,8 +81,8 @@ converse_loop(session, text, max_cycles=6):
 
 ## 3. 动作白名单闭集
 
-闭集 10 项,与前端 `prototype/js/agentloop.js` 的 `ACTION_META` 一一对齐(该表已锁死,
-增删动作必须两端同步):
+闭集 10 项,与 `CYCLE_ACTION_TYPES` 一一对齐(该表已锁死,
+增删动作必须同步改 `brain/facade.py` 与本文件):
 
 | 动作 | 界面名 | 语义 | 副作用 |
 |---|---|---|---|
@@ -215,7 +215,7 @@ stateDiagram-v2
    委托既有 `turn()`,单步行为逐字节不变;既有守护测试(`tests/test_converse.py` 降级组)
    必须原样通过。`turn()` 的行为与签名一个字节都不许变。
 2. **审批不被循环绕过**:`execute` 动作只产生确认卡(ask)并收束回合,绝不自启流水线;
-   「计划不会自动开始」的用户承诺(`docs/USER-GUIDE.md §1.6`)不因自主循环而变。
+   「计划不会自动开始」的用户承诺不因自主循环而变。
 3. **LLM 零命令零路径**:动作是闭集;`inspect_file` 只接受步骤号/数据集名并做闭集匹配查表,
    LLM 给的值绝不当文件系统路径解引用;`set_params`/`set_method` 双重校验
    (brain 侧闭集校验 + 驱动器 registry 复核),消费点 `apply_change` 还会再校验一次。
@@ -366,8 +366,7 @@ timeout=25s)` 并行执行,任一来源成功即算本周期成功,逐源失败�
 | `brain.cycle`(闭集校验/坏形状/enabled 闸门) | `tests/test_brain_cycle.py` | B3 |
 | net 层(错误闭集/env 覆盖/离线 MockServer) | `tests/test_net_search.py` | B4 |
 | `/api/converse` 协议(开流前 400/NDJSON 透传/abort/skills 挂载/llm.json 热替换) | `tests/test_api_loop.py` | B5 |
-| 前端进度条状态机与事件契约 | `prototype/agentloop.check.mjs` + `scripts/check_frontend.py` | B6 |
-| 前端 runConverse 回退与诚实徽章 | `tests/js/converse_fallback.test.mjs` | B6 |
+| 事件契约与动作闭集 | `tests/test_e2e_contract.py` + `tests/test_brain_cycle.py` | B1/B3 |
 | 子任务池(并发上限/单任务异常隔离/超时) | `tests/test_subtasks.py` | B8 |
 | MCP `insar_converse`(打桩后端/超时/旧后端报错) | `tests/test_mcp_server.py` 增补 | B9 |
 | 配置面(`agent_loop`/`agent_max_cycles` 值域与回显) | `tests/test_llm_agent_config.py` | B10 |

@@ -74,3 +74,9 @@
   **stale(标脏)计数**、失败步骤的 `failure_class`。
 - 质量门 `PENDING` 只警告不硬停:如实呈现 warning,不要把它说成"通过"。
 - 中文为主、关键术语保留英文(如 coherence、unwrap、SBAS、provenance),与仓库文档风格一致。
+
+## 桌面(pi Desktop)
+
+右栏 InSAR Tab 只读 `/api/monitor`(与 CLI 同一账本),不是第二套执行器。改方法仍 preview→apply→execute。
+图件靠 `insar_view_figure` 的 image 内容块内联,识图走 `insar_vision_qa`。打开产物目录用扩展页三个 openPath,不要 bash start。
+方法闭集先 `insar_capabilities`。新的真实全链须用户明确说「批准执行」。

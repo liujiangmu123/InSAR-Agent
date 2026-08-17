@@ -30,7 +30,6 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.datastructures import MutableHeaders
 
@@ -58,13 +57,6 @@ from insar_agent.planner.plan import fork_run, pipeline_groups
 from insar_agent.registry.capabilities import REGISTRY
 from insar_agent.report.bundle import build_repro_bundle
 from insar_agent.report.script import export_run_script
-
-# INSAR_UI_DIR:静态 UI 目录的唯一环境变量覆盖点(桌面冻结版由
-# desktop/backend-bundle/entry.py 在 import 本模块前设置;源码运行不受影响,
-# 缺省仍按 __file__ 回溯源码树 src/../prototype)。
-_UI_DIR_OVERRIDE = os.environ.get("INSAR_UI_DIR", "")
-PROTOTYPE_DIR = (Path(_UI_DIR_OVERRIDE) if _UI_DIR_OVERRIDE
-                 else Path(__file__).resolve().parents[3] / "prototype")
 
 log = logging.getLogger(__name__)
 
@@ -178,12 +170,10 @@ class SecurityHeadersMiddleware:
     响应重包一层 —— 本服务的 NDJSON 回合流 / SSE 事件流不必冒这个险)。
 
     - 全部响应:X-Content-Type-Options / Referrer-Policy / X-Frame-Options。
-      X-Frame-Options 取 DENY:UI 无 iframe,桌面壳(Tauri)以
-      WebviewUrl::External 做「顶层导航」加载 http://127.0.0.1:<port>/,
-      不受该头约束(它只管被嵌入),故无需 SAMEORIGIN(desktop/src/main.rs 实证);
+      X-Frame-Options 取 DENY:本服务不嵌 iframe;Desktop 经 IPC 读 API,不加载本机 HTML;
     - /api/*:Cache-Control: no-store —— 状态/日志/图件都是随 run 演化的
       易变数据,浏览器缓存会展示过期状态;回环链路重取成本可忽略;
-    - 静态 UI 的 HTML 文档:按页 CSP(启动扫描表,scan_ui_csp)。
+    - 若响应是 HTML:按页 CSP(csp_by_path;产品默认不挂静态页,此表为空)。
     端点已自设的同名头一律不覆写。
     """
 
@@ -211,26 +201,6 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
-
-
-class UIStaticFiles(StaticFiles):
-    """静态 UI 挂载的瘦身层(界面诚实化,0814B W6)。
-
-    prototype/ 里的历史演示资产 —— *-demo.html(fail-demo/setup-demo 等
-    纯写死示意数据的独立演示页)与旧版 UI 快照 v2-backup/ —— 不得从生产
-    端口(8873)对外服务,命中一律 404;其余路径行为与 StaticFiles 完全
-    一致。文件本体保留在源码树:check 套件(fail-demo.check.mjs 等)与
-    文档仍按文件读取。
-    """
-
-    async def get_response(self, path: str, scope):
-        # StaticFiles.get_path 产出 os.path.normpath 结果,Windows 下是
-        # 反斜杠分隔的相对路径 —— 先归一再判定
-        norm = path.replace("\\", "/")
-        leaf = norm.rsplit("/", 1)[-1]
-        if norm == "v2-backup" or norm.startswith("v2-backup/") or leaf.endswith("-demo.html"):
-            raise HTTPException(404, "Not Found")
-        return await super().get_response(path, scope)
 
 
 def _host_is_loopback(host: str) -> bool:
@@ -446,6 +416,15 @@ def create_app(home: Path | None = None) -> FastAPI:
     drivers_lock = threading.Lock()
 
     app = FastAPI(title="insar-agent", version="0.1.0")
+
+    @app.get("/")
+    def root():
+        return {
+            "ok": True,
+            "ui": "pi-desktop",
+            "health": "/api/health",
+            "hint": "产品界面是 pi Desktop,本端口只提供 API。",
+        }
 
     @app.exception_handler(RequestValidationError)
     def _on_validation_error(request: Request, exc: RequestValidationError):
@@ -1311,15 +1290,8 @@ def create_app(home: Path | None = None) -> FastAPI:
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    # ---------------- 静态 UI ----------------
-
-    if PROTOTYPE_DIR.exists():
-        # UIStaticFiles:演示页(*-demo.html)与 v2-backup/ 一律 404(界面诚实化)
-        app.mount("/", UIStaticFiles(directory=str(PROTOTYPE_DIR), html=True), name="ui")
-
-    # 安全响应头(最外层包裹,对含静态 UI 在内的全部响应生效;
-    # CSP 表按落盘 HTML 启动时算一次,见 scan_ui_csp)
-    app.add_middleware(SecurityHeadersMiddleware, csp_by_path=scan_ui_csp(PROTOTYPE_DIR))
+    # 安全响应头。产品界面是 pi Desktop,本进程不挂静态 HTML。
+    app.add_middleware(SecurityHeadersMiddleware, csp_by_path={})
 
     return app
 

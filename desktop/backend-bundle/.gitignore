@@ -1,6 +1,0 @@
-# PyInstaller 构建产物与本地验证残留,一律不入库
-dist/
-build/
-*.log
-.smoke-home/
-__pycache__/

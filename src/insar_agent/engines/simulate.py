@@ -18,7 +18,7 @@ from typing import Any
 from insar_agent.registry.model import Capability
 from insar_agent.runtime.jobs import CommandPlan
 
-# 每步的演示日志行(与 prototype backend.mock.js SCRIPTS 呼应,但显式标注 simulated)
+# 每步的演示日志行(显式标注 simulated)
 _LOG_LINES: dict[int, list[str]] = {
     1: ["扫描本地数据目录", "发现 HyP3 干涉对产品", "校验清单完成"],
     2: ["检查 DEM 缓存", "DEM 就绪"],

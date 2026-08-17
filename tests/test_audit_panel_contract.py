@@ -1,15 +1,11 @@
-"""审计面板前后端契约测试(防契约漂移)。
+"""审计 / provenance API 契约测试(防契约漂移)。
 
-prototype/js/auditlive.js 是「审计」面板的实时数据模块,消费两个端点:
+锁定两个端点字段:
   - GET /api/provenance → run_id / parent_run_id / simulated / steps / qa /
                           thresholds + evidence.{level,level_index,ladder,
                           reasons,ceiling,ceiling_reason,step_sources,
                           parent_validations}
-  - GET /api/env        → thresholds[{key,value,source,ref,status}](阈值台账;
-                          env 不可用时 auditlive 回落 provenance 内嵌的同款契约)
-
-本文件把 auditlive.js 实际读取的字段清单写成断言:后端改动若删改任一字段,
-这里先红,而不是等到审计面板在浏览器里静默回落成演示数据。
+  - GET /api/env        → thresholds[{key,value,source,ref,status}]
 旅程夹具参考 tests/test_e2e_contract.py:密封环境 + simulated 全链 done。
 """
 

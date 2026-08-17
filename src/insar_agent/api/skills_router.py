@@ -5,9 +5,7 @@
                              sections: {章节: 首行摘要}}]}。
 - GET /api/skills/{step_id}  单步全文:按章节结构化返回;无技能 → 404。
 
-响应形状与前端技能面板(prototype/js/skillpanel.js 头注)互为契约:列表带
-skills 信封、步骤号字段名用 capability(对齐 registry 语汇),面板对 404/
-网络错静默降级。
+响应形状:列表带 skills 信封、步骤号字段名用 capability(对齐 registry 语汇)。
 
 纪律:
 - 每请求经 loader 重扫技能目录(loader 无缓存):改技能文件即生效,无需重启;

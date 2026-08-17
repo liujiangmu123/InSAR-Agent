@@ -13,6 +13,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export const PROVIDER_ID = "insar-llm";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const LLM_CONFIG_REL = join("workspace", "llm.json");
+const CWD_WALK_MAX_HOPS = 4;
 
 /** Shape of workspace/llm.json (real fields, no invention). */
 export interface LlmFileConfig {
@@ -22,12 +24,31 @@ export interface LlmFileConfig {
   api_key: string;
 }
 
-/** INSAR_LLM_CONFIG override first, then <repo>/workspace/llm.json. */
-export function locateLlmConfig(env: NodeJS.ProcessEnv = process.env): string | undefined {
+function locateLlmConfigFromCwd(cwd: string): string | undefined {
+  let dir = resolve(cwd);
+  for (let hop = 0; hop <= CWD_WALK_MAX_HOPS; hop += 1) {
+    const candidate = join(dir, LLM_CONFIG_REL);
+    if (existsSync(candidate)) return candidate;
+    const parent = resolve(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
+}
+
+/** INSAR_LLM_CONFIG, then <repo>/workspace/llm.json, then cwd walk. */
+export function locateLlmConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+  repoRoot: string = REPO_ROOT,
+): string | undefined {
   const explicit = env.INSAR_LLM_CONFIG;
   if (explicit && existsSync(explicit)) return explicit;
-  const fallback = join(REPO_ROOT, "workspace", "llm.json");
-  return existsSync(fallback) ? fallback : undefined;
+  const fallback = join(repoRoot, LLM_CONFIG_REL);
+  if (existsSync(fallback)) return fallback;
+  // import.meta.url 在 .pi/extensions/insar.ts re-export 时仍指向本文件;
+  // cwd 回退只防打包/工作区 cwd 与仓库根错位
+  return locateLlmConfigFromCwd(cwd);
 }
 
 /** Parse + validate. Returns undefined on any problem — a missing LLM config

@@ -1,7 +1,6 @@
 """事件总线:被动监听 + 错误隔离(absorb-E8,pi harness.md:2325-2327)。
 
-事件形状与 prototype/js/backend.mock.js 的契约一致(t 字段区分类型),
-UI(SSE)与轨迹(trace)消费同一批事件的不同侧面。
+事件形状以 t 字段区分类型,SSE 与轨迹(trace)消费同一批事件的不同侧面。
 
 隔离保证:监听器抛错绝不影响主循环 —— 错误被转成一条 handler_error 事件。
 """
@@ -133,9 +132,7 @@ def step_stage(step_id: int, stage: str) -> dict:
 def agent_cycle(n: int, max_cycles: int, action: str) -> dict:
     """自主循环周期账(LOOP-CONTRACT §1,driver.converse_loop 每周期恰好一条)。
 
-    n 从 1 递增;action 是循环动作闭集(含 install_engine/list_files)成员。
-    app.js 的 consume() 对该类型静默丢弃,由 prototype/js/agentloop.js
-    自建 SSE 订阅渲染「自主工作中」进度条与工作记录卡。
+    n 从 1 递增;action 是循环动作闭集成员。
     """
     return {"t": "agent.cycle", "n": n, "max": max_cycles, "action": action}
 

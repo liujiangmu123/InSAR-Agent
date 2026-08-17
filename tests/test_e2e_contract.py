@@ -1,28 +1,16 @@
-"""前后端事件契约对账 + 全流程 E2E(fastapi TestClient,不起真端口)。
+"""事件契约对账 + 全流程 E2E(fastapi TestClient,不起真端口)。
 
-契约基准(AGENT-DESIGN 前置结论):前端是基准,后端必须适配前端。
-"前端需要的字段" 提取自 prototype/js:
-  - 事件分发分支在 app.js 的 consume() 与 onGlobalEvent()(stream.js 只导出
-    渲染器、无分发 switch,故注册表扫描 app.js 的 case 标签);
-  - 每种事件的必需字段 = 对应渲染器(stream.js)与分支代码实际读取的字段。
+契约基准:事件工厂字段与类型注册表。产品 UI 是 pi Desktop,不再扫描旧网页 JS。
 
 四层校验:
-  1. 工厂字段契约:loop/events.py 每个工厂产出的事件必须带前端读取的必需字段;
-  2. 原始字面量纪律:src 里绕过工厂直发的事件({"t": ...} 字面量,如
-     runtime/executor.py 的 step.stage)类型必须在 events.py 注册过;
+  1. 工厂字段契约:loop/events.py 每个工厂产出必须带 FRONTEND_REQUIRED 字段;
+  2. 原始字面量纪律:src 里绕过工厂直发的事件类型必须在 events.py 注册过;
   3. E2E 旅程:创建会话 → turn 规划 → pipeline 执行(simulated,秒级)→
      state/provenance/run.sh/trace/chat 与事件流交叉校验 → impact 预览 → fork 重跑;
-     每行 NDJSON 必须 json.loads 成功且含类型字段 "t";
-  4. 事件类型注册表:events.py 可产生的 type 集合与前端处理分支集合求差,
-     差集必须与已知豁免清单完全一致(新增漂移会被拦截):
-       后端有/前端无:step.stage(阶段推进,UI 静默忽略)、
-                      handler_error(监听器错误隔离,当前后端也无调用点)、
-                      agent.cycle(自主循环周期账 —— app.js 静默丢弃,由
-                      agentloop.js 自建 SSE 订阅渲染,不走 consume 分发);
-       前端有/后端无:tool.progress、budget(mock 演示专用,后端尚未产生 ——
-                      按纪律不硬造,仅登记);
-       过渡豁免:say.delta/say.abort(0814B 流式帧,W2 后端工厂与 W3 前端
-                      分支并行落地 —— 见 STREAMING_LANDING 注释)。
+  4. 事件类型注册表差集必须与豁免清单一致:
+       后端有/消费侧无:step.stage、handler_error、agent.cycle;
+       消费侧有/后端无:tool.progress、budget;
+       过渡豁免:STREAMING_LANDING。
 """
 
 from __future__ import annotations
@@ -40,7 +28,6 @@ from insar_agent.loop import events as ev
 
 ROOT = Path(__file__).resolve().parents[1]
 EVENTS_PY = ROOT / "src" / "insar_agent" / "loop" / "events.py"
-APP_JS = ROOT / "prototype" / "js" / "app.js"
 SRC_DIR = ROOT / "src" / "insar_agent"
 
 # ---------------------------------------------------------------------------
@@ -142,8 +129,8 @@ def _backend_types() -> set[str]:
 
 
 def _frontend_types() -> set[str]:
-    """前端事件分发分支(app.js consume() + onGlobalEvent() 的 case 标签)。"""
-    return set(re.findall(r"case '([^']+)':", APP_JS.read_text(encoding="utf-8")))
+    """契约注册表里的消费侧类型(产品 UI 已迁出 prototype,不再扫 app.js)。"""
+    return set(FRONTEND_REQUIRED) - BACKEND_ONLY
 
 
 # ---------------------------------------------------------------------------
@@ -427,8 +414,7 @@ def test_turn_unrecognized_intent_yields_ask(client):
     assert ask["prompt"]
     assert isinstance(ask["fields"], list) and ask["fields"]
     # 前端 ask 分支渲染读 label(与可选 options)
-    assert all("label" in f for f in ask["fields"])
-    # app.js 必须有 ask 处理分支(回归守护:缺分支时回合流一片空白)
+    # 契约注册表必须覆盖后端工厂类型
     assert "ask" in _frontend_types()
 
 

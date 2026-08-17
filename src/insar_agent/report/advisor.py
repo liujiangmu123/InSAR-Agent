@@ -9,7 +9,7 @@
     差在哪一级、补什么,绝不建议「导出复现包给同行」这类越级动作;
   - 纯读:不改任何 run/step 状态;action 只是「可执行的建议」,执行权在用户。
 
-action 三种形态(前端 prototype/js/advisor.js 按 kind 分派):
+action 三种形态(按 kind 分派):
   chat_prefill  预填话术进输入框(不发送)      {"kind","text"}
   api_action    调用现成端点(如显式列表续跑)   {"kind","method","endpoint","body"|"params",…}
   open_tab      切换右侧 dock 面板(可带步骤号) {"kind","tab","step"?}

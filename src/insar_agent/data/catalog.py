@@ -40,7 +40,7 @@ MAX_ENTRIES = 5000
 #: HyP3 产品对子目录/*.tif),再深属于个别布局,不为其付全树遍历成本
 _SCAN_DEPTH = 2
 
-#: 数据集类型闭集(前端徽章五色映射与此对齐,prototype/js/datasets.js)
+#: 数据集类型闭集
 KINDS = ("hyp3", "alos_raw", "slc_stack", "dem", "unknown")
 
 # 文件名模式(全部大小写不敏感;只匹配名字,绝不读内容)
