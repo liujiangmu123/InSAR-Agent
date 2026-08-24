@@ -10,8 +10,8 @@ pi is the top-level process and owns the chat UI. This extension adds:
   (`src/insar_agent/api`), which keeps the reproducible science kernel unchanged.
   Phases 10–15 add **zero** tools: new science is registry-declared.
 - **Domain knowledge** — `APPEND_SYSTEM.md` (mission context + red lines + the two
-  freedom modes) and the `00-insar-agent` operator skill on top of the repo's 11
-  per-step skills and 6 scenario packs.
+  freedom modes) and the `00-insar-agent` operator skill on top of the repo's 20
+  per-step skills (11 core + 9 analysis) and 8 scenario packs.
 - **A monitored-pipeline sidebar** — the 11 core steps × five stages, current step,
   progress, evidence level and taints, rendered in pi's native TUI above the editor
   plus a compact footer line.
@@ -236,10 +236,11 @@ bolted onto every core run. Canonical products: 20 `source.h5` → 21 `masked.h5
 | 27 | 外推预测 | Extrapolate the **already fitted** step-9 time function + uncertainty + horizon. No black-box ML. |
 | 28 | 反演桥导出 | GBIS / Kite / GMT / QGIS / HDF-EOS5 bridges only — **no in-agent inversion**. |
 
-### Scenario packs (6)
+### Scenario packs (8)
 
 Priority order (smaller number tried first): `stripmap_coseismic` (5) → `quake` (10) →
-`volcano` (15) → `permafrost` (20) → `subsidence` (25) → `landslide` (30).
+`volcano` (15) → `permafrost` (20) → `subsidence` (25) → `landslide` (30) →
+`lt1_gamma` (35) → `teaching` (90).
 
 | Pack | Use |
 | --- | --- |
@@ -249,6 +250,8 @@ Priority order (smaller number tried first): `stripmap_coseismic` (5) → `quake
 | `permafrost` | Permafrost / seasonal periodic |
 | `subsidence` | Urban subsidence (`poly_periodic`, `periods=[1]`) |
 | `landslide` | Landslide PS monitoring |
+| `lt1_gamma` | LT-1 (Chinese L-band) via GAMMA layout — step 7 `processor=gamma` |
+| `teaching` | Classroom demo: full figure set, honest downgrade at step 11 |
 
 MintPy's data plane is parameterized (`processor` + file globs) so ISCE / ARIA / GAMMA /
 GMTSAR / SNAP / ROI_PAC / NISAR products can enter step 7. Default remains HyP3;
@@ -338,8 +341,8 @@ $env:INSAR_TEST_CWD = "<repo>"
 | --- | --- |
 | `APPEND_SYSTEM.md` | Appended to pi's system prompt (never replaces it): the 11-step pipeline, the red lines, and the free/strict modes. Kept small — it is in every request. |
 | `skills/00-insar-agent/SKILL.md` | Hand-written operator skill: how to drive the tool layer end to end, the five stages, stale/dirty cascade, the six-level evidence ladder, and the "never fabricate a number" rule. |
-| `../skills/01-*` … `../skills/11-*` | The repo's per-step domain skills (methods, parameter heuristics, failure playbooks). Unchanged, loaded in place. |
-| `../src/insar_agent/registry/scenario_packs/*/SKILL.md` | Scenario packs (6): `stripmap_coseismic`, `quake`, `volcano`, `permafrost`, `subsidence`, `landslide`. |
+| `../skills/01-*` … `../skills/11-*` + analysis steps 20–28 | The repo's per-step domain skills, 20 in total (methods, parameter heuristics, failure playbooks). Unchanged, loaded in place. |
+| `../src/insar_agent/registry/scenario_packs/*/SKILL.md` | Scenario packs (8): `stripmap_coseismic`, `quake`, `volcano`, `permafrost`, `subsidence`, `landslide`, `lt1_gamma`, `teaching`. |
 
 **Skills are not copied.** pi's `--skill <dir>` recurses and loads every directory holding a
 `SKILL.md`, so the launcher points at the three roots above and the repo `skills/` stays the

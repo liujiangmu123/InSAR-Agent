@@ -227,7 +227,67 @@
 
 ---
 
-## 7. 参考资料
+## 8. 产品外壳与操作员路径(2026-08-17 补勘)
+
+> 本节把「领域能力」落到桌面操作员实际看见什么、说什么、右栏该显示什么。
+> Chrome 事实来自实读 `E:\SoftApp\pi-app\src\renderer\src\app\app.tsx`:主对话页渲染的是 `ImmersiveChrome`,**不是** overlay 里改过的 `TopBar`。这就是用户反馈「右上角还是 pi」的根因:Phase 51 只改了设置页用的厚顶栏,主聊天顶栏硬编码 π + `"pi"`。
+
+### 8.1 可见品牌分层(改哪一层才算「外壳改好了」)
+
+| 层 | 用户看见 | 正确产品名来源 | 2026-08-17 状态 |
+|---|---|---|---|
+| OS 窗口标题 / 托盘 tooltip | 任务栏悬停 | `APP_DISPLAY_NAME`(`app-brand.ts`) | InSAR Agent |
+| 主对话顶栏(`ImmersiveChrome`) | 窗口内最显眼的字 | `t('common:app.name')` | **已改为 InSAR Agent**(原硬编码 `pi`+π) |
+| 设置页厚顶栏(`TopBar`) | 仅设置视图 | 同上 | 早已 InSAR Agent +「InSAR 工作台」chip |
+| 系统通知 | 运行结束/等待操作 | 字面量须跟 APP_DISPLAY_NAME | 已改 |
+| 设置侧栏「Pi」 | 设置分类名 | 指 pi CLI 运行时,不是产品名 | 已改为「运行时」 |
+| `electron-builder` productName | 快捷方式/任务管理器 | **禁止改**(userData 路径) | 仍为 pi Desktop,属有意保留 |
+
+验收口令:打开主对话页,顶栏应读「InSAR Agent / \<项目名\>」+「InSAR 工作台」chip,不得出现孤立小写 `pi` 或衬线 π 方标。
+
+### 8.2 三种接入模式 × 对话开场 × 右栏该显示什么
+
+操作员仍然只在中央对话里下指令;右栏只读。模式不同,右栏「流水线 / 数据 / 图件」的**诚实空态**也不同,不能三种模式共用一句「尚无 run」。
+
+| 模式 | 操作员会说的典型话 | 主链走哪些步 | 右栏流水线 | 右栏数据 | 右栏图件 |
+|---|---|---|---|---|---|
+| A 全链 SLC | 「从 Sentinel-1 SLC 做到速度场」 | 1–11 | 01–11 全亮;2–6 本机引擎缺失则诚实 TOOL_MISSING,禁止假进度 | SLC 目录、DEM、干涉对数 | 到第 10 步才有期刊图 |
+| B HyP3 云端干涉 | 「用 Ridgecrest HyP3 跑时序」 | 1 导入 → 7–11(2–6 skipped) | 02–06 显示 skipped(云端已完成),不是失败 | HyP3 产品目录(unw/corr/dem) | 速度场 + 相干 + 网络图 |
+| C 位移产品直接分析 | 「把 EGMS/OPERA/LT-1 形变场做剖面和分解」 | **只走 20–28** | 01–11 整段应标「本 run 不走主链」(不是 pending) | 登记的 GeoTIFF/CSV/HDF5 源 | 分析图(剖面/KMZ/分解场) |
+
+模式 C 是教学与快速评估的主路径(零重型计算)。当前缺口仍是 step 20 `register_sources` 只吃 h5(→ R2/B1)。未接通前,右栏若收到 GeoTIFF 必须显示「源格式不支持」,不得静默当空。
+
+### 8.3 产物分级在 UI 上怎么露出(对标 EGMS)
+
+报告、图件灯箱、导出文件名建议显式带级别,避免工程用户把相对 LOS 当成绝对位移:
+
+| 级别 | 何时出现 | UI 徽章建议 | 本仓对应 |
+|---|---|---|---|
+| Basic | 第 9 步速度场默认 | `LOS · 相对参考点` | 现状产出 |
+| Calibrated | 做过 GNSS 锚定(R3) | `LOS · GNSS 锚定` | 缺口 |
+| Ortho | 第 23 步升降轨分解成功 | `垂直 / 东西向` | 已声明 |
+
+模拟 run 的橙色横幅优先级高于级别徽章:simulated 永远先看见「模拟」,再看见 Basic。
+
+### 8.4 场景包与「继续研究」后的操作员映射
+
+| 用户意图 | 应命中场景 | 注意 |
+|---|---|---|
+| 课堂演示 / 教学流程 | `teaching`(priority 90) | 图件全开、第 11 步 coherence_mask,不假装 PS 双链 |
+| LT-1 / 陆探 / GAMMA 布局 | `lt1_gamma`(35) | 「用陆探一号做沉降」会先命中 `subsidence`(25),这是正确的歧义消解 |
+| 地震 / Ridgecrest | `quake` | HyP3 云端 2–6 skipped |
+| 冻土 / 滑坡 / 火山 / 沉降 | 既有包 | 见 §4.1 |
+
+### 8.5 外壳还没做、但研究后应进下一波 UI 的项
+
+1. 任务管理器/快捷方式仍显示 pi Desktop(productName 锁定)——安装包层可用显示名/图标覆盖,不改 userData 键。
+2. 主顶栏仍用 CircleDot 占位,未用 InSAR `build/icon.png`;应用图标已在窗口/托盘,顶栏可后续换成 14px 栅格图标。
+3. 右栏缺「接入模式」chip(A/B/C)与产物级别徽章(§8.2–8.3)。
+4. 设置「运行时」页内部仍有「与终端 pi 一致」——保留为 CLI 专名,不要改成产品名。
+
+---
+
+## 9. 参考资料
 
 **本仓依据**:`src/insar_agent/registry/capabilities.py`(11+9 步声明)· `04-science-capability-map.md`(本机 70+ CLI 盘点)· `docs/VALIDATION-isce2-wsl.md`(条带链实测)· `report/export.py`(五格式导出)。
 

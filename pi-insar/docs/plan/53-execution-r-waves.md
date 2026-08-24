@@ -23,8 +23,28 @@
 
 ## 状态
 
-- [ ] A1 桌面品牌收尾
-- [ ] A2 R1 PS 桥 + crossval
-- [ ] A3 teaching / lt1_gamma 场景包
-- [ ] B1 注册表扩展(R2/R3/R4/R5-lite)
-- [ ] C 收口验收(测试结果以实际运行为准,完成后回填)
+- [x] A1 桌面品牌收尾(含 ImmersiveChrome 硬编码 pi → InSAR Agent)
+- [x] A2 R1 PS 桥 + crossval(桥代码落地 + 合成布局测试;**真实数据实测仍缺**,见下)
+- [x] A3 teaching / lt1_gamma 场景包
+- [x] B1 注册表扩展(R2/R3/R4/R5-lite):守护测试 `test_nisar_import` /
+      `test_register_sources_formats` / `test_gnss_compare` / `test_dolphin_ps_ds` /
+      `test_product_level` 全绿
+- [x] C 收口验收(2026-08-17):pytest 非时序组全绿(约 1800 项);
+      `npx tsc --noEmit` 零错误;`npx vitest run` 8 文件 94 passed / 1 skipped。
+      时序组 3 项失败属环境问题(httpx 0.28.1 × Python 3.14 的 URL 解析不兼容,
+      已独立复现;CI 钉 Python 3.11 不受影响)。
+
+## 收口时补记的两类缺口(2026-08-17 清点)
+
+清点 70 个方法 × 构建器可达性后修掉的正确性问题,已落守护测试
+`tests/test_method_contract.py`:
+
+1. **陷阱方法**(可行性收窄放行、执行期才 ToolMissing):第 3/4 步 SNAP 链
+   (装了 SNAP 时)、第 5 步 `none`(无条件)、第 10 步 `gdal_warp`(装了 GDAL 时)。
+   修法:`Method.implemented` 静态声明 + 收窄期如实排除,理由引用
+   `unimplemented_note` 而不是虚构的工具名。演示模式仍放行为 simulated。
+2. **接线遗漏**:`engines/dolphin.py` 构建器早已就位,但 `runtime/probe.py`
+   没有 dolphin 探测键 → `dolphin_ps_ds` 永久被收窄排除。已补探测。
+
+仍未闭环(需外部条件,不在本轮):PS 链真实实测(R1 的实测部分)、
+GNSS 站数据(R3 的 calibrated 级)、第二轨道数据(升降轨分解)。

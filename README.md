@@ -138,7 +138,7 @@ tests/           契约/执行器/失效传播/Brain/API(不含旧网页 UI)
 | 3 审计 | contract.yaml / 证据阶梯 / provenance / run.sh | 完成 |
 | 4 Brain | intent/select/triage/narrate(可拔除有守护测试) | 完成 |
 | 5 API | FastAPI + NDJSON/SSE | 完成 |
-| 6 桥 | isce2_to_pystamps(主 novelty) | **接口边界,未实现**(需真值环境) |
+| 6 桥 | isce2_to_pystamps(主 novelty) | **代码已实现,未经真实数据验证**:三个物理难点(par 几何自洽 / TCN 基线 / big-endian)都在 `engines/bridges/` 落地,合成布局有测试(`tests/test_isce2_pystamps_bridge.py`);缺真实 ISCE2 输出与 PyStamps 环境的端到端跑通 → `crossval_r` 仍缺席、证据阶梯到不了 validated |
 
 ## 真实数据验收(2026-08-12,Windows 原生,无 WSL)
 
@@ -172,8 +172,19 @@ Phase 1 验收「11 对 HyP3 真实数据跑通 MintPy 链」**已通过**:
   `INSAR_WSL_DISTRO` 可达 → `WslJobBackend`,可用 `INSAR_JOB_BACKEND` 强制),含真实 WSL
   echo 冒烟测试;**真实 ISCE2 重型链尚未经代理编排回放**(只回放过手工链)。
   日常 HyP3 路线仍把 2-6 步交给 ASF 云端。
-- **ISCE2→PyStamps 桥(主 novelty)是接口边界**:三个难点(par 字段自洽/TCN 基线/
-  big-endian)不允许在无真值环境下猜测实现,见 `engines/bridges/isce2_to_pystamps.py`。
-- 阈值台账 5 项 PENDING 待标定 → 证据阶梯封顶 audited(§4.13 的自我约束);
+- **ISCE2→PyStamps 桥(主 novelty)代码已实现但未经真值验证**:三个难点(par 字段自洽/
+  TCN 基线/big-endian)在 `engines/bridges/{isce2_to_pystamps,gamma_geom,baseline_tcn}.py`
+  落地,合成最小布局有测试;输入不完整时显式 `EnvironmentNotReady`,绝不猜测补齐。
+  **PS 链真实实测(R1)是当前第一优先缺口** —— 它同时卡住 crossval_r 与 validated 级。
+- 阈值台账 3 项 PENDING 待标定(`corr_threshold` / `unwrap_coverage` /
+  `nan_fraction_below`)→ 证据阶梯封顶 audited(§4.13 的自我约束);
   crossval_r 在 PS 链建成前诚实缺席(质量门仅警告)。
+- **10 个方法声明为 `implemented=False`**(注册表 `Method.implemented`):
+  第 1 步 `asf_search_slc`/`hyp3_submit`(无自动下载与作业提交)、第 2 步
+  `dem_copernicus`/`dem_srtm`(无 DEM 在线下载)、第 3/4 步 SNAP 链、第 5 步 `none`
+  (不滤波形态)、第 6 步 `3D_FULL`、第 8 步 `tropo_gacos`、第 10 步 `gdal_warp`。
+  它们在**规划期**就被如实排除并给出替代建议(不是跑到那一步才停链),
+  演示/模拟模式仍可放行为 simulated。一致性由 `tests/test_method_contract.py` 双向守护。
+  实际可用的数据入口是 `local_import` / `nisar_import`(自备或云端成品目录),
+  GIS 导出走 `insar_export_product`(`/api/export`)而非第 10 步的 gdal_warp。
 - h5 栅格的 not_all_nan 检查当前对不可解析格式降级为警告(待接 h5py 到宿主校验器)。

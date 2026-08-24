@@ -47,7 +47,9 @@
 | 16 | `40-phase16-docs-and-final.md` | 文档收口 + 最终全量验收 | P0 | ☑ | `1e438e1` |
 | 17 | `50-phase-desktop-insar.md` | Phase D0-D5:pi Desktop 工业化(源码壳 + InSAR 适配 + 自打包) | P0 | ☐ | |
 | 18 | `51-phase-desktop-ui.md` | Phase U0-U3:桌面 InSAR 化(右栏工作台:轨道/数据/图件 + chrome) | P0 | ☐ | |
-| 19 | `52-research-insar-domain.md` | 领域研究(读,不执行):数据×方法×产物×应用 + R1-R6 后续波次建议 | 读 | ☐ | |
+| 19 | `52-research-insar-domain.md` | 领域研究(读,不执行):数据×方法×产物×应用 + R1-R6 后续波次建议 | 读 | ☑ | |
+| 20 | `53-execution-r-waves.md` | R 波次执行分工:PS 桥/场景包/注册表扩展(A1-A3+B1+C 收口) | P0 | ☑ | |
+| 21 | `54-execution-preview-plugins.md` | 预览/插件/接入模式波次 + 2026-08-24 收口审计(行尾漂移/ruff 门禁/编码坑) | P0 | ☑ | |
 
 ## 第三部分:附录(随用随查)
 
