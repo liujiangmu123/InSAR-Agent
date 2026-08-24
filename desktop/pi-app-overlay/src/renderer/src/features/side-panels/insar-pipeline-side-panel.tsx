@@ -8,6 +8,7 @@ import { InsarRail } from './insar-rail'
 import { InsarDatasetsSection } from './insar-datasets-section'
 import { InsarFiguresSection } from './insar-figures-section'
 import {
+  type AccessMode,
   type DatasetsPayload,
   type FiguresPayload,
   type MonitorResponse,
@@ -17,6 +18,8 @@ import {
   coerceInsarRead,
   coerceMonitor,
   currentLine,
+  inferAccessMode,
+  presentQaNumber,
   readProviderError,
   shortRunId,
 } from './insar-panel-model'
@@ -49,6 +52,16 @@ function EvidenceBadge({ level, ceiling }: { level: string; ceiling: string | nu
       证据 {level}{extra}
     </span>
   )
+}
+
+const ACCESS_CHIP: Record<AccessMode, string> = {
+  A: '接入 A 全链',
+  B: '接入 B 云端干涉',
+  C: '接入 C 位移分析',
+}
+
+function resolveAccessMode(monitor: MonitorResponse): AccessMode | null {
+  return monitor.access_mode ?? inferAccessMode(monitor.steps)
 }
 
 export function InsarPipelineSidePanel({ panelId, adapterId, title }: SidePanelComponentProps) {
@@ -146,8 +159,15 @@ export function InsarPipelineSidePanel({ panelId, adapterId, title }: SidePanelC
   const headerTitle = title || 'InSAR'
   const showFullError = Boolean(error) && !monitor
   const dsCount = datasets && !datasets.error ? datasets.datasets.length : 0
-  const figCount = figures && !figures.error ? figures.figures.length : 0
+  const figCount =
+    figures && !figures.error ? figures.figures.length + (figures.files?.length ?? 0) : 0
   const simulated = Boolean(monitor?.run?.simulated)
+  const accessMode = monitor ? resolveAccessMode(monitor) : null
+  const figuresEmpty = Boolean(
+    monitor?.run && figures && !figures.error && figures.figures.length === 0,
+  )
+  const crossval = presentQaNumber(monitor?.qa_chips?.crossval_r)
+  const gnssRmse = presentQaNumber(monitor?.qa_chips?.gnss_rmse_mm)
 
   return (
     <div className="insar-panel scrollbar-overlay flex h-full flex-col overflow-hidden">
@@ -178,6 +198,10 @@ export function InsarPipelineSidePanel({ panelId, adapterId, title }: SidePanelC
               <EvidenceBadge level={monitor.evidence.level} ceiling={monitor.evidence.ceiling} />
             )}
             <span className="insar-chip">mode {monitor.mode}</span>
+            {accessMode && <span className="insar-chip">{ACCESS_CHIP[accessMode]}</span>}
+            {monitor.product?.label && <span className="insar-chip">{monitor.product.label}</span>}
+            {crossval != null && <span className="insar-chip">crossval_r {crossval}</span>}
+            {gnssRmse != null && <span className="insar-chip">gnss_rmse_mm {gnssRmse}</span>}
             <span className={cn('insar-chip', monitor.taints > 0 && 'is-stale')}>
               {monitor.taints > 0 ? `${monitor.taints} 失效` : '0 失效'}
             </span>
@@ -258,7 +282,9 @@ export function InsarPipelineSidePanel({ panelId, adapterId, title }: SidePanelC
               {!monitor && loading && (
                 <div className="p-3 text-[12px] text-muted-foreground">加载中…</div>
               )}
-              {monitor && <InsarRail monitor={monitor} />}
+              {monitor && (
+                <InsarRail monitor={monitor} accessMode={accessMode} figuresEmpty={figuresEmpty} />
+              )}
               {monitor?.run && (
                 <div className="shrink-0 truncate border-t border-border/40 px-3 py-1.5 font-mono text-[10px] text-muted-foreground">
                   {currentLine(monitor)}
@@ -268,7 +294,20 @@ export function InsarPipelineSidePanel({ panelId, adapterId, title }: SidePanelC
           )}
           {section === 'datasets' && <InsarDatasetsSection data={datasets} />}
           {section === 'figures' && (
-            <InsarFiguresSection base={apiBase} data={figures} simulated={simulated} />
+            <>
+              {accessMode === 'C' && figuresEmpty ? (
+                <div className="shrink-0 px-3 py-1.5 text-[11px] leading-relaxed text-muted-foreground/80">
+                  本 run 不走主链出图，分析产物看 files 预览
+                </div>
+              ) : null}
+              <InsarFiguresSection
+                base={apiBase}
+                data={figures}
+                simulated={simulated}
+                session={monitor?.session}
+                runId={figures?.run ?? undefined}
+              />
+            </>
           )}
         </div>
       )}

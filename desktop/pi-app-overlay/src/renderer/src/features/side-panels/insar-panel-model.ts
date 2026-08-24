@@ -33,6 +33,19 @@ export interface MonitorEvidence {
   ceiling: string | null
 }
 
+export type AccessMode = 'A' | 'B' | 'C'
+
+export interface MonitorProduct {
+  level: string
+  simulated: boolean
+  label: string
+}
+
+export interface MonitorQaChips {
+  crossval_r: number | null
+  gnss_rmse_mm: number | null
+}
+
 export interface MonitorResponse {
   session: string
   run: MonitorRun | null
@@ -42,6 +55,9 @@ export interface MonitorResponse {
   evidence: MonitorEvidence | null
   mode: string
   taints: number
+  access_mode: AccessMode | null
+  product: MonitorProduct | null
+  qa_chips: MonitorQaChips | null
 }
 
 export interface ProviderError {
@@ -50,7 +66,15 @@ export interface ProviderError {
   session?: string
 }
 
-export type DatasetKind = 'hyp3' | 'alos_raw' | 'slc_stack' | 'dem' | 'unknown'
+export type DatasetKind =
+  | 'hyp3'
+  | 'alos_raw'
+  | 'slc_stack'
+  | 'dem'
+  | 'nisar'
+  | 'gamma'
+  | 'displacement'
+  | 'unknown'
 
 export interface DatasetRow {
   id: string
@@ -79,9 +103,30 @@ export interface FigureRow {
   meta?: Record<string, unknown>
 }
 
+export type ViewerStatus = 'ready' | 'reserved'
+
+export interface FileViewer {
+  id: string
+  status: ViewerStatus
+  title: string
+  render: string
+}
+
+export interface FileRow {
+  step: number
+  name: string
+  path?: string
+  size?: number
+  kind?: string
+  previewKind?: string
+  viewers: FileViewer[]
+}
+
 export interface FiguresPayload {
   run: string | null
   figures: FigureRow[]
+  files: FileRow[]
+  truncated: boolean
   error?: string
 }
 
@@ -207,6 +252,35 @@ function coerceEvidence(v: unknown): MonitorEvidence | null {
   return { level, ceiling: asString(rec.ceiling) ?? null }
 }
 
+function coerceAccessMode(v: unknown): AccessMode | null {
+  return v === 'A' || v === 'B' || v === 'C' ? v : null
+}
+
+function coerceProduct(v: unknown): MonitorProduct | null {
+  const rec = asRecord(v)
+  if (!rec) return null
+  const label = asString(rec.label)?.trim()
+  if (!label) return null
+  return {
+    level: asString(rec.level) ?? '',
+    simulated: asBoolean(rec.simulated) ?? false,
+    label,
+  }
+}
+
+function coerceQaValue(v: unknown): number | null {
+  return asFiniteNumber(v) ?? null
+}
+
+function coerceQaChips(v: unknown): MonitorQaChips | null {
+  const rec = asRecord(v)
+  if (!rec) return null
+  return {
+    crossval_r: coerceQaValue(rec.crossval_r),
+    gnss_rmse_mm: coerceQaValue(rec.gnss_rmse_mm),
+  }
+}
+
 export function coerceMonitor(state: unknown): MonitorResponse | null {
   const rec = asRecord(state)
   if (!rec || rec.ok === false) return null
@@ -227,12 +301,24 @@ export function coerceMonitor(state: unknown): MonitorResponse | null {
     evidence: rec.evidence == null ? null : coerceEvidence(rec.evidence),
     mode: asString(rec.mode) ?? 'free',
     taints: asFiniteNumber(rec.taints) ?? 0,
+    access_mode: coerceAccessMode(rec.access_mode),
+    product: rec.product == null ? null : coerceProduct(rec.product),
+    qa_chips: rec.qa_chips == null ? null : coerceQaChips(rec.qa_chips),
   }
 }
 
-const KINDS: DatasetKind[] = ['hyp3', 'alos_raw', 'slc_stack', 'dem', 'unknown']
+const KINDS: DatasetKind[] = [
+  'hyp3',
+  'alos_raw',
+  'slc_stack',
+  'dem',
+  'nisar',
+  'gamma',
+  'displacement',
+  'unknown',
+]
 
-function coerceKind(v: unknown): DatasetKind {
+export function coerceKind(v: unknown): DatasetKind {
   return KINDS.includes(v as DatasetKind) ? (v as DatasetKind) : 'unknown'
 }
 
@@ -286,15 +372,70 @@ function coerceFigure(v: unknown): FigureRow | null {
   }
 }
 
+function coerceViewer(v: unknown): FileViewer | null {
+  const rec = asRecord(v)
+  if (!rec) return null
+  const id = asString(rec.id)?.trim()
+  const title = asString(rec.title)?.trim()
+  const render = asString(rec.render)?.trim()
+  if (!id || !title || !render) return null
+  if (rec.status !== 'ready' && rec.status !== 'reserved') return null
+  return { id, status: rec.status, title, render }
+}
+
+export function coerceFile(v: unknown): FileRow | null {
+  const rec = asRecord(v)
+  if (!rec) return null
+  const name = asString(rec.name)
+  if (!name) return null
+  const viewers = Array.isArray(rec.viewers)
+    ? rec.viewers.map(coerceViewer).filter((row): row is FileViewer => row !== null)
+    : []
+  const previewKind = asString(rec.previewKind)?.trim() || asString(rec['preview_kind'])?.trim()
+  const row: FileRow = {
+    step: asFiniteNumber(rec.step) ?? 0,
+    name,
+    path: asString(rec.path),
+    size: asFiniteNumber(rec.size),
+    kind: asString(rec.kind),
+    viewers,
+  }
+  if (previewKind) row.previewKind = previewKind
+  return row
+}
+
 export function coerceFigures(v: unknown): FiguresPayload {
   const rec = asRecord(v)
-  if (!rec) return { run: null, figures: [], error: 'invalid_figures' }
-  if (asString(rec.error)) return { run: null, figures: [], error: asString(rec.error) }
+  if (!rec) return { run: null, figures: [], files: [], truncated: false, error: 'invalid_figures' }
+  if (asString(rec.error)) {
+    return { run: null, figures: [], files: [], truncated: false, error: asString(rec.error) }
+  }
   const figures = Array.isArray(rec.figures)
     ? rec.figures.map(coerceFigure).filter((f): f is FigureRow => f !== null)
     : []
+  const files = Array.isArray(rec.files)
+    ? rec.files.map(coerceFile).filter((f): f is FileRow => f !== null)
+    : []
   const run = rec.run == null ? null : typeof rec.run === 'string' ? rec.run : asString(asRecord(rec.run)?.run_id) ?? null
-  return { run, figures }
+  return { run, figures, files, truncated: asBoolean(rec.truncated) ?? false }
+}
+
+export function inferAccessMode(steps: MonitorStep[]): AccessMode | null {
+  if (!steps.length) return null
+  const hasCore = steps.some((s) => s.step >= 1 && s.step <= 11)
+  const hasAnalysis = steps.some((s) => s.step >= 20)
+  if (hasAnalysis && !hasCore) return 'C'
+  const cloud = [2, 3, 4, 5, 6]
+  const cloudSteps = cloud.map((n) => steps.find((s) => s.step === n))
+  if (cloudSteps.every((s) => s != null && s.state === 'skipped')) return 'B'
+  if (hasCore) return 'A'
+  return null
+}
+
+export function presentQaNumber(v: number | null | undefined): number | null {
+  // 0 是合法实测(例如 GNSS RMSE=0);缺席是 null,不要把 0 当成假值丢掉
+  if (v == null || !Number.isFinite(v)) return null
+  return v
 }
 
 export function coerceInsarRead(state: unknown): InsarReadState | null {

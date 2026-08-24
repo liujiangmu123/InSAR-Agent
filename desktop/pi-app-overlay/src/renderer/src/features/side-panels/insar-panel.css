@@ -25,6 +25,9 @@
   --insar-kind-alos: #7c3aed;
   --insar-kind-slc: #0f766e;
   --insar-kind-dem: #a16207;
+  --insar-kind-nisar: #155e75;
+  --insar-kind-gamma: #9f1239;
+  --insar-kind-displacement: #3f6212;
   --insar-kind-unknown: #616a78;
 }
 
@@ -53,6 +56,9 @@
   --insar-kind-alos: #c4b5fd;
   --insar-kind-slc: #5eead4;
   --insar-kind-dem: #facc15;
+  --insar-kind-nisar: #67e8f9;
+  --insar-kind-gamma: #fb7185;
+  --insar-kind-displacement: #a3e635;
   --insar-kind-unknown: #94a3b8;
 }
 
@@ -86,6 +92,14 @@
   background: var(--insar-stale-weak);
   color: var(--insar-stale-text);
   border-bottom: 1px solid var(--insar-stale-border);
+}
+
+.insar-panel .insar-banner-trunc {
+  font-size: 11px;
+  padding: 4px 10px;
+  background: var(--insar-pend-weak);
+  color: var(--insar-pend-text);
+  border-bottom: 1px solid var(--insar-pend-border);
 }
 
 .insar-panel .insar-node {
@@ -139,6 +153,9 @@
 .insar-panel .insar-kind.alos_raw { color: var(--insar-kind-alos); border-color: var(--insar-kind-alos); }
 .insar-panel .insar-kind.slc_stack { color: var(--insar-kind-slc); border-color: var(--insar-kind-slc); }
 .insar-panel .insar-kind.dem { color: var(--insar-kind-dem); border-color: var(--insar-kind-dem); }
+.insar-panel .insar-kind.nisar { color: var(--insar-kind-nisar); border-color: var(--insar-kind-nisar); }
+.insar-panel .insar-kind.gamma { color: var(--insar-kind-gamma); border-color: var(--insar-kind-gamma); }
+.insar-panel .insar-kind.displacement { color: var(--insar-kind-displacement); border-color: var(--insar-kind-displacement); }
 .insar-panel .insar-kind.unknown { color: var(--insar-kind-unknown); }
 
 .insar-panel .insar-tab {
@@ -150,4 +167,250 @@
 .insar-panel .insar-tab.is-on {
   background: var(--insar-run-weak);
   color: var(--insar-run-text);
+}
+
+.insar-panel .insar-viewer {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--insar-pend-text);
+}
+.insar-panel .insar-viewer.is-ready {
+  color: var(--insar-ok-text);
+}
+.insar-panel .insar-viewer.is-reserved {
+  color: var(--insar-stale-text);
+}
+
+.insar-panel .insar-preview-file {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.insar-panel .insar-preview-file:hover {
+  background: var(--insar-run-weak);
+}
+.insar-panel .insar-preview-file:focus-visible {
+  outline: 1px solid var(--insar-run);
+  outline-offset: 1px;
+}
+
+.insar-panel .insar-preview-dialog {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+}
+.insar-panel .insar-preview-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--insar-pend-border);
+  border-radius: 8px;
+}
+.insar-panel .insar-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--insar-pend-border);
+}
+.insar-panel .insar-preview-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--insar-pend-text);
+}
+.insar-panel .insar-preview-kind {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--insar-pend-border);
+}
+.insar-panel .insar-preview-close {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  color: var(--insar-run-text);
+  cursor: pointer;
+}
+.insar-panel .insar-preview-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+}
+.insar-panel .insar-preview-note,
+.insar-panel .insar-preview-meta {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--insar-pend-text);
+}
+.insar-panel .insar-preview-error {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--insar-bad-text);
+}
+.insar-panel .insar-preview-trunc {
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 4px 8px;
+  margin-bottom: 8px;
+  background: var(--insar-stale-weak);
+  color: var(--insar-stale-text);
+  border: 1px solid var(--insar-stale-border);
+  border-radius: 6px;
+}
+.insar-panel .insar-preview-img {
+  display: block;
+  max-width: 100%;
+  max-height: min(420px, 55vh);
+  object-fit: contain;
+  margin: 0 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--insar-pend-border);
+  background: var(--insar-pend-weak);
+}
+.insar-panel .insar-preview-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+.insar-panel .insar-preview-chip,
+.insar-panel .insar-preview-pager button,
+.insar-panel .insar-preview-link {
+  border: 1px solid var(--insar-pend-border);
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  line-height: 1.3;
+  padding: 2px 6px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.insar-panel .insar-preview-chip.is-on,
+.insar-panel .insar-preview-link.is-on {
+  background: var(--insar-run-weak);
+  color: var(--insar-run-text);
+  border-color: var(--insar-run-border);
+}
+.insar-panel .insar-preview-pager {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.insar-panel .insar-preview-pager button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.insar-panel .insar-preview-link {
+  border-radius: 4px;
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.insar-panel .insar-preview-spark {
+  display: block;
+  width: 100%;
+  max-width: 280px;
+  height: 72px;
+  margin: 0 0 8px;
+  color: var(--insar-run-text);
+}
+.insar-panel .insar-preview-scroll {
+  overflow: auto;
+  max-width: 100%;
+}
+.insar-panel .insar-preview-table {
+  width: max-content;
+  max-width: none;
+  border-collapse: collapse;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.insar-panel .insar-preview-table caption {
+  caption-side: top;
+  text-align: left;
+  padding: 0 0 6px;
+  color: var(--insar-pend-text);
+  font-size: 10px;
+}
+.insar-panel .insar-preview-table th,
+.insar-panel .insar-preview-table td {
+  border: 1px solid var(--insar-pend-border);
+  padding: 2px 6px;
+  text-align: left;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.insar-panel .insar-preview-table th {
+  background: var(--insar-pend-weak);
+  font-weight: 600;
+}
+.insar-panel .insar-preview-pre {
+  margin: 0;
+  padding: 8px;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--insar-pend-weak);
+  border-radius: 6px;
+  overflow: auto;
+}
+.insar-panel .insar-preview-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.45;
+  color: var(--insar-pend-text);
+}
+
+.insar-panel .insar-preview-img.is-pick {
+  cursor: crosshair;
+  user-select: none;
+}
+.insar-panel .insar-preview-stat {
+  border: 1px solid var(--insar-pend-border);
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  line-height: 1.3;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+.insar-panel .insar-preview-attrs {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.45;
+  color: var(--insar-pend-text);
+  max-height: 180px;
+  overflow: auto;
 }

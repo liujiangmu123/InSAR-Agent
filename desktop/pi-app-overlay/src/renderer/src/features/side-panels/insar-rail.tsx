@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { cn } from '@renderer/lib/utils'
 import {
+  type AccessMode,
   type MonitorResponse,
   type MonitorStep,
   type RailGlyph,
   formatDuration,
+  inferAccessMode,
   pad2,
   railKind,
   stepCounts,
@@ -76,12 +78,14 @@ function StepRow({
 
 function Group({
   title,
+  note,
   steps,
   currentStep,
   openStep,
   onToggle,
 }: {
   title: string
+  note?: string
   steps: MonitorStep[]
   currentStep: number | null
   openStep: number | null
@@ -92,7 +96,12 @@ function Group({
   return (
     <div className="border-t border-border/20">
       <div className="flex items-baseline justify-between px-3 py-1 text-[10px] uppercase tracking-wider text-muted-foreground/70">
-        <span>{title}</span>
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span>{title}</span>
+          {note ? (
+            <span className="normal-case tracking-normal text-muted-foreground/60">{note}</span>
+          ) : null}
+        </span>
         <span className="font-mono tabular-nums">
           {done}/{steps.length}
         </span>
@@ -110,12 +119,39 @@ function Group({
   )
 }
 
-export function InsarRail({ monitor }: { monitor: MonitorResponse }) {
+function CoreSkippedNote({ figuresEmpty }: { figuresEmpty: boolean }) {
+  return (
+    <div className="border-t border-border/20">
+      <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-muted-foreground/70">
+        核心流水线 01–11
+      </div>
+      <div className="px-3 py-1.5 text-[11px] leading-relaxed text-muted-foreground/80">
+        本 run 不走主链(位移产品直接分析)
+        {figuresEmpty ? (
+          <div className="mt-1">本 run 不走主链出图，分析产物看 files 预览</div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+export function InsarRail({
+  monitor,
+  accessMode,
+  figuresEmpty = false,
+}: {
+  monitor: MonitorResponse
+  accessMode?: AccessMode | null
+  figuresEmpty?: boolean
+}) {
   const [openStep, setOpenStep] = useState<number | null>(null)
   const counts = stepCounts(monitor.steps)
   const core = monitor.steps.filter((s) => s.step < 20)
   const analysis = monitor.steps.filter((s) => s.step >= 20)
   const currentStep = monitor.current?.step ?? null
+  const mode = accessMode ?? inferAccessMode(monitor.steps)
+  const showCoreCNote = mode === 'C' && core.length === 0
+  const showModeCFiguresNote = mode === 'C' && figuresEmpty
   const chips: Array<{ key: keyof typeof counts; label: string; cls: string }> = [
     { key: 'done', label: '完成', cls: 'is-done' },
     { key: 'running', label: '运行', cls: 'is-running' },
@@ -135,17 +171,24 @@ export function InsarRail({ monitor }: { monitor: MonitorResponse }) {
         ))}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {monitor.steps.length === 0 ? (
-          <div className="p-3 text-[11px] text-muted-foreground/70">尚无步骤。对话中让 agent 用 insar_plan_run 规划。</div>
+        {monitor.steps.length === 0 && !showCoreCNote ? (
+          monitor.run ? (
+            <div className="p-3 text-[11px] text-muted-foreground/70">尚无步骤</div>
+          ) : null
         ) : (
           <>
-            <Group
-              title="核心流水线 01–11"
-              steps={core}
-              currentStep={currentStep}
-              openStep={openStep}
-              onToggle={(n) => setOpenStep((cur) => (cur === n ? null : n))}
-            />
+            {showCoreCNote ? (
+              <CoreSkippedNote figuresEmpty={figuresEmpty} />
+            ) : (
+              <Group
+                title="核心流水线 01–11"
+                note={mode === 'B' ? '云端已完成' : undefined}
+                steps={core}
+                currentStep={currentStep}
+                openStep={openStep}
+                onToggle={(n) => setOpenStep((cur) => (cur === n ? null : n))}
+              />
+            )}
             <Group
               title="分析后处理 20–28"
               steps={analysis}
@@ -153,6 +196,11 @@ export function InsarRail({ monitor }: { monitor: MonitorResponse }) {
               openStep={openStep}
               onToggle={(n) => setOpenStep((cur) => (cur === n ? null : n))}
             />
+            {showModeCFiguresNote && !showCoreCNote ? (
+              <div className="border-t border-border/20 px-3 py-1.5 text-[11px] leading-relaxed text-muted-foreground/80">
+                本 run 不走主链出图，分析产物看 files 预览
+              </div>
+            ) : null}
           </>
         )}
       </div>
