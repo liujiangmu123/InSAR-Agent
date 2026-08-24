@@ -1,0 +1,10 @@
+id: raster-geotiff
+kind: viewer
+status: ready
+title: GeoTIFF 栅格
+version: 0.1.0
+match:
+  suffixes: [".tif", ".tiff"]
+render: raster_png
+sidebar: files
+note: /api/preview 缩略 PNG;缺库则 unsupported

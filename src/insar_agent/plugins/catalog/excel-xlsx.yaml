@@ -1,0 +1,10 @@
+id: excel-xlsx
+kind: viewer
+status: ready
+title: Excel 表格
+version: 0.1.0
+match:
+  suffixes: [".xlsx", ".xlsm"]
+render: table
+sidebar: files
+note: 缺库则 API 返回 unsupported

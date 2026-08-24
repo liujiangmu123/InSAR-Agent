@@ -1,0 +1,8 @@
+id: engine-method
+kind: engine
+status: reserved
+title: 引擎方法
+version: 0.1.0
+render: none
+sidebar: none
+note: 新方法必须进 capabilities.py + engines.resolve_builder,不能只靠 YAML(科学闭集)。

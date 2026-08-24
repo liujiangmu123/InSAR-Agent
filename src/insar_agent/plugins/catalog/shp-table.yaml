@@ -1,0 +1,10 @@
+id: shp-table
+kind: viewer
+status: ready
+title: SHP 属性表
+version: 0.1.0
+match:
+  suffixes: [".shp"]
+render: table
+sidebar: files
+note: /api/preview 读同名 .dbf 属性表,不解析几何

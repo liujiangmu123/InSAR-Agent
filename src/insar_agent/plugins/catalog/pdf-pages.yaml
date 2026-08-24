@@ -1,0 +1,10 @@
+id: pdf-pages
+kind: viewer
+status: ready
+title: PDF 页
+version: 0.1.0
+match:
+  suffixes: [".pdf"]
+render: pdf_meta
+sidebar: files
+note: /api/preview 页数与元数据;缺库则 unsupported

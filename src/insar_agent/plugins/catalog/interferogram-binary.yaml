@@ -1,0 +1,10 @@
+id: interferogram-binary
+kind: viewer
+status: ready
+title: 干涉图二进制
+version: 0.1.0
+match:
+  suffixes: [".unw", ".flat", ".int"]
+render: binary_meta
+sidebar: files
+note: 无宽度元数据则不渲染

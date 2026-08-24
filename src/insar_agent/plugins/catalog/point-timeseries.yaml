@@ -1,0 +1,11 @@
+id: point-timeseries
+kind: viewer
+status: ready
+title: 点位时序
+version: 0.1.0
+match:
+  suffixes: [".h5", ".hdf5"]
+  name_contains: ["timeseries"]
+render: timeseries_point
+sidebar: files
+note: 对话 insar_timeseries_point + 第10步 points_timeseries PNG;侧栏不内嵌交互曲线。

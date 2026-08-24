@@ -1,0 +1,10 @@
+id: table-csv
+kind: viewer
+status: ready
+title: CSV 表格
+version: 0.1.0
+match:
+  suffixes: [".csv", ".tsv"]
+render: table
+sidebar: files
+note: /api/preview 前 200 行

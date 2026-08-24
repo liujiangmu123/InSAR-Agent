@@ -1,0 +1,10 @@
+id: hdf5-structure
+kind: viewer
+status: ready
+title: HDF5 结构
+version: 0.1.0
+match:
+  suffixes: [".h5", ".hdf5"]
+render: hdf5_meta
+sidebar: files
+note: /api/preview 只列结构与属性,不加载立方

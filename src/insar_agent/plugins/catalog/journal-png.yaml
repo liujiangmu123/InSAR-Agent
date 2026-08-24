@@ -1,0 +1,10 @@
+id: journal-png
+kind: viewer
+status: ready
+title: 期刊 PNG
+version: 0.1.0
+match:
+  suffixes: [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+render: png_gallery
+sidebar: figures
+note: 现有 /api/figures 图像侧画廊;本清单供侧栏显示已就绪。

@@ -1,0 +1,9 @@
+id: scenario-packs
+kind: skill
+status: ready
+title: 场景技能包
+version: 0.1.0
+skill_type: scenario
+render: none
+sidebar: none
+note: registry/scenario_packs/<key>/SKILL.md+overrides.yaml drop-in。

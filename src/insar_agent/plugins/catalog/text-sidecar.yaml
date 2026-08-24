@@ -1,0 +1,10 @@
+id: text-sidecar
+kind: viewer
+status: ready
+title: 文本侧车
+version: 0.1.0
+match:
+  suffixes: [".yaml", ".yml", ".json", ".md"]
+render: text_plain
+sidebar: files
+note: /api/preview 文本截断;不执行 YAML

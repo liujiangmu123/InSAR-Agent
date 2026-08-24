@@ -1,0 +1,11 @@
+id: offset-timeseries
+kind: viewer
+status: ready
+title: 偏移时序
+version: 0.1.0
+match:
+  suffixes: [".h5", ".nc", ".tif"]
+  name_contains: ["offset", "GOFF", "azimuthOffset", "rangeOffset", "Off"]
+render: timeseries_point
+sidebar: files
+note: 侧栏预览已有的 offset/GOFF 文件;不做自研偏移追踪

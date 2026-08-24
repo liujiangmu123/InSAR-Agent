@@ -1,0 +1,9 @@
+id: step-skills
+kind: skill
+status: ready
+title: 步骤技能
+version: 0.1.0
+skill_type: step
+render: none
+sidebar: none
+note: 在仓库 skills/<NN>-*/SKILL.md drop-in,无需改 Python。

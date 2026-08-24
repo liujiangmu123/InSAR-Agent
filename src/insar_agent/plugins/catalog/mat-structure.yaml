@@ -1,0 +1,10 @@
+id: mat-structure
+kind: viewer
+status: ready
+title: MAT 结构
+version: 0.1.0
+match:
+  suffixes: [".mat"]
+render: hdf5_meta
+sidebar: files
+note: /api/preview 列 v7.3 HDF5 变量树;旧版 MAT 则 unsupported

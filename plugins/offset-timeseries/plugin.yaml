@@ -1,0 +1,15 @@
+# 示例副本:拷到 $INSAR_HOME/plugins/offset-timeseries/plugin.yaml
+# 内置 catalog 已有同 id、status=reserved;实现查看器时改 status=ready。
+id: offset-timeseries
+kind: viewer
+status: reserved
+title: 偏移时间序列
+version: 0.1.0
+match:
+  suffixes: [".h5", ".nc", ".tif"]
+  name_contains: ["offset", "GOFF", "azimuthOffset", "rangeOffset", "Off"]
+render: none
+sidebar: files
+note: >-
+  实现查看器时改 status=ready,并在 engines/figures 或 overlay 增加出图/取样,
+  不要在本目录放 .py 执行入口。52 不做自研偏移追踪;NISAR GOFF 可作模式 C 输入。

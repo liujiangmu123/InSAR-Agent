@@ -1,0 +1,10 @@
+id: zip-members
+kind: viewer
+status: ready
+title: ZIP 成员
+version: 0.1.0
+match:
+  suffixes: [".zip", ".kmz"]
+render: zip_list
+sidebar: files
+note: /api/preview 列出成员,不解压落盘

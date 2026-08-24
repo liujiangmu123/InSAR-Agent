@@ -1,0 +1,10 @@
+id: json-tree
+kind: viewer
+status: ready
+title: JSON 树
+version: 0.1.0
+match:
+  suffixes: [".json"]
+render: json_tree
+sidebar: files
+note: /api/preview JSON 结构;大文件截断

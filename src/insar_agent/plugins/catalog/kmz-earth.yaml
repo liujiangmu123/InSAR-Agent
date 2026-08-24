@@ -1,0 +1,10 @@
+id: kmz-earth
+kind: viewer
+status: ready
+title: KMZ 地球仪
+version: 0.1.0
+match:
+  suffixes: [".kmz", ".kml"]
+render: external
+sidebar: files
+note: 外部地球仪打开 KMZ/KML;本进程不内嵌地图。
