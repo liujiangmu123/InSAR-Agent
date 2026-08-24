@@ -11,7 +11,9 @@ GET /api/artifacts?session=&run_id= → 按步骤分组的真实产物清单
     文案统一「不存在或不属于」,不泄露其他会话 run 的存在性;会话没有任何
     run → {"run": None, "steps": []}(前端以此回落演示数据,/api/figures 同款)。
   - 路径只回工作区相对路径:绝对路径/带盘符/../ 越界的坏 DB 行降级为仅
-    文件名,绝不回显磁盘布局(app.py resolve_artifact_file 同款边界)。
+    文件名,绝不回显磁盘布局。校验是词法级(不 resolve 终点):目录联接
+    导入的产物树(hyp3/ 等)在场就该报 exists=true;内容直读端点
+    (app.py resolve_artifact_file)另有更严的 resolve 后判界,互不混用。
   - size/mtime 优先取落盘文件实测值(/api/figures 同纪律:DB 记录可能已被
     覆写);文件缺失回落 DB 记录值并标 exists=False —— 「产物被删」是要
     如实展示的正常状态,不是要隐藏的异常(§1.3 的 -1 编码哲学)。
@@ -43,19 +45,22 @@ def _resolve_run(store: Store, session: str, run_id: str | None) -> dict | None:
 
 
 def _safe_rel_path(base: Path, rel_path: str) -> Path | None:
-    """产物相对路径 → 工作区内绝对路径;绝对路径/盘符/越界一律 None。
+    """产物相对路径 → 工作区内绝对路径;绝对路径/盘符/../ 越界一律 None。
 
-    与 app.py 的 resolve_artifact_file 同款复核:artifacts.path 可能来自
-    坏数据/被篡改的 DB 行,清单端点虽不读文件本体,但 stat 前仍须确认
-    目标落在工作区内,否则回显 size/mtime 也是对区外文件的探测面。
+    校验做在词法层(不 resolve):导入步骤以目录联接(mklink /J)把数据
+    零拷贝接进工作区,resolve 后联接树落在工作区外 —— 若按最终真实路径
+    判界,hyp3/ 等联接产物会被误报 exists=false(E2E 4 景实测)。坏 DB 行
+    的威胁是路径字符串本身的越界,词法拒绝绝对路径/盘符/.. 段即可挡住;
+    经工作区内联接可达的目标是导入步骤自己接进来的数据,stat 无探测面。
+    内容直读(app.py resolve_artifact_file)维持 resolve 后判界的更严边界
+    (REVIEW-r2 P2-7,不回字节的清单与回字节的直读定位不同)。
     """
     rel = Path(rel_path)
-    if rel.is_absolute() or rel.drive:
+    if rel.is_absolute() or rel.drive or ".." in rel.parts:
         return None
-    target = (base / rel).resolve()
-    if target == base or not target.is_relative_to(base):
+    if not rel.parts:  # ""/".":指向工作区本身,不是产物
         return None
-    return target
+    return base / rel
 
 
 def _artifact_entry(base: Path, art: dict) -> dict:

@@ -87,6 +87,34 @@ def test_turn_then_pipeline_end_to_end(client):
     assert len(trace) >= 6  # 每个执行步骤至少一条审计(2-6 云端跳过不执行)
 
 
+def test_analysis_turn_inherits_session_scenario(client):
+    """核心 run 已带场景的会话里,分析回合用认不出场景的描述发起 →
+    不再 ask 逼问,继承最近 run 的场景并直接规划(E2E 4 景实测缺陷:
+    quake 核心跑完,分析回合还要用户手选场景)。核心流水线行为不变。"""
+    client.post("/api/sessions", json={"id": "demo"})
+    _stream_events(client, "/api/turn", {"session": "demo", "text": "Ridgecrest 地震同震"})
+    vague = "对速度场做相干掩膜、统计剖面、分析出图、变化检测与外推预测"
+    events = _stream_events(client, "/api/turn", {
+        "session": "demo", "text": vague, "pipeline": "analysis"})
+    kinds = [e["t"] for e in events]
+    assert "ask" not in kinds, "分析回合不应再逼问场景"
+    assert "plan" in kinds
+    notes = " ".join(e.get("text", "") for e in events if e["t"] == "note")
+    assert "继承" in notes and "quake" in notes
+    state = client.get("/api/state", params={"session": "demo"}).json()
+    assert state["run"]["scenario"] == "quake"
+    assert [s["id"] for s in state["steps"]] == list(range(20, 29))
+
+    # 核心流水线守护:认不出场景仍走 ask 表单(行为与历史版本一致);
+    # 无 run 的会话即使发分析回合也仍 ask(没有可继承的场景,不能编)
+    client.post("/api/sessions", json={"id": "demo2"})
+    ev_core = _stream_events(client, "/api/turn", {"session": "demo2", "text": vague})
+    assert any(e["t"] == "ask" for e in ev_core)
+    ev_norun = _stream_events(client, "/api/turn", {
+        "session": "demo2", "text": vague, "pipeline": "analysis"})
+    assert any(e["t"] == "ask" for e in ev_norun)
+
+
 def test_message_discipline_during_run(client):
     """absorb-E4:运行中投递消息必须显式声明 deliver_as。"""
     client.post("/api/sessions", json={"id": "demo"})

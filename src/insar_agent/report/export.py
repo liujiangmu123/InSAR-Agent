@@ -499,8 +499,18 @@ def _run_engine_or_raise(argv: list[str], cwd: Path, tool: str,
 
 
 def _export_gtiff_kmz(fmt: str, src: Path, spec: ProductSpec, target: Path) -> None:
-    """gtiff/kmz:引擎写 .part 再原子替换(读者永远看不到半截产物)。"""
-    part = target.with_name(target.name + ".part")
+    """gtiff/kmz:引擎写临时名再原子替换(读者永远看不到半截产物)。
+
+    临时名按引擎的输出命名规则分派:save_gdal 对 -o 原样使用 → {name}.part;
+    save_kmz 对 -o 做 splitext 再补 .kmz(实装源码 write_kmz_file:
+    out_file_base = splitext(out_file)[0]),传 {name}.kmz.part 实际落盘
+    {name}.kmz.kmz、期望的 .part 永不出现(E2E 实测 502)—— 故 kmz 用
+    {stem}.part.kmz,splitext 剥 .kmz 得 {stem}.part、回拼后恰是同名。
+    """
+    if fmt == "kmz":
+        part = target.with_name(target.stem + ".part.kmz")
+    else:
+        part = target.with_name(target.name + ".part")
     part.unlink(missing_ok=True)
     argv = build_engine_argv(fmt, src, spec.dataset, part)
     tool = "save_gdal" if fmt == "gtiff" else "save_kmz"

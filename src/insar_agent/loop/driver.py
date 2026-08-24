@@ -453,6 +453,24 @@ class Driver:
         # ---- 规则路径(无 LLM / LLM 失败):行为与历史版本逐字节一致 ----
         intent = self.brain.intent(text)
         if intent.need_form:
+            # 分析/后续流水线回合:描述认不出场景时,继承会话最近 run 的场景
+            # —— 同一会话的分析是对既有产物的续作,重新逼问场景既打断又易选
+            # 错(E2E 实测:核心跑完 quake 后,分析回合还要用户手选)。只在
+            # 分类失败时兜底:文本点名了场景仍以文本为准;核心流水线不继承
+            # (新处理链的场景该由用户/LLM 明确),行为与历史版本一致。
+            if pipeline != "core":
+                latest = store.latest_run(session_id)
+                inherited = scenario_of(str((latest or {}).get("scenario") or ""))
+                if inherited is not None:
+                    yield self._emit(ev.note(
+                        "dim", f"分析回合未指明场景,继承会话最近 run 的场景:"
+                               f"{inherited.key}({inherited.label})"))
+                    async for event in self._plan_turn(
+                            session_id, session, text, inherited,
+                            intent_source="inherited", pipeline=pipeline,
+                            step_params=step_params):
+                        yield event
+                    return
             # 场景选项 = 技能包闭集(动态生成):此前硬编码三场景,第四包
             # stripmap_coseismic 加入后表单脱节,用户无法从表单选到条带链
             # (触发场景:tests/test_journey_permafrost.py 边界段 ask 断言)
