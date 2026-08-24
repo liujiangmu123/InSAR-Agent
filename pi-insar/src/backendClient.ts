@@ -203,15 +203,21 @@ export interface TraceEvent {
   raw_response: string | null;
 }
 
-/** `GET /api/timeseries-point` — one pixel from a real MintPy timeseries HDF5. */
+/** `GET /api/timeseries-point` — one pixel from a real MintPy timeseries HDF5.
+ *
+ * lat/lon are always true WGS84 degrees; for projected (UTM) grids the native
+ * metre coordinates travel alongside as x/y and extent_native, with `crs`
+ * describing the grid. Never feed UTM metres into the lat/lon parameters. */
 export interface TimeseriesPointResponse {
   dates: string[];
   values_mm: number[];
-  ref_point: { lat: number; lon: number } | null;
+  ref_point: { lat: number; lon: number; x?: number; y?: number } | null;
   source: string;
-  point: { lat: number | null; lon: number | null; row: number; col: number };
+  point: { lat: number | null; lon: number | null; row: number; col: number; x?: number; y?: number };
   shape: { rows: number; cols: number };
   extent: { lon_min: number; lon_max: number; lat_min: number; lat_max: number } | null;
+  extent_native?: { x_min: number; x_max: number; y_min: number; y_max: number } | null;
+  crs?: { epsg: number | null; projected: boolean; unit: string; latlon_convertible: boolean } | null;
   n_dropped: number;
 }
 
