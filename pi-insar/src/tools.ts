@@ -81,6 +81,13 @@ const StepParam = Type.Integer({
   description: "Pipeline step number (1-11)",
 });
 
+/** Skill docs cover core 1-11 and analysis 20-28; do not widen StepParam (run-step tools). */
+const SkillStepParam = Type.Integer({
+  minimum: 1,
+  maximum: 28,
+  description: "Step skill number (1-11 或 20-28)",
+});
+
 const ParamsJsonParam = Type.Optional(
   Type.String({
     description:
@@ -1092,10 +1099,10 @@ export function createInsarTools(client: BackendClient, controller: ModeControll
     name: "insar_read_skill",
     label: "InSAR Read Skill",
     description:
-      "Fetch the scientific skill document for one pipeline step (1-11). " +
+      "Fetch the scientific skill document for one step (1-11 或 20-28). " +
       "Use this for method/parameter meaning instead of recalling it from memory.",
     parameters: Type.Object({
-      step_id: Type.Integer({ minimum: 1, maximum: 11, description: "Pipeline step number (1-11)" }),
+      step_id: SkillStepParam,
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as { step_id: number };
