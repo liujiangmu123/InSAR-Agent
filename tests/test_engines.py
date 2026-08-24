@@ -98,10 +98,13 @@ def test_real_mode_routing():
     from insar_agent.engines import figures, localdata, qa
 
     assert resolve_builder(REGISTRY[1], "local_import", simulated=False) is localdata.build
+    assert resolve_builder(REGISTRY[1], "nisar_import", simulated=False) is localdata.build
     assert resolve_builder(REGISTRY[10], "figure_journal", simulated=False) is figures.build
     assert resolve_builder(REGISTRY[11], "coherence_mask", simulated=False) is qa.build
     assert resolve_builder(REGISTRY[11], "crossval_ps_sbas", simulated=False) is qa.build
-    from insar_agent.engines import mintpy_post, passthrough, predict
+    from insar_agent.engines import dolphin, gnss, mintpy_post, passthrough, predict
+    assert resolve_builder(REGISTRY[11], "gnss_compare", simulated=False) is gnss.build
+    assert resolve_builder(REGISTRY[7], "dolphin_ps_ds", simulated=False) is dolphin.build
     assert resolve_builder(REGISTRY[21], "passthrough", simulated=False) is passthrough.build
     assert resolve_builder(REGISTRY[23], "asc_desc_horz_vert", simulated=False) is mintpy_post.build
     assert resolve_builder(REGISTRY[27], "extrapolate_fitted", simulated=False) is predict.build

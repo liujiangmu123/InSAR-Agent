@@ -58,7 +58,7 @@ def args_hash(method: str, science_params: Mapping[str, object]) -> str:
     return hash_struct(["Args", method, dict(science_params)])
 
 
-def local_hash(method: str, science_params: Mapping[str, object], presentation_params: Mapping[str, object]) -> str:
+def local_hash(method: str, science_params: Mapping[str, object], presentation_params: Mapping[str, object]) -> str:  # noqa: E501
     """本步重跑判定用:science + presentation。呈现参数改动只影响本步(§5.4 表)。"""
     return hash_struct(["Local", method, dict(science_params), dict(presentation_params)])
 

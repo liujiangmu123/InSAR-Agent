@@ -285,16 +285,19 @@ def test_brain_no_llm_path_unchanged_by_skill_context():
 # ---------------- 仓库契约守护 ----------------
 
 def test_repo_skills_tree_is_clean():
-    """仓库 skills/ 树(内容代理产出的 11 份正式文档)必须零告警加载:
-    十一步全覆盖、frontmatter 与目录前缀一致、五章节非空 —— 契约由本测试锁死,
-    任何一份文档漂移都在这里显形,而不是在规划/分诊运行时静默缺知识。"""
+    """仓库 skills/ 树(内容代理产出的正式文档)必须零告警加载:
+    核心 1-11 与分析链 20-28 全覆盖(12-19 故意留空)、frontmatter 与目录前缀
+    一致、五章节非空 —— 契约由本测试锁死,任何一份文档漂移都在这里显形,
+    而不是在规划/分诊运行时静默缺知识。"""
     root = Path(__file__).resolve().parents[1] / "skills"
     with warnings.catch_warnings():
         warnings.simplefilter("error", SkillDocWarning)
         skills = load_skills(root)
-    assert set(skills) == set(range(1, 12))  # 11 步全覆盖
+    expected = set(range(1, 12)) | set(range(20, 29))  # 1-11 + 20-28
+    assert set(skills) == expected
     for sid, sk in skills.items():
         assert sk.capability == sid
         assert all(sk.sections[s].strip() for s in REQUIRED_SECTIONS), \
             f"步骤 {sid}({sk.name})存在空章节"
     assert skills[6].name == "06-unwrap" and skills[6].applies_to == ("all",)
+    assert skills[20].name == "20-analysis-input" and skills[20].applies_to == ("all",)

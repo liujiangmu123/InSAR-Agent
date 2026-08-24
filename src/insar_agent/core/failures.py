@@ -48,7 +48,7 @@ DISPOSITIONS: dict[FailureClass, dict] = {
     FailureClass.NETWORK_TRANSIENT: {"auto": "retry", "max_retries": 3, "note": "指数退避重试"},
     FailureClass.AUTH_EXPIRED: {"auto": "stop", "note": "换账号/更新凭据后重试"},
     FailureClass.QUOTA_EXHAUSTED: {"auto": "stop", "note": "换账号或等待配额"},
-    FailureClass.SERVICE_DOWN: {"auto": "degrade", "note": "按降级矩阵降级(证据级别下降,须显式告知)"},
+    FailureClass.SERVICE_DOWN: {"auto": "degrade", "note": "按降级矩阵降级(证据级别下降,须显式告知)"},  # noqa: E501
     FailureClass.DISK_FULL: {"auto": "pause", "note": "清理已归档中间产物后续跑"},
     FailureClass.OOM: {"auto": "retry_reduced", "max_retries": 1, "note": "降并行度重试一次"},
     FailureClass.TIMEOUT: {"auto": "stop", "note": "确认任务规模或调大 capability 超时声明"},

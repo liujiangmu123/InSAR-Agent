@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from insar_agent.runtime.install_guide import ENGINE_ORDER, _TUNA_CONDA_FORGE
+from insar_agent.runtime.install_guide import _TUNA_CONDA_FORGE, ENGINE_ORDER
 
 #: 本机 conda 可代装的包规格(与 install_guide 清华 conda-forge 口径一致)
 _CONDA_SPECS: dict[str, tuple[str, ...]] = {

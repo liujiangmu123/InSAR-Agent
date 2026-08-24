@@ -110,6 +110,18 @@ class Method:
     requires_credentials: tuple[str, ...] = ()
     scenario_only: tuple[str, ...] = ()  # 仅这些场景可用;空 = 不限
     extra: str = ""
+    #: 本项目是否已提供该方法的真实引擎封装。
+    #:
+    #: False 的语义是「声明保留(方法矩阵/路线图价值),但真实模式跑不了」——
+    #: 要么 engines.resolve_builder 直接 ToolMissing(无构建器),要么构建器
+    #: 只是骨架不完成声明的工作(unimplemented_note 写明)。planner 的可行性
+    #: 收窄据此在**规划期**就如实排除,不让计划排进去、跑到那一步才停链
+    #: (纪律同 engines/__init__.py:「绝不静默回退」——但拒绝要早于执行)。
+    #: 演示/模拟模式(allow_simulated)仍放行为 simulated,与引擎缺失同等对待。
+    #: 一致性由 tests/test_method_contract.py 双向守护。
+    implemented: bool = True
+    #: implemented=False 时的如实说明(收窄理由直接引用它,不写虚构的工具名)。
+    unimplemented_note: str = ""
 
 
 @dataclass(frozen=True)

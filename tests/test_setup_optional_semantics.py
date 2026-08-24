@@ -10,7 +10,6 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import insar_agent.api.setup_router as sr
 from insar_agent.api.setup_router import create_setup_router
 
 

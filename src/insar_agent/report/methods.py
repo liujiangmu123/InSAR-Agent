@@ -124,6 +124,8 @@ def _prose_acquire(sid, s, c):
         "asf_search_slc": "经 ASF 检索并下载原始 SLC〔ref:ASF Vertex / asf_search〕",
         "hyp3_submit": "提交 ASF HyP3 云端标准 InSAR 流程处理"
                        "〔ref:ASF HyP3 InSAR Product Guide〕",
+        "nisar_import": "自本地 NISAR GUNW 解缠产品目录登记"
+                        "(云端已完成解缠,跳过配准至解缠;不下载数据)",
     }.get(s.get("method"))
     if tail is None:
         return None
@@ -246,6 +248,11 @@ def _prose_invert(sid, s, c):
                 "〔ref:Colesanti & Wasowski (2006), Engineering Geology 88:173-199 "
                 "—— 缓慢滑坡 InSAR 适用性标准引文;LOS 对近南北向运动几乎不敏感,"
                 "升降轨互补是 PSI 滑坡应用惯例〕。")
+    if m == "dolphin_ps_ds":
+        return ("相位连接采用 OPERA Dolphin 的 PS/DS 混合估计"
+                "〔ref:Staniewicz et al. (2024), JOSS 9:6997〕;"
+                "本步只产出缠绕相位/干涉栈,速度场仍由后续 MintPy 步骤计算,"
+                "不把 Dolphin 输出当作 velocity.h5。")
     return None
 
 
@@ -337,6 +344,11 @@ def _prose_qa(sid, s, c):
                 "(LiCSBAS p12_loop_thre;Morishita et al. 2020 §2.4.2)〕。")
     if m == "coherence_mask":
         return f"质检采用相干性掩膜检查{_cite(sid)}(最弱质检形态,仅筛除低相干像元)。"
+    if m == "gnss_compare":
+        out = "质检采用 InSAR 与 GNSS 站点 LOS 速度对比(不自造平差)"
+        if p.get("gnss_csv"):
+            out += f",GNSS 表 `{_fmt(p['gnss_csv'])}`{_cite(sid)}"
+        return out + "。"
     return None
 
 
@@ -539,7 +551,6 @@ def methods_markdown(provenance: dict, contract: dict | None = None) -> str:
     contract = contract if contract is not None else (provenance.get("thresholds") or {})
     env = provenance.get("environment") or {}
     tools = env.get("tools") or {}
-    evidence = provenance.get("evidence") or {}
 
     lines: list[str] = []
     lines.append("# 处理方法(自动生成草稿)")
@@ -573,6 +584,12 @@ def methods_markdown(provenance: dict, contract: dict | None = None) -> str:
     if figure_block:
         lines.extend(figure_block)
         lines.append("")
+
+    from insar_agent.report.product_level import methods_section
+    level_block = methods_section(provenance.get("metrics"), provenance.get("artifacts"),
+                                  simulated=bool(provenance.get("simulated")))
+    lines.extend(level_block)
+    lines.append("")
 
     lines.extend(_evidence_lines(provenance, contract))
     lines.append("")

@@ -41,11 +41,16 @@ def test_figure_set_default_matches_explicit_velocity(workspace):
 
 def test_figure_set_missing_kinds_skip_in_script(workspace):
     script = _script(workspace, dict(REGISTRY[10].default_params(),
-                                     figure_set=["velocity", "network", "coherence"]))
+                                     figure_set=["velocity", "network", "coherence", "process"]))
     assert "SKIP" in script
     assert "绝不画占位图" in script or "skip(" in script
     assert "if \"network\" in FIGURE_SET" in script
     assert "if \"coherence\" in FIGURE_SET" in script
+    assert "\"ifg_png\" in FIGURE_SET" in script
+    assert "\"process\" in FIGURE_SET" in script
+    assert "工作区无现成干涉图 PNG" in script
+    assert "data/ifg/**/*.png" in script
+    assert "不跑 MintPy view.py" in script
 
 
 def test_cmap_route_table_still_present(workspace):
@@ -113,7 +118,8 @@ def test_missing_kinds_skip_sidecar_no_placeholder(workspace):
         pytest.skip("引擎 Python 无 matplotlib,跳过轻量出图")
     _write_velocity_h5(workspace)
     params = dict(REGISTRY[10].default_params(),
-                  figure_set=["velocity", "network", "coherence", "points_timeseries"],
+                  figure_set=["velocity", "network", "coherence", "points_timeseries",
+                              "process"],
                   points_lalo=[[35.75, -117.60]], dpi=72)
     plan = figures_engine.build(cap=REGISTRY[10], method="figure_journal", params=params,
                                 run={"simulated": 0}, workspace=workspace)
@@ -129,3 +135,29 @@ def test_missing_kinds_skip_sidecar_no_placeholder(workspace):
         side = json.loads((figdir / f"{skipped}.json").read_text(encoding="utf-8"))
         assert side["skipped"] == skipped
         assert side["reason"]
+    assert not list(figdir.glob("ifg_process_*.png"))
+    ifg_side = json.loads((figdir / "ifg_png.json").read_text(encoding="utf-8"))
+    assert ifg_side["skipped"] == "ifg_png"
+    assert ifg_side["reason"]
+
+
+def test_process_kind_skips_when_no_files(workspace):
+    """figure_set 含 process 但工作区无现成 PNG 时跳过,绝不发明干涉图。"""
+    py = _engine_has_mpl()
+    if py is None:
+        pytest.skip("引擎 Python 无 matplotlib,跳过轻量出图")
+    params = dict(REGISTRY[10].default_params(), figure_set=["process"], dpi=72)
+    plan = figures_engine.build(cap=REGISTRY[10], method="figure_journal", params=params,
+                                run={"simulated": 0}, workspace=workspace)
+    script = workspace / ".report" / "make_figures.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(plan.files[".report/make_figures.py"], encoding="utf-8")
+    proc = subprocess.run([py, "-u", str(script)], cwd=workspace, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SKIP ifg_png" in (proc.stdout or "")
+    figdir = workspace / "products" / "figures"
+    assert not list(figdir.glob("ifg_process_*.png"))
+    assert not (figdir / "ifg_png.png").exists(), "不得画占位干涉图"
+    side = json.loads((figdir / "ifg_png.json").read_text(encoding="utf-8"))
+    assert side["skipped"] == "ifg_png"
+    assert "工作区无现成干涉图 PNG" in side["reason"]

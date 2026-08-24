@@ -1,5 +1,8 @@
 """真实出图(step 10 · figure_journal):velocity.h5 → 论文级 PNG + PDF。
 
+FIGURE_SET 已实现图种: velocity, coherence, mask, network, coherence_matrix,
+displacement_epochs, points_timeseries, velocity_std(读 velocity.h5 内 velocityStd)。
+
 脚本在引擎环境的 Python 里跑(h5py/matplotlib 由 mintpy 依赖带入);
 引擎环境未配置时回退宿主 Python(宿主须有 h5py+matplotlib,否则显式失败)。
 
@@ -34,6 +37,7 @@ from insar_agent.runtime.jobs import CommandPlan
 _FIGURE_PY = '''\
 # insar-agent 论文级出图脚本(数据不造假:直接读 velocity.h5)
 import json
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,6 +118,28 @@ def first_existing(cands):
         if p is not None and Path(p).exists():
             return Path(p)
     return None
+
+
+def glob_existing_previews(limit=6):
+    """只收集工作区里已有的过程预览 PNG,绝不重算相位/干涉图。
+
+    模式按声明序、各模式内按路径排序;去重后最多 limit 张。
+    data/ifg/**/*.png 递归; hyp3/**/*unw*.png 只收文件名含 unw 的解缠预览;
+    products/ifg/*.png 仅该目录一层(不递归)。
+    """
+    found, seen = [], set()
+    for pattern in ("data/ifg/**/*.png", "hyp3/**/*unw*.png", "products/ifg/*.png"):
+        for p in sorted(WS.glob(pattern)):
+            if not p.is_file():
+                continue
+            key = p.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(p)
+            if len(found) >= limit:
+                return found
+    return found
 
 
 def geo_extent(atr, shape):
@@ -517,8 +543,29 @@ if "points_timeseries" in FIGURE_SET:
                         "title": "point time series", "units": "mm",
                         "points": POINTS_LALO, "n_ok": n_ok})
 
+# ---- 过程干涉图预览:只拷贝现成 PNG,不跑 MintPy view.py,不重算相位 ----
+if "ifg_png" in FIGURE_SET or "process" in FIGURE_SET:
+    previews = glob_existing_previews(6)
+    if not previews:
+        skip("ifg_png", "工作区无现成干涉图 PNG")
+    else:
+        for i, src in enumerate(previews, start=1):
+            dest = out_dir / f"ifg_process_{i}.png"
+            shutil.copy2(src, dest)
+            try:
+                rel = src.resolve().relative_to(WS).as_posix()
+            except ValueError:
+                rel = src.name
+            write_sidecar(dest, {
+                "title": "process interferogram preview",
+                "source": rel,
+                "step": STEP_ID,
+                "params": PARAMS,
+            })
+            print(f"OK ifg_process_{i}.png json source={rel}", flush=True)
+
 print("出图完成", flush=True)
-'''
+'''  # noqa: E501
 
 
 def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,

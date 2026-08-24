@@ -1,0 +1,10 @@
+# 机器读:步骤覆写(陆探一号 —— GAMMA 布局接入 MintPy)
+# 无 cloud_completed:不假装云端已完成 2-6 步。
+# unw/cor glob 不写进本文件:MintPy prep_gamma 惯例见 SKILL.md,
+# 真实路径随 GAMMA/SARscape 导出而变,禁止把未装配的数据集路径写死。
+step_overrides:
+  7:
+    params:
+      processor: gamma                 # MintPy load.processor=gamma
+  9:
+    method: linear                     # 无事件先验,不发明阶跃/周期

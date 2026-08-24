@@ -30,7 +30,7 @@ from insar_agent.runtime.probe import ProbeResult
 #: 场景闭集(registry/scenario_packs 目录名;suitable_scenarios 只能取其子集,
 #: tests/test_recommend.py 对照 registry.scenarios.SCENARIOS 做闭集校验)
 SCENARIO_KEYS = ("quake", "permafrost", "landslide", "stripmap_coseismic",
-                 "subsidence", "volcano")
+                 "subsidence", "volcano", "lt1_gamma", "teaching")
 
 
 @dataclass(frozen=True)
@@ -175,8 +175,13 @@ _ROUTES: dict[str, tuple[dict, ...]] = {
             "cons": (
                 "要求长时序:PS 候选可靠估计需 ≥20-25 景,短时序结果不可信"
                 "(skills/07;调研 §1.1 Crosetto 2016)",
-                "工程边界:ISCE2→PyStamps 桥未实现,规划器可行性收窄会排除并诚实"
-                "回退 SBAS 单链(skills/07 适用判据)",
+                "工程边界:ISCE2→PyStamps 桥已实现(par 几何自洽 / TCN 基线 / "
+                "big-endian 三个难点都在 engines/bridges/ 里落地,合成布局有测试),"
+                "但尚未在真实 ISCE2 输出上跑通;输入不完整时桥显式 EnvironmentNotReady "
+                "而非猜测,规划器则按 pystamps 可用性收窄回退 SBAS 单链"
+                "(skills/07 适用判据)",
+                "因此双链交叉验证的 crossval_r 仍缺席、阈值台账为 PENDING,"
+                "证据阶梯到不了 validated 级(第 11 步质量门只警告不拦停)",
                 "只适合高相干点状目标;面状低相干区(农田/植被)应走 SBAS"
                 "(skills/07 选链判据)",
             ),
@@ -239,6 +244,83 @@ _ROUTES: dict[str, tuple[dict, ...]] = {
             ),
         },
     ),
+    "nisar": (
+        {
+            "route_id": "nisar_gunw",
+            "name": "NISAR GUNW 直通时序",
+            "scenarios": ("quake", "permafrost", "teaching"),
+            "steps": (1, 7, 8, 9, 10, 11),
+            "pros": (
+                "GUNW 已是云端解缠干涉产品,第 1 步 nisar_import 只登记不下载,"
+                "2-6 步按云端已完成跳过(capabilities 第 1 步 nisar_import)",
+                "L 波段穿透植被,低相干区相对 Sentinel-1 C 波段更稳"
+                "(52 号研究 §1.1;skills/01 platform 判据)",
+                "免费开放后与 HyP3 直通同构:产品进第 7 步 MintPy 时序"
+                "(skills/07 适用判据)",
+            ),
+            "cons": (
+                "失去 2-6 步中间产物控制权,不能在本机重滤波或换解缠参数"
+                "(与 HyP3 直通同一代价)",
+                "GUNW 样例全链 7-11 尚未在本仓库用真实产品实测,规划可走、"
+                "验收未完成(52 R2a)",
+                "S 波段/GOFF 偏移产品不在本路线;大梯度近场应另评估模式 C"
+                "(52 §2.1 偏移量追踪不做清单)",
+            ),
+            "requires": (
+                _eng("mintpy", "MintPy(第 7 步时序反演)"),
+                _eng("pyaps", "PyAPS(第 8 步 ERA5 大气校正)", optional=True),
+            ),
+        },
+    ),
+    "gamma": (
+        {
+            "route_id": "lt1_gamma_layout",
+            "name": "GAMMA/LT-1 布局接入",
+            "scenarios": ("lt1_gamma", "subsidence", "landslide"),
+            "steps": (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+            "pros": (
+                "吃 SARscape/GAMMA 导出的 .par+.diff/.mli/.rslc 布局,"
+                "国产陆探一号不另造引擎(lt1_gamma 场景包;prep_gamma)",
+                "L 波段双星重访适合沉降/滑坡;场景包标注 processor=gamma"
+                "(52 R2c)",
+            ),
+            "cons": (
+                "本仓不内置 GAMMA 商业许可,只消费其导出布局;缺 .par 会判成"
+                "其它 kind 或 unknown(data/catalog.py)",
+                "「用陆探一号做沉降」会先命中 subsidence 包,这是歧义消解不是漏检"
+                "(52 §8.4)",
+                "电离层在 L 波段更强,严格场景需分频谱校正(调研 §8.1)",
+            ),
+            "requires": (
+                _eng("mintpy", "MintPy(第 7 步时序反演)"),
+                _eng("gdal", "GDAL(布局核验/导出)", optional=True),
+            ),
+        },
+    ),
+    "displacement": (
+        {
+            "route_id": "mode_c_analysis",
+            "name": "位移产品直接分析",
+            "scenarios": ("teaching", "subsidence", "quake"),
+            "steps": (20, 21, 22, 23, 24, 25),
+            "pros": (
+                "模式 C:OPERA DISP / EGMS / 官方形变场不走 1-11 主链,"
+                "零重型干涉计算(52 §1.2;planner pipeline=analysis)",
+                "register_sources 已吃 GeoTIFF/CSV/HDF5,分钟级出剖面/分解/报告"
+                "(engines/passthrough.py)",
+                "适合课堂与快速可行性评估,不假装 PS 双链(teaching 包)",
+            ),
+            "cons": (
+                "没有 2-6 步中间产物,不能回溯解缠或换大气模型",
+                "产品级别默认 Basic(相对 LOS);GNSS 锚定才升 Calibrated"
+                "(52 §3.1 / product_level)",
+                "源必须是位移场而非任意 PNG;格式不支持会显式失败,不静默当空",
+            ),
+            "requires": (
+                _eng("gdal", "GDAL/rasterio(GeoTIFF→分析输入)", optional=True),
+            ),
+        },
+    ),
     "dem": (
         {
             "route_id": "dem_only",
@@ -272,8 +354,8 @@ _ROUTES: dict[str, tuple[dict, ...]] = {
                 "类型一旦识别,即可获得该类数据的完整路线优劣对比",
             ),
             "cons": (
-                "当前目录未匹配任何已知数据形态(HyP3 产品 / ALOS raw / SLC 栈 / DEM),"
-                "无法给出处理路线",
+                "当前目录未匹配任何已知数据形态(HyP3 / ALOS raw / SLC / DEM / "
+                "NISAR GUNW / GAMMA / 位移产品),无法给出处理路线",
                 "按错误类型强行处理,会在装载/配准阶段以更高代价失败"
                 "(skills/01 常见失败 4)",
             ),
@@ -327,10 +409,28 @@ def _est_note(route_id: str, dataset: dict) -> str:
         n = len(detail.get("dem_files") or [])
         return (f"{n} 个 DEM 文件;识别只看扩展名,分辨率与覆盖范围需对照主数据 "
                 "AOI 自行核对(skills/02 适用判据)")
-    # identify_first:给出四类数据的判型特征,引导用户整理目录后重扫
-    return ("整理目录后点「重新扫描」:HyP3 产品应含成对 *_unw_phase.tif/*_corr.tif;"
-            "ALOS raw 应含成对 IMG-*/LED-*;SLC 栈应含 *.slc 或 *.SAFE 目录;"
-            "DEM 应含 *.dem/*.wgs84/*.grd(data/catalog.py 判据)")
+    if route_id == "nisar_gunw":
+        gunw = detail.get("gunw", 0)
+        h5 = detail.get("h5", 0)
+        return (f"当前识别到 GUNW {gunw}、HDF5/NetCDF {h5}、"
+                f"共 {_fmt_gb(dataset.get('size_bytes'))};"
+                "GUNW 为云端解缠产品,本机只登记。真实 NISAR 全链耗时未实测,不估时长")
+    if route_id == "lt1_gamma_layout":
+        par = detail.get("par", 0)
+        return (f"当前 {par} 个 .par、共 {_fmt_gb(dataset.get('size_bytes'))};"
+                "按 GAMMA 导出布局接入,不内置商业许可。全链耗时未实测")
+    if route_id == "mode_c_analysis":
+        tif = detail.get("tif", 0)
+        csv = detail.get("csv", 0)
+        return (f"位移产品 {tif} 个 GeoTIFF / {csv} 个 CSV、"
+                f"共 {_fmt_gb(dataset.get('size_bytes'))};"
+                "分析链 20-25 不跑干涉,耗时随栅格尺寸变化,未编时长")
+    # identify_first:给出判型特征,引导用户整理目录后重扫
+    return ("整理目录后点「重新扫描」:HyP3 含 *_unw_phase.tif/*_corr.tif;"
+            "ALOS raw 含 IMG-*/LED-*;SLC 含 *.slc 或 *.SAFE;"
+            "DEM 含 *.dem/*.wgs84/*.grd;NISAR 含 *GUNW*.h5;"
+            "GAMMA 含 *.par 与 .diff/.mli/.rslc;"
+            "位移产品为 EGMS/DISP 的 tif/csv(data/catalog.py 判据)")
 
 
 # ---------------- 需求核对与排序 ----------------

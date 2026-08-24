@@ -49,8 +49,10 @@ _STEP_KEYS = {
 }
 
 # skill 是条件字段(schema 规则:该步存在技能文档才写,core/ledger.py):
-# 期望键集按实际技能注册表推导 —— skills/ 目录逐步补齐各步技能时金样不随之漂移
-_SKILLED = {str(sid) for sid in load_skills()}
+# 期望键集按实际技能注册表推导 —— skills/ 目录逐步补齐各步技能时金样不随之漂移。
+# 金样 run 是 core 11 步链,故与本 run 的步闭集取交集:分析步(20-28)的技能文档
+# 存在但不在本 run 内,不参与金样字段对账。
+_SKILLED = {str(sid) for sid in load_skills()} & (_EXECUTED | _SKIPPED)
 _SKILL_KEYS = {"name", "version", "content_hash"}
 
 

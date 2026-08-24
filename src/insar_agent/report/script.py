@@ -43,7 +43,7 @@ def export_run_script(store: Store, run_id: str, workspace: Path) -> str:
         cmd_path = Path(chosen["cmd_path"]) if chosen["cmd_path"] else None
         if cmd_path and cmd_path.exists():
             body = cmd_path.read_text(encoding="utf-8").strip().splitlines()
-            body = [l for l in body if not l.startswith("#!")]
+            body = [line for line in body if not line.startswith("#!")]
             lines.extend(body)
         else:
             import json as _json

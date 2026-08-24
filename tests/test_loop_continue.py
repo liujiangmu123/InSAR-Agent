@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import subprocess
-
-from test_agent_loop import collect, cy, empty_probe, make_driver, FakeCycleBrain
 from insar_agent.runtime.install_guide import ENGINE_ORDER
 from insar_agent.runtime.probe import ProbeResult
+from test_agent_loop import FakeCycleBrain, collect, cy, empty_probe, make_driver
 
 
 def _ready_probe():

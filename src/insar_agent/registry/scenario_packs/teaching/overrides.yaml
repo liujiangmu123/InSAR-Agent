@@ -1,0 +1,8 @@
+# 机器读:步骤覆写(教学演示 —— 图件全开 + 诚实降级质检)
+# 无 cloud_completed:不假装云端/官方产品已完成 2-6 步。
+step_overrides:
+  10:
+    params:
+      figure_set: [velocity, coherence, mask, network, points_timeseries]
+  11:
+    method: coherence_mask             # 教学默认不假装有 PS/SBAS 双链

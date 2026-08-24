@@ -151,7 +151,10 @@ def test_bridge_kite_realtest_velocity_if_present(workspace):
     gmt = mintpy_post.build(
         cap=REGISTRY[28], method="bridge_gmt", params=params,
         run={"simulated": 0}, workspace=workspace)
+    # encoding 显式钉 UTF-8:中文 Windows 默认 GBK,GMT 输出含非 GBK 字节时
+    # 读线程会抛 UnicodeDecodeError(pytest 记为未处理线程异常警告)
     cp = subprocess.run(gmt.argv, cwd=gmt.cwd, capture_output=True, text=True,
+                        encoding="utf-8", errors="replace",
                         timeout=45, env={**os.environ, **gmt.env})
     grd = workspace / "analysis" / "bridge" / "velocity.grd"
     if cp.returncode != 0:

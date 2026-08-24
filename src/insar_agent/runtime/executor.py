@@ -115,7 +115,6 @@ async def execute_step(
     run["chain"] = {s.step_id: {"method": s.method, "params": s.params}
                     for s in store.load_steps(run_id)}
     error_info: dict[str, str] = {}
-    outcome = "done"
     detail = ""
 
     try:
@@ -335,12 +334,10 @@ async def execute_step(
         # 本回合让位、不 mark_step —— 赢家(admin 终结事务/接管回合)已写完
         # 状态与结算,覆写等于抢它的推进。run 收尾交给 driver 的 interrupted
         # 分支,与取消/orphaned 同一条结构化通路。
-        outcome = "interrupted"
         detail = f"步骤已被外部终结/并发推进(阶段冲突),本回合让位:{exc}"
         error_info = {"type": "stage_conflict", "message": str(exc)}
         return StepResult("interrupted", store.load_step(run_id, step_id), detail)
     except StepExecutionError as exc:
-        outcome = "failed"
         detail = str(exc)
         error_info = {"type": exc.failure_class, "message": str(exc)}
         store.mark_step(run_id, step_id, state="failed", failure_class=exc.failure_class,
@@ -353,7 +350,7 @@ async def execute_step(
             run_id=run_id, step_no=step_id, phase=cap.phase or cap.name,
             thought="", action={"type": "execute_step", "tool": cap.name,
                                 "input": {"method": final.method if final else None}},
-            observation=f"stage={final.stage if final else '?'} state={final.state if final else '?'}",
+            observation=f"stage={final.stage if final else '?'} state={final.state if final else '?'}",  # noqa: E501
             error_occurred=bool(error_info),
             error_type=error_info.get("type", ""),
             error_message=error_info.get("message", ""))

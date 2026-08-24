@@ -80,7 +80,7 @@ def _argv(distro: str, script: str) -> list[str]:
     return ["wsl.exe", "-d", distro, "-u", "root", "--exec", "bash", "-lc", script]
 
 
-def _run(runner: Runner, argv: list[str], timeout: float) -> tuple[int | None, str, str, str | None]:
+def _run(runner: Runner, argv: list[str], timeout: float) -> tuple[int | None, str, str, str | None]:  # noqa: E501
     """归一化 runner 异常:返回 (rc, stdout, stderr, error)。rc=None 表示命令没跑起来。"""
     try:
         cp = runner(argv, timeout)
@@ -149,7 +149,7 @@ def probe_wsl_engines(distro: str = "insar", runner: Runner | None = None,
     # 2) conda env 路径(INSAR_ENGINE_PREFIX 优先,回落默认前缀;目录存在才算)
     rc, out, _e, error = _run(
         run,
-        _argv(distro, 'p="${INSAR_ENGINE_PREFIX:-' + _DEFAULT_PREFIX + '}"; [ -d "$p" ] && echo "$p"'),
+        _argv(distro, 'p="${INSAR_ENGINE_PREFIX:-' + _DEFAULT_PREFIX + '}"; [ -d "$p" ] && echo "$p"'),  # noqa: E501
         timeout)
     if error is None and rc == 0 and out:
         result["engine_prefix"] = out.splitlines()[0].strip()

@@ -1,10 +1,14 @@
 """影像面板 API 契约与安全边界(/api/figures + /api/artifact-file)。
 
 覆盖:
-  - /api/figures 只列「图像扩展名 且 落盘文件存在 且 未越界」的产物;
+  - /api/figures 的 figures 只列「图像扩展名 且 落盘文件存在 且 未越界」;
+  - files 列闭集非图像(pdf/kmz/h5 等),sidecar json / 闭集外 txt 不列;
+  - workspace export/ 与 products/report/ 一层可预览文件补进 files
+    (step=10/artId=export, step=11/artId=report;已列 path 不重复);
+  - 图像与 files 独立 cap,触及上限 truncated=true;
   - /api/artifact-file 返回 200 与正确 Content-Type,字节原样透传;
   - 路径穿越(../../、绝对路径)→ 404 且不泄露磁盘路径;
-  - 非图像扩展名 → 400;
+  - 非图像扩展名 → 400(安全边界,不因 files 列表而放宽);
   - 跨会话取他人 run → 404(与 resolve_run 口径一致);
   - 无 run / 未知产物 → 空列表 / 404;
   - 三档尺寸契约(_browse/_thumb 归并进基图条目,url 优先 browse)
@@ -23,7 +27,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from insar_agent.api.app import create_app
+from insar_agent.api.app import _FIGURE_LIST_CAP, create_app
 from insar_agent.core.db import Database
 from insar_agent.core.store import Store
 
@@ -83,8 +87,11 @@ def test_figures_lists_only_valid_images(env):
     c = env["client"]
     data = c.get("/api/figures", params={"session": "sess-a"}).json()
     assert data["run"] == RUN_ID
+    assert data["truncated"] is False
+    assert data["image_cap"] == _FIGURE_LIST_CAP
+    assert data["file_cap"] == _FIGURE_LIST_CAP
     by_id = {f["artId"]: f for f in data["figures"]}
-    # 只剩两张真实存在的图像:h5(扩展名)/evil(越界)/abs_evil(绝对)/ghost(缺文件)都不列
+    # 只剩两张真实存在的图像:h5 改走 files;evil(越界)/abs_evil(绝对)/ghost(缺文件)都不列
     assert set(by_id) == {"vel_png", "hist_jpg"}
 
     vel = by_id["vel_png"]
@@ -95,6 +102,20 @@ def test_figures_lists_only_valid_images(env):
     assert vel["mtime"] > 0
     assert "/api/artifact-file?" in vel["url"] and "art_id=vel_png" in vel["url"]
 
+    by_file = {f["artId"]: f for f in data["files"]}
+    assert set(by_file) == {"vel_h5"}
+    h5 = by_file["vel_h5"]
+    assert h5["step"] == 9
+    assert h5["name"] == "velocity.h5"
+    assert h5["path"] == "mintpy/velocity.h5"
+    assert h5["kind"] == "h5"
+    assert h5["size"] == len(b"\x89HDF")
+    assert h5["mtime"] > 0
+    assert "url" not in h5 and "thumbUrl" not in h5 and "fullUrl" not in h5
+    assert isinstance(h5["viewers"], list)
+    names = {f["name"] for f in data["figures"]} | {f["name"] for f in data["files"]}
+    assert "evil.png" not in names and "ghost.png" not in names
+
 
 def test_figures_explicit_run_id_and_no_run(env):
     c = env["client"]
@@ -102,7 +123,11 @@ def test_figures_explicit_run_id_and_no_run(env):
     assert data["run"] == RUN_ID and len(data["figures"]) == 2
     # sess-b 没有任何 run:返回空表而非报错(前端以此回落演示图件)
     empty = c.get("/api/figures", params={"session": "sess-b"}).json()
-    assert empty == {"run": None, "figures": []}
+    assert empty == {
+        "run": None, "figures": [], "files": [],
+        "truncated": False,
+        "image_cap": _FIGURE_LIST_CAP, "file_cap": _FIGURE_LIST_CAP,
+    }
 
 
 def test_figures_cross_session_404(env):
@@ -201,8 +226,13 @@ def _add_dir_artifact(env):
     (gal / "a_velocity.png").write_bytes(PNG_BYTES)
     (gal / "b_hist.jpg").write_bytes(JPG_BYTES)
     (gal / "notes.txt").write_bytes(b"not an image")
-    (gal / "sub").mkdir(exist_ok=True)  # 子目录不下钻
+    (gal / "velocity.pdf").write_bytes(b"%PDF-1.4")
+    (gal / "a.kmz").write_bytes(b"PK\x03\x04kmz")
+    (gal / "a_velocity.json").write_text("{}", encoding="utf-8")  # sidecar,不进 files
+    (gal / "qa.json").write_text("{}", encoding="utf-8")          # 无同 stem 图像,进 files
+    (gal / "sub").mkdir(exist_ok=True)  # 一层子目录:图像/闭集文件都列
     (gal / "sub" / "deep.png").write_bytes(PNG_BYTES)
+    (gal / "sub" / "deep.pdf").write_bytes(b"%PDF")
     env["store"].record_artifact(RUN_ID, 10, "gallery_dir", path="products/gallery",
                                  kind="FIGURE", layout="", policy="stat",
                                  fp="stat:sha256:cafebabe")
@@ -213,12 +243,256 @@ def test_figures_lists_directory_artifact_members(env):
     c = env["client"]
     figs = c.get("/api/figures", params={"session": "sess-a"}).json()["figures"]
     members = [f for f in figs if f["artId"] == "gallery_dir"]
-    # 只列顶层图像成员:txt 与子目录内文件都不列
-    assert sorted(m["name"] for m in members) == ["a_velocity.png", "b_hist.jpg"]
+    # 顶层 + 一层子目录内图像;txt 不列
+    assert sorted(m["name"] for m in members) == [
+        "a_velocity.png", "b_hist.jpg", "deep.png"]
     for m in members:
         assert "file=" in m["url"]
         r = c.get(m["url"])  # 列表 url 直接可用作 <img src>
         assert r.status_code == 200 and r.headers["content-type"].startswith("image/")
+
+
+def test_figures_lists_directory_nonimage_files(env):
+    """目录型:闭集非图像进 files;txt / sidecar json 不列;一层子目录 pdf 列;无 img url。"""
+    _add_dir_artifact(env)
+    data = env["client"].get("/api/figures", params={"session": "sess-a"}).json()
+    files = [f for f in data["files"] if f["artId"] == "gallery_dir"]
+    by_name = {f["name"]: f for f in files}
+    assert "notes.txt" not in by_name
+    assert "deep.png" not in by_name  # 图像走 figures
+    assert "a_velocity.json" not in by_name  # sidecar of a_velocity.png
+    assert set(by_name) == {"velocity.pdf", "a.kmz", "qa.json", "deep.pdf"}
+    assert by_name["velocity.pdf"]["kind"] == "pdf"
+    assert by_name["a.kmz"]["kind"] == "kmz"
+    assert by_name["qa.json"]["kind"] == "json"
+    assert by_name["deep.pdf"]["kind"] == "pdf"
+    assert by_name["velocity.pdf"]["path"] == "products/gallery/velocity.pdf"
+    assert by_name["a.kmz"]["path"] == "products/gallery/a.kmz"
+    assert by_name["deep.pdf"]["path"] == "products/gallery/sub/deep.pdf"
+    for item in files:
+        assert "url" not in item and "thumbUrl" not in item and "fullUrl" not in item
+
+
+def test_figures_lists_nested_hyp3_tif(env):
+    """HyP3 两层目录: figures/hyp3/pair1/foo.tif 进 files;第三层不列。"""
+    figdir = env["ws"] / "products" / "hyp3_figures"
+    pair = figdir / "hyp3" / "pair1"
+    pair.mkdir(parents=True, exist_ok=True)
+    (pair / "foo.tif").write_bytes(b"II*\x00")
+    deeper = pair / "extra"
+    deeper.mkdir(exist_ok=True)
+    (deeper / "skip.tif").write_bytes(b"II*\x00")
+    env["store"].record_artifact(
+        RUN_ID, 10, "hyp3_dir", path="products/hyp3_figures",
+        kind="FIGURE", layout="", policy="stat", fp="stat:sha256:hyp3tif")
+    files = env["client"].get("/api/figures", params={"session": "sess-a"}).json()["files"]
+    members = [f for f in files if f["artId"] == "hyp3_dir"]
+    by_name = {f["name"]: f for f in members}
+    assert "foo.tif" in by_name
+    assert by_name["foo.tif"]["kind"] == "tif"
+    assert by_name["foo.tif"]["path"] == "products/hyp3_figures/hyp3/pair1/foo.tif"
+    assert "skip.tif" not in by_name
+
+
+def test_figures_lists_xlsx_kind(env):
+    """figures 目录内 xlsx 以 kind=xlsx 进 files。"""
+    figdir = env["ws"] / "products" / "xlsx_figures"
+    figdir.mkdir(parents=True, exist_ok=True)
+    (figdir / "table.xlsx").write_bytes(b"PK\x03\x04xlsx")
+    env["store"].record_artifact(
+        RUN_ID, 10, "xlsx_dir", path="products/xlsx_figures",
+        kind="FIGURE", layout="", policy="stat", fp="stat:sha256:xlsx")
+    files = env["client"].get("/api/figures", params={"session": "sess-a"}).json()["files"]
+    members = [f for f in files if f["artId"] == "xlsx_dir"]
+    by_name = {f["name"]: f for f in members}
+    assert set(by_name) == {"table.xlsx"}
+    assert by_name["table.xlsx"]["kind"] == "xlsx"
+    assert by_name["table.xlsx"]["path"] == "products/xlsx_figures/table.xlsx"
+
+
+def test_figures_sidecar_json_file_artifact_not_in_files(env):
+    """单文件产物:<stem>.json 若同目录有同 stem 图像,已并入 meta,不进 files。"""
+    ws = env["ws"]
+    (ws / "products/figures/velocity.json").write_text(
+        json.dumps({"title": "vel"}), encoding="utf-8")
+    env["store"].record_artifact(
+        RUN_ID, 10, "vel_json", path="products/figures/velocity.json",
+        kind="DATA", layout="", policy="stat", fp="stat:sha256:sidecar")
+    data = env["client"].get("/api/figures", params={"session": "sess-a"}).json()
+    art_ids = {f["artId"] for f in data["files"]}
+    assert "vel_json" not in art_ids
+    assert "vel_h5" in art_ids
+
+
+def test_figures_image_cap_still_lists_files(env, monkeypatch):
+    """图像 listed 达 cap → truncated,停止加图,files 仍可列。"""
+    monkeypatch.setattr("insar_agent.api.app._FIGURE_LIST_CAP", 2)
+    _add_artifact(env["store"], env["ws"], RUN_ID, 10, "extra_png",
+                  "products/figures/extra.png")
+    data = env["client"].get("/api/figures", params={"session": "sess-a"}).json()
+    assert data["truncated"] is True
+    assert len(data["figures"]) == 2
+    assert data["image_cap"] == 2 and data["file_cap"] == 2
+    assert {f["artId"] for f in data["files"]} == {"vel_h5"}
+
+
+def test_figures_file_cap_still_lists_images(env, monkeypatch):
+    """files listed 达 cap → truncated,停止加 files,图像仍全列。"""
+    monkeypatch.setattr("insar_agent.api.app._FIGURE_LIST_CAP", 2)
+    _add_artifact(env["store"], env["ws"], RUN_ID, 10, "vel_pdf",
+                  "products/figures/velocity.pdf", data=b"%PDF-1.4", kind="DATA")
+    _add_artifact(env["store"], env["ws"], RUN_ID, 10, "scene_kmz",
+                  "products/figures/scene.kmz", data=b"PK\x03\x04", kind="DATA")
+    data = env["client"].get("/api/figures", params={"session": "sess-a"}).json()
+    assert data["truncated"] is True
+    assert len(data["files"]) == 2
+    assert {f["artId"] for f in data["figures"]} == {"vel_png", "hist_jpg"}
+    for item in data["files"]:
+        assert "url" not in item
+
+
+# ---------------- 工作区 export/ + products/report/ 一层补列(非 artifact) ----------------
+
+def _write_workspace_extras(ws: Path) -> None:
+    exp = ws / "export"
+    exp.mkdir(parents=True, exist_ok=True)
+    (exp / "velocity.csv").write_bytes(b"lon,lat\n1,2\n")
+    (exp / "table.xlsx").write_bytes(b"PK\x03\x04xlsx")
+    (exp / "meta.json").write_bytes(b"{}")
+    (exp / "cube.h5").write_bytes(b"\x89HDF")
+    (exp / "map.tif").write_bytes(b"II*\x00")
+    (exp / "paper.pdf").write_bytes(b"%PDF-1.4")
+    (exp / "scene.kmz").write_bytes(b"PK\x03\x04kmz")
+    (exp / "pack.zip").write_bytes(b"PK\x03\x04zip")
+    (exp / "notes.txt").write_bytes(b"not listed")
+    (exp / "shot.png").write_bytes(PNG_BYTES)
+    (exp / "shot.json").write_text("{}", encoding="utf-8")  # 图像 sidecar,不列
+    nested = exp / "nested"
+    nested.mkdir(exist_ok=True)
+    (nested / "deep.csv").write_bytes(b"a,b\n")  # 不递归
+
+    report = ws / "products" / "report"
+    report.mkdir(parents=True, exist_ok=True)
+    (report / "gnss_residuals.csv").write_bytes(b"site,resid\nA,0.1\n")
+    (report / "qa.json").write_bytes(b'{"ok":true}')
+    (report / "readme.txt").write_bytes(b"skip")
+    (report / "sub").mkdir(exist_ok=True)
+    (report / "sub" / "inner.csv").write_bytes(b"x\n")
+
+
+def test_figures_lists_workspace_export_and_report_extras(env):
+    """export/ 与 products/report/ 一层闭集进 files;txt/sidecar/子目录不列。
+
+    标签对齐注册表:export → step=10 artId=export;report → step=11 artId=report。
+    path 为工作区相对 posix;不进 figures;无 img url。"""
+    _write_workspace_extras(env["ws"])
+    data = env["client"].get("/api/figures", params={"session": "sess-a"}).json()
+    by_path = {f["path"]: f for f in data["files"]}
+
+    export_names = {
+        "velocity.csv", "table.xlsx", "meta.json", "cube.h5",
+        "map.tif", "paper.pdf", "scene.kmz", "pack.zip",
+    }
+    for name in export_names:
+        item = by_path[f"export/{name}"]
+        assert item["step"] == 10
+        assert item["artId"] == "export"
+        assert item["name"] == name
+        assert "url" not in item and "thumbUrl" not in item and "fullUrl" not in item
+        assert isinstance(item["viewers"], list)
+
+    assert by_path["export/velocity.csv"]["kind"] == "csv"
+    assert by_path["export/table.xlsx"]["kind"] == "xlsx"
+    assert by_path["export/meta.json"]["kind"] == "json"
+    assert by_path["export/cube.h5"]["kind"] == "h5"
+    assert by_path["export/map.tif"]["kind"] == "tif"
+    assert by_path["export/paper.pdf"]["kind"] == "pdf"
+    assert by_path["export/scene.kmz"]["kind"] == "kmz"
+    assert by_path["export/pack.zip"]["kind"] == "zip"
+
+    gnss = by_path["products/report/gnss_residuals.csv"]
+    assert gnss["step"] == 11 and gnss["artId"] == "report"
+    assert gnss["kind"] == "csv" and gnss["name"] == "gnss_residuals.csv"
+    qa = by_path["products/report/qa.json"]
+    assert qa["step"] == 11 and qa["artId"] == "report" and qa["kind"] == "json"
+
+    names = {f["name"] for f in data["files"]}
+    assert "notes.txt" not in names
+    assert "readme.txt" not in names
+    assert "shot.json" not in names  # sidecar of shot.png
+    assert "deep.csv" not in names
+    assert "inner.csv" not in names
+    fig_names = {f["name"] for f in data["figures"]}
+    assert "shot.png" not in fig_names  # 补列不进 figures
+    assert "vel_h5" in {f["artId"] for f in data["files"]}  # 原产物仍在
+
+
+def test_figures_workspace_extras_dedupe_existing_file_path(env):
+    """已在 files 的同一 path(产物账本)不因工作区扫描再列一条。"""
+    report = env["ws"] / "products" / "report"
+    report.mkdir(parents=True, exist_ok=True)
+    (report / "qa.json").write_bytes(b'{"ok":true}')
+    (report / "gnss_residuals.csv").write_bytes(b"site,resid\n")
+    env["store"].record_artifact(
+        RUN_ID, 11, "qa_report", path="products/report/qa.json",
+        kind="REPORT", layout="", policy="stat", fp="stat:sha256:qa")
+    files = env["client"].get("/api/figures", params={"session": "sess-a"}).json()["files"]
+    qa_hits = [f for f in files if f["path"] == "products/report/qa.json"]
+    assert len(qa_hits) == 1
+    assert qa_hits[0]["artId"] == "qa_report" and qa_hits[0]["step"] == 11
+    gnss = next(f for f in files if f["path"] == "products/report/gnss_residuals.csv")
+    assert gnss["artId"] == "report" and gnss["step"] == 11
+
+
+def test_figures_workspace_extras_respect_file_cap(env, monkeypatch):
+    """补列计入同一 file_cap:达上限 truncated,不突破。"""
+    monkeypatch.setattr("insar_agent.api.app._FIGURE_LIST_CAP", 2)
+    exp = env["ws"] / "export"
+    exp.mkdir(parents=True, exist_ok=True)
+    (exp / "a.csv").write_bytes(b"a\n")
+    (exp / "b.csv").write_bytes(b"b\n")
+    data = env["client"].get("/api/figures", params={"session": "sess-a"}).json()
+    assert data["truncated"] is True
+    assert len(data["files"]) == 2
+    assert {f["artId"] for f in data["figures"]} == {"vel_png", "hist_jpg"}
+
+
+def test_figures_workspace_extras_symlink_outside_excluded(env):
+    """export/ 成员 symlink 指向工作区外:不列(与产物成员同一判据)。"""
+    outside = env["home"] / "secret.csv"
+    outside.write_bytes(b"secret\n")
+    exp = env["ws"] / "export"
+    exp.mkdir(parents=True, exist_ok=True)
+    (exp / "good.csv").write_bytes(b"ok\n")
+    try:
+        os.symlink(outside, exp / "escape.csv")
+    except OSError:
+        pytest.skip("当前环境无 symlink 权限(Windows 需管理员/开发者模式)")
+    files = env["client"].get("/api/figures", params={"session": "sess-a"}).json()["files"]
+    extras = [f for f in files if f["artId"] == "export"]
+    assert [f["name"] for f in extras] == ["good.csv"]
+    assert all(f["path"] == "export/good.csv" for f in extras)
+
+
+def test_figures_workspace_extras_resolving_outside_excluded(env, monkeypatch):
+    """免 symlink 权限:resolve 落到工作区外的成员不列。"""
+    outside = env["home"] / "secret2.csv"
+    outside.write_bytes(b"secret\n")
+    exp = env["ws"] / "export"
+    exp.mkdir(parents=True, exist_ok=True)
+    (exp / "good.csv").write_bytes(b"ok\n")
+    (exp / "escape.csv").write_bytes(b"nope\n")
+    real_resolve = Path.resolve
+
+    def fake_resolve(self, *args, **kwargs):
+        if self.name == "escape.csv":
+            return outside
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    files = env["client"].get("/api/figures", params={"session": "sess-a"}).json()["files"]
+    extras = [f for f in files if f["artId"] == "export"]
+    assert [f["name"] for f in extras] == ["good.csv"]
 
 
 def test_artifact_file_dir_member_traversal_404(env):
@@ -452,7 +726,7 @@ def test_figure_script_renders_tiers_and_sidecar(tmp_path):
     pytest.importorskip("matplotlib")
     h5py = pytest.importorskip("h5py")
     np = pytest.importorskip("numpy")
-    from PIL import Image   # matplotlib 依赖 pillow,importorskip 之后必在
+    from PIL import Image  # matplotlib 依赖 pillow,importorskip 之后必在
 
     ws = tmp_path / "ws"
     (ws / ".report").mkdir(parents=True)
@@ -488,7 +762,8 @@ def test_figure_script_renders_tiers_and_sidecar(tmp_path):
     assert meta["units"] == "mm/yr" and meta["step"] == 10
     assert meta["date_range"] == ["20190610", "20190815"]
     assert meta["ref_point"] == [35.8, -117.5]
-    assert meta["params"] == {"dpi": 150, "cmap": "vik", "format": "png+pdf"}
+    assert meta["params"] == {
+        "dpi": 150, "cmap": "vik", "format": "png+pdf", "figure_set": ["velocity"]}
     assert isinstance(meta["cmap"], str) and meta["cmap"]   # 实际所用(可能兜底 RdBu_r)
     assert meta["vlim"][1] > 0 and meta["vlim"][0] == -meta["vlim"][1]
 
@@ -508,7 +783,8 @@ def test_figure_script_all_nan_velocity_exits_2_no_empty_figure(tmp_path):
         plan.files[".report/make_figures.py"], encoding="utf-8")
     r = subprocess.run([sys.executable, "-u", ".report/make_figures.py"], cwd=ws,
                        capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=120)
+                       errors="replace", timeout=120,
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert r.returncode == 2, f"stdout={r.stdout}\nstderr={r.stderr}"
     assert "全 NaN" in (r.stdout + r.stderr)
     assert not (ws / "products" / "figures" / "velocity.png").exists()

@@ -1,9 +1,11 @@
-"""数据产品导出(0814B 契约 §2):MintPy HDF5 → h5 / csv / gtiff / kmz / shp。
+"""数据产品导出(0814B 契约 §2):MintPy HDF5 → h5 / csv / xlsx / gtiff / kmz / shp。
 
 分两层,能力与依赖诚实对齐:
   - venv 层(零引擎依赖):fmt=h5 直传源文件;fmt=csv 用 h5py+numpy 读栅格
     转点表 —— 列名按 EPSG 诚实分派(经纬度 lon,lat / 投影坐标 x,y),UTM 米
     坐标绝不冒充经纬度;h5py 缺失 → 501 诚实拒绝,绝不出假文件。
+    fmt=xlsx 走同一点表(同一上限、同一像元),openpyxl 可选:缺失 → 501,
+    提示改用 csv,绝不编造格网值。
   - 引擎层:gtiff/kmz/shp 组装 MintPy CLI 命令,复用既有「以引擎前缀跑命令」
     机制 —— engines/mintpy.engine_python()(INSAR_ENGINE_PYTHON >
     INSAR_ENGINE_PREFIX > 隐式 conda 发现,与 smallbaselineApp/出图脚本同源),
@@ -37,8 +39,8 @@ from pathlib import Path
 
 _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0  # 后台导出不弹控制台
 
-#: CSV 点数防线:超过即 400 提示先降采样(2D 是 rows×cols,时序是 ×dates)。
-#: 5e6 行 ≈ 200-300 MB 文本,再大就该走 gtiff/h5 而不是点表。
+#: CSV/xlsx 点数防线:超过即 400 提示先降采样(2D 是 rows×cols,时序是 ×dates)。
+#: 5e6 行 ≈ 200-300 MB 文本,再大就该走 gtiff/h5 而不是点表。xlsx 共用此上限。
 MAX_CSV_POINTS = 5_000_000
 
 #: 引擎导出默认超时(秒);INSAR_EXPORT_TIMEOUT 可放宽(大栅格 kmz 渲染慢)
@@ -78,13 +80,15 @@ PRODUCTS: dict[str, ProductSpec] = {
 }
 
 #: 格式闭集与扩展名/媒体类型(shp 交付 zip,见模块头)
-FORMATS: tuple[str, ...] = ("h5", "csv", "gtiff", "kmz", "shp")
+FORMATS: tuple[str, ...] = ("h5", "csv", "xlsx", "gtiff", "kmz", "shp")
 EXTENSIONS: dict[str, str] = {
-    "h5": "h5", "csv": "csv", "gtiff": "tif", "kmz": "kmz", "shp": "shp.zip",
+    "h5": "h5", "csv": "csv", "xlsx": "xlsx", "gtiff": "tif", "kmz": "kmz",
+    "shp": "shp.zip",
 }
 MEDIA_TYPES: dict[str, str] = {
     "h5": "application/x-hdf5",
     "csv": "text/csv",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "gtiff": "image/tiff",
     "kmz": "application/vnd.google-earth.kmz",
     "shp": "application/zip",
@@ -165,6 +169,12 @@ def h5py_available() -> bool:
 _H5PY_MISSING = ("服务端未安装 h5py,无法读取 HDF5 —— "
                  "pip install 'insar-agent[raster]' 后重试")
 
+_OPENPYXL_MISSING = "未安装 openpyxl，可用 csv 导出表格"
+
+
+def openpyxl_available() -> bool:
+    return importlib.util.find_spec("openpyxl") is not None
+
 
 def engine_status() -> tuple[bool, str]:
     """MintPy 引擎可用性(gtiff/kmz/shp 的前置)。
@@ -203,6 +213,7 @@ def format_matrix(workspace: Path, *, simulated: bool) -> dict:
     """options 能力矩阵:产品×格式×可用性,不可用一律给诚实原因。"""
     engine_ok, engine_reason = engine_status()
     have_h5py = h5py_available()
+    have_openpyxl = openpyxl_available()
     products = []
     for key, spec in PRODUCTS.items():
         src = find_source(workspace, key)
@@ -216,8 +227,10 @@ def format_matrix(workspace: Path, *, simulated: bool) -> dict:
             if not reason and src is None:
                 reason = (f"run 工作区没有 {key} 产物 h5"
                           "(上游步骤未完成或产物已被清理)")
-            if not reason and fmt == "csv" and not have_h5py:
+            if not reason and fmt in ("csv", "xlsx") and not have_h5py:
                 reason = _H5PY_MISSING
+            if not reason and fmt == "xlsx" and not have_openpyxl:
+                reason = _OPENPYXL_MISSING
             if not reason and fmt in ("gtiff", "kmz", "shp") and not engine_ok:
                 reason = engine_reason
             if not reason and fmt == "shp" and find_geometry(src) is None:
@@ -235,7 +248,7 @@ def format_matrix(workspace: Path, *, simulated: bool) -> dict:
     }
 
 
-# ---------------- venv 层:CSV 转换 ----------------
+# ---------------- venv 层:CSV / xlsx 转换(同一点表) ----------------
 
 def _attr_text(attrs, key: str) -> str | None:
     v = attrs.get(key)
@@ -274,14 +287,10 @@ def _coordinate_columns(attrs) -> tuple[str, str]:
     return ("lon", "lat")
 
 
-def export_csv(src: Path, product: str, target: Path) -> dict:
-    """h5 栅格 → 点表 CSV(tmp+replace 原子落位)。
+def _load_point_table(src: Path, product: str):
+    """csv/xlsx 共用的点表:同一像元、同一上限、同一地理编码规则,不编格网。
 
-    - 2D:列 <lon,lat|x,y>,value;值非有限的像元行剔除;
-    - 3D 时序:列 <lon,lat|x,y>,d<date>...;全 NaN 像元剔除,
-      部分缺失的历元单元格写空串(保留像元,不编数);
-    - 坐标取像元中心:X_FIRST + col*X_STEP(与 /api/timeseries-point 同口径);
-    - 未地理编码(缺 X_FIRST 系属性)→ 409:行列号冒充坐标是造假。
+    返回 (header, 行生成器);行是与 CSV 相同的逗号分隔字符串。
     """
     if not h5py_available():
         raise ExportError(501, _H5PY_MISSING)
@@ -331,21 +340,74 @@ def export_csv(src: Path, product: str, target: Path) -> dict:
                          f"({len(dates)} vs {cube.shape[0]})")
             header = ",".join([cx, cy, *(f"d{d}" for d in dates)])
             rows_iter = _rows_3d(cube, x0, y0, dx, dy, np)
+    return header, rows_iter
 
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(target.name + ".part")
-        rows = 0
-        try:
-            with open(tmp, "w", encoding="utf-8", newline="\n") as out:
-                out.write(header + "\n")
-                for line in rows_iter:
-                    out.write(line + "\n")
-                    rows += 1
-            os.replace(tmp, target)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
+
+def export_csv(src: Path, product: str, target: Path) -> dict:
+    """h5 栅格 → 点表 CSV(tmp+replace 原子落位)。
+
+    - 2D:列 <lon,lat|x,y>,value;值非有限的像元行剔除;
+    - 3D 时序:列 <lon,lat|x,y>,d<date>...;全 NaN 像元剔除,
+      部分缺失的历元单元格写空串(保留像元,不编数);
+    - 坐标取像元中心:X_FIRST + col*X_STEP(与 /api/timeseries-point 同口径);
+    - 未地理编码(缺 X_FIRST 系属性)→ 409:行列号冒充坐标是造假。
+    """
+    header, rows_iter = _load_point_table(src, product)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".part")
+    rows = 0
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as out:
+            out.write(header + "\n")
+            for line in rows_iter:
+                out.write(line + "\n")
+                rows += 1
+        os.replace(tmp, target)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return {"rows": rows, "header": header}
+
+
+def _xlsx_cells(line: str) -> list:
+    """CSV 行 → Excel 单元格:空串保持空(时序缺测),其余按 csv 文本解析为 float。"""
+    cells: list = []
+    for part in line.split(","):
+        if part == "":
+            cells.append(None)
+        else:
+            cells.append(float(part))
+    return cells
+
+
+def export_xlsx(src: Path, product: str, target: Path) -> dict:
+    """同一点表写成 xlsx;openpyxl 缺失 → 501,不编造格网。
+
+    工作表名:timeseries 产品用 timeseries,其余(velocity / velocity_std)用 velocity。
+    点数上限与 csv 相同(MAX_CSV_POINTS → 400)。
+    """
+    if not openpyxl_available():
+        raise ExportError(501, _OPENPYXL_MISSING)
+    from openpyxl import Workbook
+
+    header, rows_iter = _load_point_table(src, product)
+    sheet_name = "timeseries" if PRODUCTS[product].key == "timeseries" else "velocity"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".part")
+    rows = 0
+    try:
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet(title=sheet_name)
+        ws.append(header.split(","))
+        for line in rows_iter:
+            ws.append(_xlsx_cells(line))
+            rows += 1
+        wb.save(tmp)
+        os.replace(tmp, target)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return {"rows": rows, "header": header, "sheet": sheet_name}
 
 
 def _fmt_val(v: float) -> str:
@@ -490,7 +552,7 @@ def safe_filename_stem(run_id: str) -> str:
 def perform_export(workspace: Path, run_id: str, product: str, fmt: str) -> ExportResult:
     """执行(或幂等复用)一次导出。product/fmt 已由 router 做闭集校验。
 
-    错误闭集:源 h5 缺失 404;结构不适配 400;h5py 缺失/引擎缺失 501;
+    错误闭集:源 h5 缺失 404;结构不适配 400;h5py/openpyxl 缺失/引擎缺失 501;
     几何缺失 404;引擎失败 502;超时 504。全部 ExportError,不出假文件。
     """
     spec = PRODUCTS[product]
@@ -516,6 +578,9 @@ def perform_export(workspace: Path, run_id: str, product: str, fmt: str) -> Expo
 
     if fmt == "csv":
         export_csv(src, product, target)
+        return ExportResult(target, filename, media, reused=False)
+    if fmt == "xlsx":
+        export_xlsx(src, product, target)
         return ExportResult(target, filename, media, reused=False)
 
     # ---- 引擎格式(gtiff/kmz/shp) ----

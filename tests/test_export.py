@@ -165,6 +165,7 @@ def test_options_matrix_shape(env):
     assert set(data) == {"run", "simulated", "engine", "products"}
     assert [p["product"] for p in data["products"]] == \
         ["velocity", "velocity_std", "timeseries"]
+    assert set(FORMATS) == {"h5", "csv", "xlsx", "gtiff", "kmz", "shp"}
     for p in data["products"]:
         assert set(p) == {"product", "source", "formats"}
         assert set(p["formats"]) == set(FORMATS)
@@ -282,6 +283,64 @@ def test_csv_point_cap_400(env, monkeypatch):
     assert r.status_code == 400
     assert "降采样" in r.json()["detail"]
     assert not (env["ws"] / "export" / f"{RUN_ID}_velocity.csv").exists()
+
+
+def test_xlsx_openpyxl_missing_501(env, monkeypatch):
+    """openpyxl 缺失:xlsx 501,提示改用 csv,不落假文件。"""
+    monkeypatch.setattr(export_mod, "openpyxl_available", lambda: False)
+    r = _export(env, run_id=RUN_ID, product="velocity", fmt="xlsx")
+    assert r.status_code == 501
+    assert r.json()["detail"] == "未安装 openpyxl，可用 csv 导出表格"
+    assert not (env["ws"] / "export" / f"{RUN_ID}_velocity.xlsx").exists()
+    cell = _product(_options(env, session="sess-a", run_id=RUN_ID).json(),
+                    "velocity")["formats"]["xlsx"]
+    assert cell == {"available": False, "reason": "未安装 openpyxl，可用 csv 导出表格"}
+
+
+def test_xlsx_same_points_as_csv(env):
+    """xlsx 与 csv 同一批像元;工作表名 velocity / timeseries。"""
+    pytest.importorskip("openpyxl")
+    from openpyxl import load_workbook
+
+    csv_r = _export(env, run_id=RUN_ID, product="velocity", fmt="csv")
+    assert csv_r.status_code == 200
+    xlsx_r = _export(env, run_id=RUN_ID, product="velocity", fmt="xlsx")
+    assert xlsx_r.status_code == 200
+    assert "spreadsheetml.sheet" in xlsx_r.headers["content-type"]
+    assert f"{RUN_ID}_velocity.xlsx" in xlsx_r.headers["content-disposition"]
+    path = env["ws"] / "export" / f"{RUN_ID}_velocity.xlsx"
+    wb = load_workbook(path, read_only=True)
+    assert wb.sheetnames == ["velocity"]
+    rows = list(wb["velocity"].iter_rows(values_only=True))
+    wb.close()
+    csv_lines = csv_r.text.strip().splitlines()
+    assert list(rows[0]) == csv_lines[0].split(",")
+    assert len(rows) == len(csv_lines)
+    csv_first = [float(x) for x in csv_lines[1].split(",")]
+    assert [float(x) for x in rows[1]] == csv_first
+
+    ts_r = _export(env, run_id=RUN_ID, product="timeseries", fmt="xlsx")
+    assert ts_r.status_code == 200
+    ts_path = env["ws"] / "export" / f"{RUN_ID}_timeseries.xlsx"
+    ts_wb = load_workbook(ts_path, read_only=True)
+    assert ts_wb.sheetnames == ["timeseries"]
+    ts_rows = list(ts_wb["timeseries"].iter_rows(values_only=True))
+    ts_wb.close()
+    assert ts_rows[0] == ("lon", "lat", *(f"d{d}" for d in TS_DATES))
+    # 像元(1,1):第 0 期 NaN → 空单元格;与 csv 空串同一像元
+    match = [row for row in ts_rows[1:] if row[0] == 100.05 and row[1] == 34.95]
+    assert len(match) == 1 and match[0][2] is None
+    assert [float(x) for x in match[0][3:]] == [111.0, 211.0]
+
+
+def test_xlsx_point_cap_400(env, monkeypatch):
+    """xlsx 共用 CSV 点数防线:超上限 400,不落文件。"""
+    monkeypatch.setattr(export_mod, "openpyxl_available", lambda: True)
+    monkeypatch.setattr(export_mod, "MAX_CSV_POINTS", 50)
+    r = _export(env, run_id=RUN_ID, product="velocity", fmt="xlsx")
+    assert r.status_code == 400
+    assert "降采样" in r.json()["detail"]
+    assert not (env["ws"] / "export" / f"{RUN_ID}_velocity.xlsx").exists()
 
 
 # ---------------- ③ h5 直传与路径防御 ----------------

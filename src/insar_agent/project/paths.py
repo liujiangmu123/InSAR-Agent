@@ -133,12 +133,14 @@ def find_in_project(root: Path, name: str, *, max_files: int = _MAX_FIND) -> lis
         return []
     hits: list[dict] = []
     seen = 0
-    skip = {MARKER_DIR + "/sessions"}
+    # 会话工作区不进项目内搜索结果(产物成千上万,且归 run 账本管)。
+    # 前缀从 MARKER_DIR 推导,不写死 ".insar" —— 改常量时这里跟着走。
+    skip_prefix = f"{MARKER_DIR}/sessions"
     for dirpath, dirnames, filenames in os.walk(root_res, followlinks=False):
         rel_dir = Path(dirpath).resolve().relative_to(root_res).as_posix()
         if rel_dir == ".":
             rel_dir = ""
-        if rel_dir.startswith(".insar/sessions"):
+        if rel_dir.startswith(skip_prefix):
             dirnames[:] = []
             continue
         dirnames[:] = [d for d in dirnames if not d.startswith(".") or d == MARKER_DIR]

@@ -20,8 +20,8 @@ from pathlib import Path
 import pytest
 
 from insar_agent.brain.facade import Brain
-from insar_agent.engines import localdata, resolve_builder
 from insar_agent.engines import isce2 as isce2_engine
+from insar_agent.engines import localdata, resolve_builder
 from insar_agent.engines.isce2 import _STRIPMAP_RANGES
 from insar_agent.loop.driver import Driver
 from insar_agent.registry.capabilities import REGISTRY

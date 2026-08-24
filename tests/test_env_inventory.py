@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from insar_agent.runtime.env_inventory import (
     AVAILABLE,
-    MISSING_INSTALLABLE,
     MISSING_MANUAL,
     classify,
     inventory_text,

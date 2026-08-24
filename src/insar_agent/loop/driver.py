@@ -32,6 +32,7 @@ from typing import AsyncIterator
 from insar_agent.audit.contract import load_contract
 from insar_agent.audit.verify import verify_metrics
 from insar_agent.brain.facade import Brain, ConverseResult
+from insar_agent.brain.llm_config import AGENT_MAX_CYCLES_MAX
 from insar_agent.brain.provider import BrainTruncated, BrainUnavailable
 from insar_agent.brain.usage import usage_context
 from insar_agent.core.actions import apply_action
@@ -44,12 +45,17 @@ from insar_agent.loop.budget import clip_summary
 from insar_agent.loop.events import EventBus
 from insar_agent.loop.goal import (
     ADAPTIVE_CHUNK,
-    cycle_kinds as _cycle_kinds,
-    goal_is_env_only as _goal_is_env_only,
-    goal_is_work as _goal_is_work,
     should_extend_budget,
 )
-from insar_agent.brain.llm_config import AGENT_MAX_CYCLES_MAX
+from insar_agent.loop.goal import (
+    cycle_kinds as _cycle_kinds,
+)
+from insar_agent.loop.goal import (
+    goal_is_env_only as _goal_is_env_only,
+)
+from insar_agent.loop.goal import (
+    goal_is_work as _goal_is_work,
+)
 from insar_agent.planner.plan import PlanResult, make_plan, pipeline_groups
 from insar_agent.registry.capabilities import REGISTRY, topo_order
 from insar_agent.registry.model import Capability
@@ -66,7 +72,9 @@ log = logging.getLogger(__name__)
 
 #: 数据集类型的中文标签(键与 data/catalog.KINDS 闭集对齐)
 _DATASET_KIND_LABELS = {"hyp3": "HyP3 产品", "alos_raw": "ALOS 原始条带",
-                        "slc_stack": "SLC 栈", "dem": "DEM", "unknown": "未识别"}
+                        "slc_stack": "SLC 栈", "dem": "DEM", "nisar": "NISAR GUNW",
+                        "gamma": "GAMMA/LT-1", "displacement": "形变/EGMS",
+                        "unknown": "未识别"}
 
 #: 数据集清单缓存 TTL(秒):与 /api/datasets 的清单缓存同一口径
 _DATASETS_TTL_S = 60.0
@@ -153,7 +161,7 @@ def _llm_error_text(exc: BaseException) -> str:
 
 def _is_resume_text(text: str) -> bool:
     t = (text or "").strip()
-    return t in {"继续", "接着", "接着做", "往下", "继续做", "resume", "continue"} or t.startswith("继续")
+    return t in {"继续", "接着", "接着做", "往下", "继续做", "resume", "continue"} or t.startswith("继续")  # noqa: E501
 
 
 def _human_size(num_bytes: float) -> str:
@@ -617,11 +625,11 @@ class Driver:
             "解析意图与约束",
             f"区域:{sc.region or '待定'}\n目标:{sc.chain} 时序形变\n时间范围:{sc.dates or '待定'}\n"
             f"场景:{sc.label}(来源:{intent_source})\n"
-            f"模式:{'专家(每步人工确认方法)' if mode == 'expert' else '向导(自动决策,关键节点征询)'}"))
+            f"模式:{'专家(每步人工确认方法)' if mode == 'expert' else '向导(自动决策,关键节点征询)'}"))  # noqa: E501
 
         # ---- 环境探测(真实,不 mock) ----
         probe = self.probe()
-        yield self._emit(ev.tool_start("probe", "probe", "runtime/probe.py --engines", "探测可用引擎"))
+        yield self._emit(ev.tool_start("probe", "probe", "runtime/probe.py --engines", "探测可用引擎"))  # noqa: E501
         for engine, version in sorted(probe.engines.items()):
             tone = "ok" if version else "warn"
             mark = f"{version}" if version else "✗ 缺失"
@@ -1901,7 +1909,7 @@ class Driver:
                 continue
 
             # ---- 非正常结束 ----
-            yield self._emit(ev.tool_end(f"s{sid}", step.exit_code if step.exit_code is not None else -1,
+            yield self._emit(ev.tool_end(f"s{sid}", step.exit_code if step.exit_code is not None else -1,  # noqa: E501
                                          result.detail or result.outcome))
             yield self._emit(ev.step_end(sid, step.exit_code if step.exit_code is not None else -1))
 
@@ -1922,7 +1930,7 @@ class Driver:
                 store.set_run_status(run_id, "failed")
                 gate = ev.gate_stop(
                     f"第 {sid} 步被质量门拦停:{result.detail}",
-                    suggestions=[f"换用其他方法({[m.id for m in cap.methods if m.id != step.method]})",
+                    suggestions=[f"换用其他方法({[m.id for m in cap.methods if m.id != step.method]})",  # noqa: E501
                                  "放宽阈值(需在 contract.yaml 里给出依据)"])
                 store.append_trace(run_id=run_id, step_no=sid, phase=cap.phase,
                                    revision_trigger="gate_stop", error_occurred=True,
@@ -1950,7 +1958,7 @@ class Driver:
                                revision_trigger="failure", error_occurred=True,
                                error_type=fc, error_message=result.detail[:500])
             if consecutive_failures[fc] >= 3:
-                yield self._emit(ev.note("bad", f"同类失败已连续 {consecutive_failures[fc]} 次,停链问人(§3.3)"))
+                yield self._emit(ev.note("bad", f"同类失败已连续 {consecutive_failures[fc]} 次,停链问人(§3.3)"))  # noqa: E501
             return
 
         # ---- 收尾前的最后一次 steer 消费点(2026-08-12 干预矩阵决策一) ----

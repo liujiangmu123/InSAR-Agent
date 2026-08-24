@@ -158,6 +158,36 @@ def test_dem_route():
     assert dem.ready is True and all(r["optional"] for r in dem.requirements)
 
 
+def test_nisar_gunw_route():
+    nisar = ds("nisar", {"gunw": 3, "h5": 3, "truncated": False})
+    routes = recommend_routes(nisar, probe_full())
+    assert [r.route_id for r in routes] == ["nisar_gunw"]
+    r0 = routes[0]
+    assert r0.steps_involved == (1, 7, 8, 9, 10, 11)
+    assert r0.ready is True
+    assert "GUNW 3" in r0.est_note
+
+
+def test_gamma_lt1_route():
+    gamma = ds("gamma", {"par": 4, "diff": 4, "mli": 0, "truncated": False})
+    routes = recommend_routes(gamma, probe_full())
+    assert [r.route_id for r in routes] == ["lt1_gamma_layout"]
+    r0 = routes[0]
+    assert r0.steps_involved == tuple(range(1, 12))
+    assert "lt1_gamma" in r0.suitable_scenarios
+    assert "4 个 .par" in r0.est_note
+
+
+def test_displacement_mode_c_route():
+    disp = ds("displacement", {"tif": 2, "csv": 1, "truncated": False})
+    routes = recommend_routes(disp, probe_bare())
+    assert [r.route_id for r in routes] == ["mode_c_analysis"]
+    r0 = routes[0]
+    assert r0.steps_involved == (20, 21, 22, 23, 24, 25)
+    assert r0.ready is True  # GDAL 可选,裸机也可规划模式 C
+    assert "2 个 GeoTIFF" in r0.est_note
+
+
 def test_unknown_gives_identify_guidance():
     routes = recommend_routes(DS_UNKNOWN, probe_bare())
     assert [r.route_id for r in routes] == ["identify_first"]

@@ -124,7 +124,7 @@ def test_kill_action_interrupts_run(store, workspace):
                                   run_id=run["run_id"])
         return events
 
-    events = asyncio.run(scenario())
+    assert asyncio.run(scenario()), "回合应产生事件流"
     assert store.get_run(run["run_id"])["status"] == "interrupted"
     states = {s.step_id: s.state for s in store.load_steps(run["run_id"])}
     assert states[1] == "done"  # 已完成的保留

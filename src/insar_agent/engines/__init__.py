@@ -42,7 +42,7 @@ def resolve_builder(cap: Capability, method_id: str, *, simulated: bool):
 
     # 方法级路由(自建纯 Python 实现)
     # dem_local:本地/WSL DEM 核验登记(Baja 预检发现真实 run 里 ToolMissing 的缺口)
-    if method_id in ("local_import", "dem_local"):
+    if method_id in ("local_import", "dem_local", "nisar_import"):
         from insar_agent.engines import localdata
         return localdata.build
     if method_id == "figure_journal":
@@ -51,6 +51,12 @@ def resolve_builder(cap: Capability, method_id: str, *, simulated: bool):
     if method_id in ("coherence_mask", "crossval_ps_sbas", "loop_closure"):
         from insar_agent.engines import qa
         return qa.build
+    if method_id == "gnss_compare":
+        from insar_agent.engines import gnss
+        return gnss.build
+    if method_id == "dolphin_ps_ds":
+        from insar_agent.engines import dolphin
+        return dolphin.build
     if method_id in ("asc_desc_horz_vert", "raster_diff", "mask_by_coherence",
                      "subset_lalo", "spatial_average", "temporal_average",
                      "transection", "timeseries_rms", "plate_motion_itrf",
@@ -83,6 +89,9 @@ def resolve_builder(cap: Capability, method_id: str, *, simulated: bool):
     if engine == "pyaps":
         from insar_agent.engines import pyaps
         return pyaps.build
+    if engine == "dolphin":
+        from insar_agent.engines import dolphin
+        return dolphin.build
     raise ToolMissing(f"引擎 {engine} 无构建器")
 
 

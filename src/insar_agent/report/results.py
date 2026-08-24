@@ -174,6 +174,26 @@ def build_result_facts(store: Store, run_id: str, *,
                  "state": step9.get("state") or MISSING,
                  "params": _clean_params(step9.get("params"))}
 
+    from insar_agent.report.product_level import annotate
+    art_view = dict(doc.get("artifacts") or {})
+    if workspace is not None:
+        dec = workspace / "analysis" / "decomposed.h5"
+        if dec.is_file():
+            art_view.setdefault("decomposed", {"path": "analysis/decomposed.h5"})
+        vel_found = _find_velocity_file(doc, workspace)
+        if vel_found is not None:
+            try:
+                import h5py
+                with h5py.File(vel_found[0], "r") as hf:
+                    if "vertical" in hf or "east" in hf:
+                        art_view.setdefault("components",
+                                            {"path": vel_found[1], "dataset": "vertical"})
+            except (OSError, ImportError):
+                pass
+    metric_for_level = {m["name"]: m["value"] for m in metrics}
+    product_level = annotate(metric_for_level, art_view,
+                             simulated=bool(doc.get("simulated")))
+
     return {
         "run_id": doc.get("run_id") or MISSING,
         "scenario": doc.get("scenario") or MISSING,
@@ -184,6 +204,7 @@ def build_result_facts(store: Store, run_id: str, *,
         "metrics": metrics,
         "velocity": _velocity_stats(_find_velocity_file(doc, workspace)),
         "model": model,
+        "product_level": product_level,
     }
 
 
@@ -254,6 +275,14 @@ def results_skeleton(facts: dict) -> str:
                  f"证据级别为 {f['evidence_level']}(六级证据阶梯),"
                  "每个数字可回溯至对应指标记录或产物文件。")
 
+    pl = f.get("product_level") or {}
+    level = pl.get("level") or "basic"
+    pl_line = (f"产品级别:{level}"
+               "(EGMS 对齐:basic 相对 LOS,calibrated GNSS 锚定,ortho 垂直与东西向)。")
+    if pl.get("simulated") or f.get("simulated"):
+        pl_line += "本次为模拟产物,级别标注不掩盖模拟属性。"
+    paras.append(pl_line)
+
     # 模拟 run 强制警示(任务硬约束;与方法章节同句)
     if f["simulated"]:
         paras.append(SIMULATED_SENTENCE)
@@ -274,6 +303,10 @@ def results_facts_used(facts: dict) -> list[str]:
         f"qa_status={f['qa_status']}",
         f"evidence_level={f['evidence_level']}",
     ]
+    pl = f.get("product_level") or {}
+    out.append(f"product_level={pl.get('level') or 'basic'}")
+    out.append(f"product_level.simulated="
+               f"{'true' if pl.get('simulated') or f.get('simulated') else 'false'}")
     v = f["velocity"]
     out.append(f"velocity.available={'true' if v.get('available') else 'false'}")
     if v.get("available"):

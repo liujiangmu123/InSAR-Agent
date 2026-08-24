@@ -26,10 +26,27 @@ PIPELINE: tuple[Capability, ...] = (
         phase="数据获取",
         deps=(),
         methods=(
-            Method("asf_search_slc", "asf_search_slc", "asf_api", why="下载原始 SLC,可控性最强"),
-            Method("hyp3_submit", "hyp3_submit", "hyp3", why="云端处理,跳过 2-6 步,失去中间产物控制权",
-                   requires_credentials=("earthdata",), extra="需 ASF 配额"),
+            # engines/hyp3.py 的构建器目前只做凭据方式回显 + asf_search 可导入性检查,
+            # 不做真实检索/下载/作业提交(脚本里明确写着「等待 AOI 输入」)。
+            # 声明保留(方法矩阵的完整性),但真实模式下如实排除 —— 不然计划会排进
+            # 一个跑完退出码 0 却拿不到 slc 产物的步骤,用户看到的是「产物缺失」
+            # 而不是「本项目没实现自动下载」。
+            Method("asf_search_slc", "asf_search_slc", "asf_api", why="下载原始 SLC,可控性最强",
+                   implemented=False,
+                   unimplemented_note="本项目尚未实现 ASF 自动检索下载"
+                                      "(engines/hyp3.py 仅凭据/依赖自检);"
+                                      "请先自行取回数据再用 local_import"),
+            Method("hyp3_submit", "hyp3_submit", "hyp3", why="云端处理,跳过 2-6 步,失去中间产物控制权",  # noqa: E501
+                   requires_credentials=("earthdata",), extra="需 ASF 配额",
+                   implemented=False,
+                   unimplemented_note="本项目尚未实现 HyP3 作业提交与结果回收;"
+                                      "请在 ASF 侧完成云端处理后用 local_import 导入成品目录"),
             Method("local_import", "local_import", "-", why="已有本地数据", recommend=True),
+            # NISAR GUNW 是云端已解缠产品,形态同 HyP3:场景包用
+            # cloud_completed: [2,3,4,5,6] + 第 7 步 processor=nisar。
+            # 不改 default_method,以免打绿既有计划测试。
+            Method("nisar_import", "nisar_import", "-",
+                   why="NISAR GUNW 是云端已解缠产品,跳过 2-6,类似 HyP3"),
         ),
         default_method="local_import",
         params={
@@ -42,12 +59,14 @@ PIPELINE: tuple[Capability, ...] = (
             "platform": Param("sentinel-1", kind="science", type="str"),
             "dates": Param("2019-06-10..2019-08-15", kind="science", type="str"),
             "source": Param("", kind="science", type="str",
-                            hint="local_import 的数据源目录(HyP3 产品目录或 SLC 目录)"),
+                            hint="local_import / nisar_import 的数据源目录"
+                                 "(HyP3 产品目录、NISAR GUNW 目录或 SLC 目录)"),
         },
         artifacts=(
-            ArtifactSpec("slc", ("data/slc", "hyp3"), kind="SLC", layout="isce2", policy="path"),
-            # HyP3 路线:云端已完成解缠,导入的产品目录同时充当 unw 输入(供第 7 步)
-            ArtifactSpec("unw", ("hyp3",), kind="IFG_UNWRAPPED", layout="hyp3",
+            ArtifactSpec("slc", ("data/slc", "hyp3", "data/nisar"), kind="SLC",
+                         layout="isce2", policy="path"),
+            # HyP3 / NISAR GUNW 路线:云端已完成解缠,导入目录同时充当 unw 输入(供第 7 步)
+            ArtifactSpec("unw", ("hyp3", "data/nisar"), kind="IFG_UNWRAPPED", layout="hyp3",
                          policy="path", required=False),
             ArtifactSpec("era5", ("mintpy/inputs/ERA5.h5",), kind="CONFIG",
                          policy="stat", required=False),
@@ -68,10 +87,26 @@ PIPELINE: tuple[Capability, ...] = (
         phase="辅助数据",
         deps=(1,),
         methods=(
-            Method("dem_copernicus", "dem_copernicus", "dem_service", why="Copernicus 30 m,覆盖全球且质量稳定", recommend=True),
-            Method("dem_srtm", "dem_srtm", "dem_service", why="SRTM 30 m,高纬度覆盖缺口"),
-            Method("dem_local", "dem_local", "-", why="使用本地 DEM 瓦片"),
+            # dem_service 不是可安装的工具,是「本项目该写的下载器」的占位引擎名:
+            # engines 里没有对应构建器。收窄若只报「工具链缺失:dem_service」会误导
+            # 用户去装一个不存在的东西 —— 故显式标未实现并给出如实说明。
+            Method("dem_copernicus", "dem_copernicus", "dem_service",
+                   why="Copernicus 30 m,覆盖全球且质量稳定", recommend=True,
+                   implemented=False,
+                   unimplemented_note="本项目尚未实现 DEM 在线下载"
+                                      "(无 dem_service 构建器);"
+                                      "请自备 DEM 后用 dem_local"),
+            Method("dem_srtm", "dem_srtm", "dem_service", why="SRTM 30 m,高纬度覆盖缺口",
+                   implemented=False,
+                   unimplemented_note="本项目尚未实现 DEM 在线下载"
+                                      "(无 dem_service 构建器);"
+                                      "请自备 DEM 后用 dem_local"),
+            Method("dem_local", "dem_local", "-", why="使用本地 DEM 瓦片", recommend=True),
         ),
+        # 保持 dem_copernicus:云端已完成路线(HyP3)第 2 步记的就是它,改成
+        # dem_local 会让 provenance 失真(ASF 侧用的确是 Copernicus DEM)。
+        # 本机执行时 default_method 不参与选择 —— planner 走 pick_method,
+        # 未实现的候选已在收窄期排除,唯一有实现的 dem_local 带 recommend 被选中。
         default_method="dem_copernicus",
         params={
             "dem": Param("copernicus-30m", kind="science", type="str"),
@@ -91,12 +126,17 @@ PIPELINE: tuple[Capability, ...] = (
         deps=(1, 2),
         methods=(
             Method("isce2_tops_geom_esd", "isce2_tops_geom_esd", "isce2",
-                   why="S1 IW 标准路径:几何配准 + ESD 精化", recommend=True, requires_engines=("isce2",)),
+                   why="S1 IW 标准路径:几何配准 + ESD 精化", recommend=True, requires_engines=("isce2",)),  # noqa: E501
             Method("isce2_stripmap_xcorr", "isce2_stripmap_xcorr", "isce2",
                    why="条带模式(ALOS raw,2026-08 WSL 实测全链通过)", requires_engines=("isce2",),
                    scenario_only=("stripmap_coseismic",)),
+            # SNAP 链声明保留(方法矩阵完整性),但 engines 里没有 snap 构建器。
+            # 装了 SNAP(gpt 在 PATH)时,收窄若只看 probe 会把它判为可行 →
+            # 计划排进去 → 跑到第 3 步才 ToolMissing 停链。故显式标未实现。
             Method("snap_backgeocoding", "snap_backgeocoding", "snap",
-                   why="走 SNAP 链,需换 layout", requires_engines=("snap",)),
+                   why="走 SNAP 链,需换 layout", requires_engines=("snap",),
+                   implemented=False,
+                   unimplemented_note="本项目尚未实现 SNAP(gpt)图处理链封装"),
         ),
         default_method="isce2_tops_geom_esd",
         params={
@@ -114,7 +154,7 @@ PIPELINE: tuple[Capability, ...] = (
                                       hint="stripmap:从影像 LED 头文件相对路径"),
             "resample_flag": Param("", kind="science", type="str",
                                    enum=("", "dual2single"),
-                                   hint="stripmap:FBD 从影像配 FBS 主影像时用 dual2single,空=不重采样"),
+                                   hint="stripmap:FBD 从影像配 FBS 主影像时用 dual2single,空=不重采样"),  # noqa: E501
             "dem_path": Param("data/dem/dem.wgs84", kind="science", type="str",
                               hint="stripmap:ISCE 格式 DEM 相对路径"),
             "threads": Param(8, kind="resource", type="int", min=1, max=32,
@@ -147,7 +187,8 @@ PIPELINE: tuple[Capability, ...] = (
                    why="可调多视比。小基线网络按时空基线剪枝,非全组合", recommend=True,
                    requires_engines=("isce2",)),
             Method("snap_interferogram", "snap_interferogram", "snap", why="SNAP 链对应步骤",
-                   requires_engines=("snap",)),
+                   requires_engines=("snap",), implemented=False,
+                   unimplemented_note="本项目尚未实现 SNAP(gpt)图处理链封装"),
             # 条带链(ALOS raw):stripmapApp 分段 split_range_spectrum→filter,
             # 分频谱占位步不可跳过(pickle 链约束,engines/isce2.py _STRIPMAP_RANGES)。
             # 耗时/磁盘按 docs/VALIDATION-isce2-wsl.md 实测:全链 33 min、峰值 32 GB,
@@ -196,8 +237,16 @@ PIPELINE: tuple[Capability, ...] = (
         methods=(
             Method("goldstein", "goldstein", "isce2", why="低相干区推荐", recommend=True,
                    requires_engines=("isce2",)),
-            Method("boxcar", "boxcar", "isce2", why="简单快速,但边缘模糊", requires_engines=("isce2",)),
-            Method("none", "none", "-", why="不滤波,保留全部细节"),
+            Method("boxcar", "boxcar", "isce2", why="简单快速,但边缘模糊", requires_engines=("isce2",)),  # noqa: E501
+            # 「不滤波」不能简单地跳过本步:ISCE2 --steps 续跑要求 pickle 链连续
+            # (engines/isce2.py _STEP_RANGES 的硬约束),正确做法是仍跑 filter 段但
+            # filter strength=0。该形态未实现,故显式标未实现而不是让计划排进来后
+            # 在执行期 ToolMissing(守护:tests/test_engines.py 锁 resolve 仍拒绝)。
+            Method("none", "none", "-", why="不滤波,保留全部细节",
+                   implemented=False,
+                   unimplemented_note="本项目尚未实现「不滤波」形态"
+                                      "(需 filter strength=0 且仍跑 filter 段以保 "
+                                      "ISCE2 pickle 链连续);可用 boxcar 弱滤波替代"),
             # 条带链滤波:stripmapApp filter 单步重跑(前驱 sub_band_interferogram 的
             # pickle 在干涉段已生成);filter_strength 沿实测形态用 stripmapApp 默认,
             # XML 不渲染该属性(docs/VALIDATION-isce2-wsl.md)
@@ -237,7 +286,9 @@ PIPELINE: tuple[Capability, ...] = (
             Method("icu", "icu", "isce2", why="区域增长法,大范围低相干区易产生解缠孤岛",
                    requires_engines=("isce2",)),
             Method("3D_FULL", "3D_FULL", "unw3d", why="需 3D 相位解缠工具链,输出格式与下游不兼容",
-                   requires_engines=("unw3d",)),
+                   requires_engines=("unw3d",), implemented=False,
+                   unimplemented_note="本项目尚未实现 3D 相位解缠(无 unw3d 构建器,"
+                                      "且输出格式与下游 MintPy 布局不兼容)"),
             # 条带链解缠:snaphu 由 stripmapApp 内置驱动(XML 里 do unwrap=True/
             # unwrapper name=snaphu),不需要独立 snaphu 可执行,故只依赖 isce2;
             # 分段必须从 filter_low_band 续起补齐 pickle 链(实测教训 2:直接从
@@ -251,7 +302,7 @@ PIPELINE: tuple[Capability, ...] = (
         default_method="snaphu_mcf",
         params={
             "min_coherence": Param(0.25, kind="science", min=0, max=1, hint="相干性阈值 0-1"),
-            "cost_mode": Param("SMOOTH", kind="science", type="str", enum=("SMOOTH", "DEFO", "TOPO")),
+            "cost_mode": Param("SMOOTH", kind="science", type="str", enum=("SMOOTH", "DEFO", "TOPO")),  # noqa: E501
             "threads": Param(8, kind="resource", type="int", min=1, max=32),
         },
         artifacts=(
@@ -287,10 +338,15 @@ PIPELINE: tuple[Capability, ...] = (
         deps=(6,),
         methods=(
             Method("mintpy_sbas", "mintpy_sbas", "mintpy",
-                   why="小基线集,适合低相干面状形变区", recommend=True, requires_engines=("mintpy",)),
+                   why="小基线集,适合低相干面状形变区", recommend=True, requires_engines=("mintpy",)),  # noqa: E501
             Method("pystamps_ps", "pystamps_ps", "pystamps",
                    why="永久散射体,适合高相干点状目标;需 ISCE2→PyStamps 桥",
                    requires_engines=("pystamps",)),
+            Method("dolphin_ps_ds", "dolphin_ps_ds", "dolphin",
+                   why="PS/DS 混合相位连接(OPERA Dolphin)",
+                   requires_engines=("dolphin",),
+                   extra="实验方法:只产出缠绕相位/干涉栈,不写 velocity.h5;"
+                         "后续仍接 MintPy 8-11"),
         ),
         default_method="mintpy_sbas",
         params={
@@ -365,7 +421,10 @@ PIPELINE: tuple[Capability, ...] = (
                    why="ERA5 大气校正(需 CDS 凭据或已缓存的 ERA5.h5)", recommend=True,
                    requires_engines=("pyaps",)),
             Method("tropo_gacos", "tropo_gacos", "gacos", why="GACOS 产品,需在线申请",
-                   requires_credentials=("gacos",)),
+                   requires_credentials=("gacos",), implemented=False,
+                   unimplemented_note="本项目尚未实现 GACOS 产品接入(无 gacos 构建器);"
+                                      "对流层校正请用 tropo_era5_pyaps 或 "
+                                      "tropo_height_corr"),
             Method("tropo_height_corr", "tropo_height_corr", "mintpy",
                    why="无气象数据时的降级方案(证据级别下降)", requires_engines=("mintpy",)),
             Method("tropo_opera", "tropo_opera", "mintpy",
@@ -461,12 +520,19 @@ PIPELINE: tuple[Capability, ...] = (
                    why="期刊级排版:600 dpi、色盲安全色带、比例尺", recommend=True),
             Method("mintpy_geocode", "mintpy_geocode", "mintpy", why="仅地理编码,不做排版",
                    requires_engines=("mintpy",)),
+            # GDAL 装了就在 probe 里为 present(本机 conda insar 环境即是),但 engines
+            # 没有 gdal 构建器 —— 不标未实现的话收窄会放行,跑到第 10 步才停链。
+            # GIS 导出的真实通路是 /api/export(insar_export_product 工具,GeoTIFF/KMZ/
+            # shp 都走那里),不经本步骤。
             Method("gdal_warp", "gdal_warp", "gdal", why="导出 GeoTIFF 供 GIS 使用",
-                   requires_engines=("gdal",)),
+                   requires_engines=("gdal",), implemented=False,
+                   unimplemented_note="本项目尚未把 gdal_warp 作为流水线步骤实现;"
+                                      "GeoTIFF/KMZ/shp 导出请用 insar_export_product"
+                                      "(/api/export)"),
         ),
         default_method="figure_journal",
         params={
-            "dpi": Param(600, kind="presentation", type="int", min=72, max=1200, hint="出图 DPI 72-1200"),
+            "dpi": Param(600, kind="presentation", type="int", min=72, max=1200, hint="出图 DPI 72-1200"),  # noqa: E501
             # 分色带建议(C8,Crameri 2020 三分类):循环量配非循环色带会在 ±π 处
             # 产生假边界;默认 roma 视作「未显式指定」,由 engines/figures.py 按
             # 产物类型(h5 FILE_TYPE)路由默认色带,显式指定其他值时直通
@@ -476,7 +542,10 @@ PIPELINE: tuple[Capability, ...] = (
             "format": Param("png+pdf", kind="presentation", type="str"),
             "figure_set": Param(["velocity"], kind="presentation", type="list",
                                 hint="本步要出的图种;场景包可覆写"
-                                     "(velocity/coherence/mask/network/points_timeseries 等)"),
+                                     "(velocity/coherence/mask/network/coherence_matrix/"
+                                     "displacement_epochs/points_timeseries/velocity_std/"
+                                     "ifg_png);缺数据的图种如实跳过并写 sidecar,"
+                                     "绝不画占位图"),
             "points_lalo": Param([], kind="science", type="list",
                                  hint="points_timeseries 的采样点 [[lat,lon], ...]"),
         },
@@ -503,11 +572,16 @@ PIPELINE: tuple[Capability, ...] = (
                    why="闭合回路残差检查,只验解缠不验反演", requires_engines=("mintpy",)),
             Method("coherence_mask", "coherence_mask", "mintpy", why="相干性掩膜,最弱的质检",
                    requires_engines=("mintpy",)),
+            Method("gnss_compare", "gnss_compare", "-",
+                   why="与 GNSS 站点 LOS 速度对比(RMSE);不自造平差"),
         ),
         default_method="crossval_ps_sbas",
         params={
             "corr_threshold": Param(0.85, kind="science", min=0, max=1,
                                     hint="交叉验证相关阈值 0-1"),
+            "gnss_csv": Param("", kind="science", type="str",
+                              hint="gnss_compare:GNSS CSV 相对工作区路径;"
+                                   "列启发式 lon,lat,los_mm 或 ve,vn,vu"),
         },
         artifacts=(
             ArtifactSpec("qa_report", ("products/report/qa.json", "qa.json"), kind="REPORT",
@@ -536,12 +610,13 @@ ANALYSIS: tuple[Capability, ...] = (
     Capability(
         id=20, name="分析输入", phase="分析", group="analysis", deps=(),
         methods=(Method("register_sources", "register_sources", "-",
-                        why="登记并校验待分析的源产物(不复制、不改写)", recommend=True),),
+                        why="登记并校验待分析的源产物(h5/GeoTIFF/CSV;不改写科学数值)",
+                        recommend=True),),
         default_method="register_sources",
         params={
             # 相对 run 工作区的路径(与第 3 步 stripmap 的路径参数同形态,进指纹)
             "primary": Param("mintpy/velocity.h5", kind="science", type="str",
-                             hint="主源产物路径(升轨速度场 / 待分析时序)"),
+                             hint="主源产物路径(升轨速度场 / GeoTIFF / CSV / 待分析时序)"),
             "secondary": Param("", kind="science", type="str",
                                hint="次源产物路径(降轨速度场);单源分析留空"),
             "primary_run": Param("", kind="science", type="str",
@@ -551,9 +626,13 @@ ANALYSIS: tuple[Capability, ...] = (
         artifacts=(
             # register_sources 把 params 路径物化为规范链首(NTFS 硬链接优先、拷贝兜底,
             # 数据是真实的,只是换了规范位置)—— 后续步骤全部读固定的规范路径,零决策
-            ArtifactSpec("src_primary", ("analysis/source.h5",), kind="DATA", policy="stat"),
-            ArtifactSpec("src_secondary", ("analysis/source_2.h5",), kind="DATA",
-                         policy="stat", required=False),
+            ArtifactSpec("src_primary",
+                         ("analysis/source.h5", "analysis/source.tif", "analysis/source.csv"),
+                         kind="DATA", policy="stat"),
+            ArtifactSpec("src_secondary",
+                         ("analysis/source_2.h5", "analysis/source_2.tif",
+                          "analysis/source_2.csv"),
+                         kind="DATA", policy="stat", required=False),
         ),
         run_ok=(RunOkCheck("exit_code", equals=0),
                 RunOkCheck("artifact_exists", id="src_primary")),

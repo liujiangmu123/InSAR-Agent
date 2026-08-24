@@ -22,6 +22,11 @@ _ENGINE_EXES = {
     "snaphu": "snaphu",
     "gdal": "gdalinfo",
     "snap": "gpt",
+    # OPERA Dolphin(PS/DS 混合相位连接,第 7 步实验方法):conda-forge 包,
+    # CLI 名就是 dolphin(`dolphin config` / `dolphin run`)。不探测的话
+    # planner 的收窄会永久排除 dolphin_ps_ds —— engines/dolphin.py 的构建器
+    # 早已就位,缺的只是这一行接线。
+    "dolphin": "dolphin",
 }
 _ENGINE_MODULES = {
     "pystamps": "pystamps",
@@ -189,6 +194,8 @@ def probe_environment(workspace: Path | str = ".", *, with_versions: bool = Fals
             "snaphu": [lib_bin / "snaphu.exe", scripts / "snaphu", lib_bin / "snaphu"],
             "pyaps": [site / "pyaps3"],
             "pystamps": [site / "pystamps"],
+            # dolphin 同引擎环境安装时的判据(PATH 未污染时上面的 which 已命中)
+            "dolphin": [site / "dolphin", scripts / "dolphin.exe", scripts / "dolphin"],
         }
         for engine, cands in checks.items():
             if not result.engines.get(engine) and any(c.exists() for c in cands):

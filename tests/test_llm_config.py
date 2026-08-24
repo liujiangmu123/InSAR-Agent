@@ -12,9 +12,13 @@ from fastapi.testclient import TestClient
 
 import insar_agent.brain.provider as provider_mod
 from insar_agent.api.app import create_app
-from insar_agent.brain.llm_config import (load_llm_config, mask_key,
-                                          routes_from_config, save_llm_config,
-                                          vision_route_from_config)
+from insar_agent.brain.llm_config import (
+    load_llm_config,
+    mask_key,
+    routes_from_config,
+    save_llm_config,
+    vision_route_from_config,
+)
 
 
 @pytest.fixture()

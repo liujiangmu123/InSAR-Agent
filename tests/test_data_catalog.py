@@ -2,10 +2,12 @@
 """数据集识别器与 /api/datasets* 路由契约(data/catalog.py + data_catalog_router.py)。
 
 覆盖:
-  - 识别器五种类型(tmp_path 造假数据集:识别只看文件名模式与 stat 元数据,
+  - 识别器八种类型(tmp_path 造假数据集:识别只看文件名模式与 stat 元数据,
     空文件即可,绝不读内容):hyp3(产品对数/日期范围)、alos_raw(IMG/LED
     成对、优先级压过辅助 DEM、轨道号不误判为日期)、slc_stack(.slc 文件与
-    .SAFE 目录)、dem、unknown;
+    .SAFE 目录)、dem、nisar(GUNW h5)、gamma(.par+.diff 不被 slc_stack 抢走)、
+    displacement(EGMS tif/csv)、unknown;hyp3 的 *_unw_phase*.tif 仍是 hyp3
+    不是 displacement;
   - 扫描上限截断(max_entries 注入小值,不真造 5000 个文件);
   - 根目录本身的浅判(INSAR_DATA_DIR 直接指向产品目录的形态);
   - 路由:60s TTL 缓存(命中不重扫 / rescan=1 穿透 / ttl=0 过期即重扫)、
@@ -99,6 +101,11 @@ def data_root(tmp_path):
 
 # ---------------- 识别器 ----------------
 
+def test_kinds_closed_set():
+    assert KINDS == ("hyp3", "alos_raw", "slc_stack", "dem", "nisar", "gamma",
+                     "displacement", "unknown")
+
+
 def test_identify_hyp3(data_root):
     info = identify_dataset(data_root / "ridgecrest_hyp3")
     assert info["kind"] == "hyp3"
@@ -138,6 +145,51 @@ def test_identify_unknown(data_root):
     info = identify_dataset(data_root / "notes")
     assert info["kind"] == "unknown"
     assert info["file_count"] == 1
+
+
+def test_identify_nisar(tmp_path):
+    d = tmp_path / "nisar_gunw"
+    _touch(d / "NISAR_L_GUNW_20260720.h5")
+    info = identify_dataset(d)
+    assert info["kind"] == "nisar"
+    assert info["detail"]["gunw"] == 1
+    assert info["detail"]["h5"] == 1
+    assert info["date_range"] == {"start": "2026-07-20", "end": "2026-07-20"}
+
+
+def test_identify_gamma_not_slc_stack(tmp_path):
+    """YYYYMMDD.slc.par + .diff → gamma;同目录再放 .slc 也不被 slc_stack 抢走。"""
+    d = tmp_path / "lt1_gamma"
+    _touch(d / "20200604.slc.par")
+    _touch(d / "20200604.diff")
+    info = identify_dataset(d)
+    assert info["kind"] == "gamma"
+    assert info["detail"]["par"] == 1 and info["detail"]["diff"] == 1
+    _touch(d / "20200604.slc")
+    assert identify_dataset(d)["kind"] == "gamma"
+
+
+def test_identify_displacement_tif(tmp_path):
+    d = tmp_path / "egms_tif"
+    _touch(d / "EGMS_L2b_velocity.tif")
+    info = identify_dataset(d)
+    assert info["kind"] == "displacement"
+    assert info["detail"]["tif"] == 1 and info["detail"]["csv"] == 0
+
+
+def test_identify_displacement_csv(tmp_path):
+    d = tmp_path / "egms_csv"
+    _touch(d / "egms_points.csv")
+    info = identify_dataset(d)
+    assert info["kind"] == "displacement"
+    assert info["detail"]["tif"] == 0 and info["detail"]["csv"] == 1
+
+
+def test_hyp3_unw_phase_is_not_displacement(tmp_path):
+    """hyp3 优先: *_unw_phase*.tif 仍是 hyp3,不被 displacement 的 tif 规则吃掉。"""
+    d = tmp_path / "one_pair"
+    _touch(d / f"{GRANULE_A}_unw_phase.tif")
+    assert identify_dataset(d)["kind"] == "hyp3"
 
 
 def test_result_shape_and_id(data_root):
@@ -219,7 +271,9 @@ def test_get_datasets(api):
     body = r.json()
     assert body["cached"] is False
     assert len(body["roots"]) == 1
-    assert {d["kind"] for d in body["datasets"]} == set(KINDS)
+    found = {d["kind"] for d in body["datasets"]}
+    assert found == {"hyp3", "alos_raw", "slc_stack", "dem", "unknown"}
+    assert found <= set(KINDS)
 
 
 def test_ttl_cache_and_rescan(api, data_root):

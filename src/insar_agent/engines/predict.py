@@ -389,7 +389,7 @@ def run_predict(workspace: Path, spec: dict, *, run: dict | None = None) -> dict
         raise ModelSourceError(f"观测时长非正:{span}")
     cap = enforce_horizon(horizon, span, override)
 
-    step_year = _step_year_from_params(fparams, t_obs, dates if dates is not None else [atr.get("START_DATE", "20000101")])
+    step_year = _step_year_from_params(fparams, t_obs, dates if dates is not None else [atr.get("START_DATE", "20000101")])  # noqa: E501
     periods = tuple(fparams.get("periods") or ())
     poly_order = int(fparams.get("poly_order") or 1)
     t_fut = np.array([t_obs[-1] + horizon], dtype=float)

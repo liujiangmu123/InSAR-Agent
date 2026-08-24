@@ -8,12 +8,18 @@ stat 元数据(大小/mtime)判型 —— 绝不读取文件内容:InSAR 数据�
 文件,按主数据判型 —— 如 GMTSAR ALOS 包含 raw/IMG+LED 与 topo/dem.grd,
 应识别为 alos_raw 而非 dem):
 
-  kind       判据(文件名模式,候选目录下钻 ≤2 层)             detail 字段
-  hyp3       *_unw_phase*.tif / *_corr*.tif(HyP3 产品)          pairs/unw/corr
-  alos_raw   IMG-* 与 LED-* 成对(ALOS PALSAR L1 原始包)         scenes/img/led
-  slc_stack  *.slc 文件或 *.SAFE 目录(SLC 栈)                   slc/safe
-  dem        *.dem / *.wgs84 / *.grd(数字高程)                  dem_files
-  unknown    其余目录(列出但标未知,不静默吞掉用户的数据)       —
+  kind         判据(文件名模式,候选目录下钻 ≤2 层)              detail 字段
+  hyp3         *_unw_phase*.tif / *_corr*.tif(HyP3 产品)         pairs/unw/corr
+  alos_raw     IMG-* 与 LED-* 成对(ALOS PALSAR L1 原始包)        scenes/img/led
+  gamma        *.par 且 (*.diff / *.mli / *.rslc);先于 slc_stack par/diff/mli
+               (有 .slc 也不改判;不单靠 .slc)
+  slc_stack    *.slc 文件或 *.SAFE 目录(SLC 栈)                  slc/safe
+  dem          *.dem / *.wgs84 / *.grd(数字高程)                 dem_files
+  nisar        名含 GUNW/GSLC/GOFF,或 *GUNW*.h5/*.nc;            gunw/h5
+               或多个 .h5/.hdf5/.nc 且名字含 nisar
+  displacement .tif/.tiff/.csv 名含 disp/egms/velocity/          tif/csv
+               deform/los/vert;或纯 csv 点表(≥1 csv,无 hyp3)
+  unknown      其余目录(列出但标未知,不静默吞掉用户的数据)      —
 
 日期范围从文件名解析(YYYYMMDD 后随 T+时刻或分隔符的形态,HyP3 granule 与
 Sentinel SAFE/BURST 名内嵌;ALOS 的 IMG/LED 名只有轨道号,解析不出为 None)。
@@ -40,8 +46,9 @@ MAX_ENTRIES = 5000
 #: HyP3 产品对子目录/*.tif),再深属于个别布局,不为其付全树遍历成本
 _SCAN_DEPTH = 2
 
-#: 数据集类型闭集
-KINDS = ("hyp3", "alos_raw", "slc_stack", "dem", "unknown")
+#: 数据集类型闭集(声明序;判型时 gamma 插在 slc_stack 前,避免 .slc/.rslc 抢判)
+KINDS = ("hyp3", "alos_raw", "slc_stack", "dem", "nisar", "gamma",
+         "displacement", "unknown")
 
 # 文件名模式(全部大小写不敏感;只匹配名字,绝不读内容)
 _HYP3_UNW_RE = re.compile(r"_unw_phase[\w-]*\.tiff?$", re.IGNORECASE)
@@ -49,6 +56,17 @@ _HYP3_CORR_RE = re.compile(r"_corr[\w-]*\.tiff?$", re.IGNORECASE)
 _SLC_RE = re.compile(r"\.slc$", re.IGNORECASE)
 _SAFE_RE = re.compile(r"\.safe$", re.IGNORECASE)
 _DEM_RE = re.compile(r"\.(dem|wgs84|grd)$", re.IGNORECASE)
+_PAR_RE = re.compile(r"\.par$", re.IGNORECASE)
+_DIFF_RE = re.compile(r"\.diff$", re.IGNORECASE)
+_MLI_RE = re.compile(r"\.mli$", re.IGNORECASE)
+_RSLC_RE = re.compile(r"\.rslc$", re.IGNORECASE)
+_NISAR_PRODUCT_RE = re.compile(r"GUNW|GSLC|GOFF", re.IGNORECASE)
+_NISAR_GUNW_RE = re.compile(r"GUNW", re.IGNORECASE)
+_NISAR_NAME_RE = re.compile(r"nisar", re.IGNORECASE)
+_H5_RE = re.compile(r"\.(h5|hdf5|nc)$", re.IGNORECASE)
+_TIF_RE = re.compile(r"\.tiff?$", re.IGNORECASE)
+_CSV_RE = re.compile(r"\.csv$", re.IGNORECASE)
+_DISP_NAME_RE = re.compile(r"disp|egms|velocity|deform|los|vert", re.IGNORECASE)
 
 #: 文件名内嵌日期:YYYYMMDD 且后随 T+6 位时刻或分隔符/结尾(前面不能是数字)。
 #: 双重防误配:ALOS 轨道号(如 ALPSRP207600640)后随数字,不会命中。
@@ -156,6 +174,16 @@ def _classify(files: list[dict], dirs: list[str]) -> tuple[str, dict, dict | Non
                  "img": len(img), "led": len(led)},
                 _date_range(img + led))
 
+    # gamma 必须先于 slc_stack:.rslc 也匹配 *.slc;有 .slc 时仍以 par+干涉产物为准
+    par = [f["name"] for f in files if _PAR_RE.search(f["name"])]
+    diff = [f["name"] for f in files if _DIFF_RE.search(f["name"])]
+    mli = [f["name"] for f in files if _MLI_RE.search(f["name"])]
+    rslc = [f["name"] for f in files if _RSLC_RE.search(f["name"])]
+    if par and (diff or mli or rslc):
+        return ("gamma",
+                {"par": len(par), "diff": len(diff), "mli": len(mli)},
+                _date_range(par + diff + mli + rslc))
+
     slc = [f["name"] for f in files if _SLC_RE.search(f["name"])]
     safe = [d for d in dirs if _SAFE_RE.search(d)]
     if slc or safe:
@@ -166,6 +194,23 @@ def _classify(files: list[dict], dirs: list[str]) -> tuple[str, dict, dict | Non
     dem = [f["name"] for f in files if _DEM_RE.search(f["name"])]
     if dem:
         return ("dem", {"dem_files": sorted(dem)[:8]}, None)
+
+    gunw = [f["name"] for f in files if _NISAR_GUNW_RE.search(f["name"])]
+    nisar_prod = [f["name"] for f in files if _NISAR_PRODUCT_RE.search(f["name"])]
+    h5 = [f["name"] for f in files if _H5_RE.search(f["name"])]
+    nisar_named = any(_NISAR_NAME_RE.search(n) for n in
+                      [f["name"] for f in files] + dirs)
+    if nisar_prod or (len(h5) >= 2 and nisar_named):
+        return ("nisar", {"gunw": len(gunw), "h5": len(h5)},
+                _date_range(nisar_prod + h5))
+
+    tif = [f["name"] for f in files if _TIF_RE.search(f["name"])]
+    csv = [f["name"] for f in files if _CSV_RE.search(f["name"])]
+    disp_hits = [n for n in tif + csv if _DISP_NAME_RE.search(n)]
+    pure_csv = bool(csv) and all(_CSV_RE.search(f["name"]) for f in files)
+    if disp_hits or pure_csv:
+        return ("displacement", {"tif": len(tif), "csv": len(csv)},
+                _date_range(disp_hits + csv))
 
     return ("unknown", {}, None)
 

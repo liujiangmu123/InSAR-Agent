@@ -1,4 +1,4 @@
-"""本地数据导入(step 1 · local_import 与 step 2 · dem_local 的真实实现)。
+"""本地数据导入(step 1 · local_import / nisar_import 与 step 2 · dem_local 的真实实现)。
 
 把已有数据接入工作区,按 source 形态分两条路:
   - Windows 目录(HyP3 产品目录等):目录联接(mklink /J,秒级、零拷贝、
@@ -8,6 +8,10 @@
     数据,docs/VALIDATION-isce2-wsl.md):不搬运任何字节 —— 引擎作业本来就在
     WSL 内跑、按绝对路径直接读,宿主只经 \\\\wsl.localhost 核验在位并把清单
     登记进工作区(data/slc/manifest.json),缺文件显式失败(§1.4)。
+
+nisar_import(step 1):NISAR GUNW 已是云端解缠产品(跳过 2-6,类似 HyP3)。
+登记到 data/nisar/(MintPy processor=nisar 吃 HDF5,不复用 hyp3/ 布局),
+缺 source / 无 HDF5 显式失败,不下载。
 
 dem_local(step 2):核验声明的本地/WSL DEM(ISCE 格式,须有 fixImageXml 产物
 .xml)在位并登记 data/dem/manifest.json —— 修复此前 dem_local 无真实构建器、
@@ -20,7 +24,6 @@ WSL 宿主视图根可用 INSAR_WSL_HOSTROOT 覆盖(测试缝:无 WSL 的机器�
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -176,11 +179,111 @@ print("登记完成: data/dem/manifest.json", flush=True)
 '''
 
 
+# nisar_import:GUNW 已是解缠产品,不要求 HyP3 *unw_phase_clipped.tif。
+# 目标 data/nisar/(MintPy processor=nisar 吃 HDF5,不复用 hyp3/ GeoTIFF 布局)。
+# 清单写在 data/nisar/manifest.json;产品联接到 data/nisar/products,避免
+# 目录联接后往源数据里写清单。缺 source / 无可识别 HDF5 → 显式失败,不下载。
+_NISAR_IMPORT_PY = '''\
+# insar-agent NISAR GUNW 登记脚本(真实执行,零下载)
+import json, os, shutil, subprocess, sys
+from pathlib import Path
+
+WS = Path(".").resolve()
+SOURCE = os.environ.get("INSAR_NISAR_SOURCE") or {source!r}
+if not SOURCE:
+    print("ERROR: nisar_import 未指定数据源(params.source)", flush=True)
+    sys.exit(2)
+src = Path(SOURCE)
+if not src.exists():
+    print(f"ERROR: NISAR 数据源不存在: {{src}}", flush=True)
+    sys.exit(2)
+
+root = WS / "data" / "nisar"
+root.mkdir(parents=True, exist_ok=True)
+dst = root / "products"
+
+def link_or_copy_dir(a: Path, b: Path) -> str:
+    if b.exists():
+        return "已存在,跳过"
+    if sys.platform == "win32":
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", str(b), str(a)],
+                           capture_output=True, text=True, creationflags=0x08000000)
+        if r.returncode == 0:
+            return "目录联接(零拷贝)"
+    try:
+        b.symlink_to(a, target_is_directory=True)
+        return "符号链接"
+    except OSError:
+        shutil.copytree(a, b)
+        return "复制"
+
+def link_or_copy_file(a: Path, b: Path) -> str:
+    b.parent.mkdir(parents=True, exist_ok=True)
+    if b.exists():
+        return "已存在,跳过"
+    try:
+        os.link(a, b)
+        return "硬链接"
+    except OSError:
+        shutil.copy2(a, b)
+        return "复制"
+
+def collect_products(folder: Path) -> list[Path]:
+    gunw = sorted(folder.rglob("*GUNW*.h5")) + sorted(folder.rglob("*gunw*.h5"))
+    if gunw:
+        return gunw
+    h5 = sorted(p for p in folder.rglob("*")
+                if p.is_file() and p.suffix.lower() in (".h5", ".hdf5", ".nc"))
+    return h5
+
+if src.is_file():
+    if src.suffix.lower() not in (".h5", ".hdf5", ".nc"):
+        print(f"ERROR: nisar_import 需要 GUNW HDF5/NetCDF,得到: {{src.suffix}}",
+              flush=True)
+        sys.exit(2)
+    products = [src]
+    mode = link_or_copy_file(src, dst / src.name)
+else:
+    products = collect_products(src)
+    if not products:
+        print("ERROR: 数据源里没有 GUNW/HDF5 产品(*GUNW*.h5 或 *.h5/*.hdf5/*.nc)",
+              flush=True)
+        sys.exit(3)
+    mode = link_or_copy_dir(src, dst)
+
+rel_products = []
+for p in products:
+    try:
+        rel_products.append(p.relative_to(src if src.is_dir() else src.parent).as_posix())
+    except ValueError:
+        rel_products.append(p.name)
+print(f"数据源: {{src}}", flush=True)
+print(f"GUNW/HDF5 产品: {{len(products)}} 个", flush=True)
+print(f"data/nisar/products <- {{mode}}", flush=True)
+manifest = {{
+    "mode": "nisar_gunw",
+    "source": SOURCE,
+    "dest": "data/nisar",
+    "link_mode": mode,
+    "products": rel_products,
+    "note": "GUNW 为云端已解缠干涉产品,本步只登记不下载;"
+            "场景包用 cloud_completed: [2,3,4,5,6] + 第 7 步 processor=nisar",
+}}
+(root / "manifest.json").write_text(
+    json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+print("登记完成: data/nisar/manifest.json", flush=True)
+'''
+
+
 def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
           workspace: Path) -> CommandPlan:
     if method == "dem_local":
         script_rel = ".import/dem_local.py"
         content = _DEM_LOCAL_PY.format(dem=str(params.get("dem", "") or ""))
+    elif method == "nisar_import":
+        source = str(params.get("source", "") or "")
+        script_rel = ".import/import_nisar.py"
+        content = _NISAR_IMPORT_PY.format(source=source)
     else:
         source = str(params.get("source", "") or "")
         script_rel = ".import/import_local.py"
@@ -191,12 +294,15 @@ def build(*, cap: Capability, method: str, params: dict[str, Any], run: dict,
             content = _IMPORT_PY.format(source=source)
     # wrapper_python:冻结态 sys.executable 是后端 exe 本身(GAP-1),源码运行等价
     from insar_agent.runtime.jobs import wrapper_python
+    extra_env: dict[str, str] = {}
+    if method == "nisar_import" and os.environ.get("INSAR_NISAR_SOURCE"):
+        extra_env["INSAR_NISAR_SOURCE"] = os.environ["INSAR_NISAR_SOURCE"]
+    elif os.environ.get("INSAR_HYP3_SOURCE"):
+        extra_env["INSAR_HYP3_SOURCE"] = os.environ["INSAR_HYP3_SOURCE"]
     return CommandPlan(
         argv=[wrapper_python(), "-X", "utf8", script_rel],
         cwd=str(workspace),
-        env={"PYTHONIOENCODING": "utf-8",
-             **({"INSAR_HYP3_SOURCE": os.environ["INSAR_HYP3_SOURCE"]}
-                if os.environ.get("INSAR_HYP3_SOURCE") else {})},
+        env={"PYTHONIOENCODING": "utf-8", **extra_env},
         files={script_rel: content},
         shell_line=f"python {script_rel}",
     )

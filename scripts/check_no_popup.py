@@ -51,7 +51,7 @@ async def run_one_job(ws: Path) -> int:
     job = ws / "job"
     plan = CommandPlan(
         argv=[sys.executable, "-X", "utf8", "-c",
-              "import time\nfor i in range(6):\n    print('tick', i, flush=True)\n    time.sleep(0.5)"],
+              "import time\nfor i in range(6):\n    print('tick', i, flush=True)\n    time.sleep(0.5)"],  # noqa: E501
         cwd=str(ws), env={}, files={})
     backend.prepare(job, plan)
     backend.launch(job)

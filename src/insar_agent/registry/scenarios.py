@@ -122,7 +122,7 @@ def _load_overrides(pack_dir: Path) -> tuple[dict, tuple] | None:
         return None
     unknown = set(data) - _OVERRIDES_FIELDS
     if unknown:
-        _warn(f"{pack_dir.name}: overrides.yaml 未知字段 {sorted(map(str, unknown))}(闭集外,已忽略)")
+        _warn(f"{pack_dir.name}: overrides.yaml 未知字段 {sorted(map(str, unknown))}(闭集外,已忽略)")  # noqa: E501
     raw = data.get("step_overrides") or {}
     if not isinstance(raw, dict):
         _warn(f"{pack_dir.name}: step_overrides 必须是映射,拒载")
@@ -164,7 +164,7 @@ def _load_pack(pack_dir: Path) -> tuple[int, Scenario] | None:
         meta = {}
     unknown_meta = set(meta) - _META_FIELDS
     if unknown_meta:
-        _warn(f"{pack_dir.name}: 未知 metadata 字段 {sorted(map(str, unknown_meta))}(闭集外,已忽略)")
+        _warn(f"{pack_dir.name}: 未知 metadata 字段 {sorted(map(str, unknown_meta))}(闭集外,已忽略)")  # noqa: E501
     missing = [k for k in _META_REQUIRED if not meta.get(k)]
     if missing:
         _warn(f"{pack_dir.name}: metadata 缺必填字段 {missing},无法构造 Scenario,拒载")

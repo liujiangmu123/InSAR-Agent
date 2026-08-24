@@ -115,7 +115,7 @@ _STRIPMAP_XML_HEAD = """\
 _STRIPMAP_RANGES: dict[int, tuple[str, str]] = {
     3: ("startup", "fine_resample"),        # 配准:raw→SLC→精配准(含 rubber sheet)
     4: ("split_range_spectrum", "filter"),  # 干涉:分频谱占位步不可跳过
-    5: ("filter", "filter"),                # 滤波(单步重跑;前驱 sub_band_interferogram pickle 已存在)
+    5: ("filter", "filter"),                # 滤波(单步重跑;前驱 sub_band_interferogram pickle 已存在)  # noqa: E501
     6: ("filter_low_band", "geocode"),      # 解缠+地理编码:从 filter 的下一步续起(教训 2)
 }
 

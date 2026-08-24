@@ -119,7 +119,7 @@ class Store:
                        project_id: str | None = None) -> None:
         with self.db.tx() as cur:
             cur.execute(
-                "INSERT OR IGNORE INTO sessions(session_id,name,created_at,mode,scenario,meta,project_id)"
+                "INSERT OR IGNORE INTO sessions(session_id,name,created_at,mode,scenario,meta,project_id)"  # noqa: E501
                 " VALUES (?,?,?,?,?,?,?)",
                 (session_id, name, time.time(), mode, scenario,
                  json.dumps(meta or {}), project_id),
@@ -676,7 +676,7 @@ class Store:
                       reparsed_ok: bool | None = None) -> None:
         with self.db.tx() as cur:
             cur.execute(
-                "INSERT INTO metrics(run_id,name,value,unit,source_artifact,source_field,reparsed_ok)"
+                "INSERT INTO metrics(run_id,name,value,unit,source_artifact,source_field,reparsed_ok)"  # noqa: E501
                 " VALUES (?,?,?,?,?,?,?)"
                 " ON CONFLICT(run_id,name) DO UPDATE SET value=excluded.value,"
                 " reparsed_ok=excluded.reparsed_ok",
@@ -696,7 +696,7 @@ class Store:
             raise ValueError(f"unknown deliver_as {deliver_as}")
         with self.db.tx() as cur:
             cur.execute(
-                "INSERT INTO pending_actions(created_at,run_id,scope,target,action,payload,deliver_as)"
+                "INSERT INTO pending_actions(created_at,run_id,scope,target,action,payload,deliver_as)"  # noqa: E501
                 " VALUES (?,?,?,?,?,?,?)",
                 (time.time(), run_id, scope, target, action,
                  json.dumps(payload or {}), deliver_as))

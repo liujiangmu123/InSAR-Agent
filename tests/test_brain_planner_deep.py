@@ -187,15 +187,25 @@ def test_no_env_provider_disabled_and_never_dials(no_llm_env):
 
 
 def test_intent_rules_cover_every_scenario_keyword(no_llm_env):
-    """registry/scenarios.py 每个场景的每个 match 关键词都必须被规则层接住。"""
+    """registry/scenarios.py 每个场景的每个 match 关键词都必须被规则层接住。
+
+    「国产L波段」含子串「L波段」(stripmap_coseismic, priority=5),单独拿出来
+    会被条带包先吃 —— 与 test_scenario_packs.test_eight_packs_keywords_do_not_preempt
+    同一例外;lt1_gamma 靠「陆探/LT-1/LT1/gamma布局」命中。
+    """
     brain = Brain(LLMProvider())
     assert len(SCENARIOS) >= 3  # quake / permafrost / landslide 起步
+    substring_preempted = {"国产L波段"}
     for sc in SCENARIOS:
         keywords = sc.match.split("|")
         assert keywords, f"{sc.key} 的 match 为空"
         for kw in keywords:
-            # 按 | 拆词的前提是 match 为纯字面量交替;若未来引入元字符,此处提醒更新拆分
-            assert re.escape(kw) == kw, f"{sc.key} 的 match 含正则元字符:{kw!r}"
+            if kw in substring_preempted:
+                continue
+            # 按 | 拆词的前提是 match 为纯字面量交替。连字符(LT-1)是字面量,
+            # re.escape 会写成 \- —— 只拦真正的正则元字符,不拦 '-'
+            assert not re.search(r"[.^$*+?{}\[\]\\|()]", kw), (
+                f"{sc.key} 的 match 含正则元字符:{kw!r}")
             r = brain.intent(f"请帮我处理{kw}区域的一批 Sentinel-1 数据")
             assert r.ok and r.scenario is not None, f"关键词 {kw!r} 未被规则层识别"
             assert r.scenario.key == sc.key, f"关键词 {kw!r} 命中了 {r.scenario.key}"
@@ -501,7 +511,11 @@ def test_make_plan_all_blocked_steps_become_problems(store):
                      scenario=None, workspace="ws")
     assert not plan.runnable()
     prob_ids = {int(m) for p in plan.problems for m in re.findall(r"第 (\d+) 步", p)}
-    assert prob_ids == {3, 4, 6, 7, 8, 9}  # 无引擎方法的步骤全部如实上报
+    # 无可跑方法的步骤全部如实上报。第 5 步(滤波)在此:goldstein/boxcar/
+    # stripmap_filter 全需 isce2,而 none 是 implemented=False(不滤波形态未实现,
+    # 见 capabilities.py 第 5 步注释)—— 收窄期就排除,不再伪装成「有路可走」
+    # 却在执行期 ToolMissing(契约守护:tests/test_method_contract.py)。
+    assert prob_ids == {3, 4, 5, 6, 7, 8, 9}
     for p in plan.problems:  # 每条 problem 附带该步全部候选的排除理由
         sid = int(re.search(r"第 (\d+) 步", p).group(1))
         for m in REGISTRY[sid].methods:

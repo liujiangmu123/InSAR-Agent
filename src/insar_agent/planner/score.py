@@ -5,7 +5,7 @@ from __future__ import annotations
 from insar_agent.planner.feasibility import MethodFeasibility
 
 
-def pick_method(feasible: list[MethodFeasibility], *, prefer: str | None = None) -> MethodFeasibility | None:
+def pick_method(feasible: list[MethodFeasibility], *, prefer: str | None = None) -> MethodFeasibility | None:  # noqa: E501
     """优先级:显式指定(场景 override)> recommend 标记 > 首个可行。全不可行 → None。"""
     ok = [f for f in feasible if f.ok]
     if not ok:

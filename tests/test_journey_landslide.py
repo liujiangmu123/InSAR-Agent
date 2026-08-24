@@ -12,8 +12,8 @@
                       run 停在 planning,turn 给出「模拟模式」降级出口;
                    c) 允许 simulated → pystamps_ps 以 simulated=True 放行,
                       blocked_reason 留痕;scenario_only 约束不因 simulated 放宽。
-  J3 诚实边界      ISCE2→PyStamps 桥显式拒绝执行:输入缺失 → EnvironmentNotReady,
-                   输入就绪 → NotImplementedError(Phase 6)。绝不产出假桥产物。
+  J3 诚实边界      ISCE2→PyStamps 桥:输入缺失/空目录 → EnvironmentNotReady;
+                   合成完整输入 → 写出 .diff/.par/.base。缺输入绝不冒充成功。
   J4 全链模拟执行  11 步全 done;provenance.simulated;证据封顶 runnable
                    (演示不冒充证据);methods.md 如实描述 PS 与模拟性质。
   J5 GNSS 对比语义 crossval 指标(qa.json 演示值)如实呈现 + PENDING 阈值披露;
@@ -24,8 +24,9 @@
                    landslide 30,当前行为如此);ask 表单 scenario 选项 = 技能包闭集,
                    回填 landslide 后 turn 正常规划。
 
-诚实纪律:PS 链未建成是已知边界(桥 NotImplemented),本文件只按现状断言,
-不为过测试伪造桥实现;降级行为的合理性评估写在各测试 docstring 里。
+诚实纪律:真实 PyStamps 全链仍不在本文件跑;桥在合成布局上可贯通
+(BE .diff / 自洽 .par / TCN .base),缺输入仍 EnvironmentNotReady。
+降级行为的合理性评估写在各测试 docstring 里。
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def _collect(agen) -> list[dict]:
 def test_cap7_declares_pystamps_ps_and_pack_points_to_it():
     """cap7 声明 PS 方法,landslide 包的覆写指向它;第 9 步覆写 linear 同样在候选内。"""
     cap7 = capability_of(7)
-    assert [m.id for m in cap7.methods] == ["mintpy_sbas", "pystamps_ps"]
+    assert [m.id for m in cap7.methods] == ["mintpy_sbas", "pystamps_ps", "dolphin_ps_ds"]
     ps = cap7.method("pystamps_ps")
     assert ps.engine == "pystamps" and ps.requires_engines == ("pystamps",)
     assert "ISCE2→PyStamps 桥" in ps.why  # 依赖桥的事实写进 registry 声明
@@ -120,7 +121,7 @@ def test_mixed_keywords_resolve_by_scenario_priority():
     """
     keys = [s.key for s in SCENARIOS]
     assert keys == ["stripmap_coseismic", "quake", "volcano", "permafrost",
-                    "subsidence", "landslide"]
+                    "subsidence", "landslide", "lt1_gamma", "teaching"]
     assert classify_text("滑坡区的地震形变").key == "quake"
     assert classify_text("青藏高原的滑坡").key == "permafrost"
     # 无更高优先级关键词时,滑坡文本回到 landslide
@@ -252,13 +253,17 @@ def test_plan_simulated_keeps_ps_override_with_honest_marks(store, workspace):
 
 
 # ---------------------------------------------------------------------------
-# E. J3:ISCE2→PyStamps 桥的诚实边界(Phase 6,不伪实现)
+# E. J3:ISCE2→PyStamps 桥的诚实边界(合成布局可贯通)
 # ---------------------------------------------------------------------------
 
 def test_isce2_pystamps_bridge_refuses_honestly(tmp_path):
-    """桥的两级显式拒绝:输入缺失 → EnvironmentNotReady;输入就绪 →
-    NotImplementedError(Phase 6 需真实 ISCE2 产物验证,不允许无真值猜测实现)。
-    本测试按现状锁定边界 —— 桥一旦真正实现,这里应当同步改写。"""
+    """输入目录缺失 → EnvironmentNotReady;空目录(无配对/几何/基线文件)仍
+    EnvironmentNotReady 且不落 .diff;合成完整输入 → convert 成功,存在
+    .diff/.par/.base。绝不在缺输入时冒充成功。"""
+    import json
+
+    import numpy as np
+
     assert bridge.check_ready(tmp_path) == list(bridge.REQUIRED_INPUTS)
     with pytest.raises(bridge.EnvironmentNotReady) as not_ready:
         bridge.convert(tmp_path)
@@ -267,12 +272,35 @@ def test_isce2_pystamps_bridge_refuses_honestly(tmp_path):
     for rel in bridge.REQUIRED_INPUTS:
         (tmp_path / rel).mkdir(parents=True)
     assert bridge.check_ready(tmp_path) == []
-    with pytest.raises(NotImplementedError) as todo:
+    with pytest.raises(bridge.EnvironmentNotReady) as empty:
         bridge.convert(tmp_path)
-    assert "Phase 6" in str(todo.value)
-    # 计划产物形状已声明(par/diff/base 三件套),实现前不落任何一件
-    assert any(p.endswith(".par") for p in bridge.PLANNED_OUTPUTS)
+    assert "内容不完整" in str(empty.value) or "配对" in str(empty.value)
     assert not list(tmp_path.rglob("*.diff"))
+    assert any(p.endswith(".par") for p in bridge.PLANNED_OUTPUTS)
+
+    pair = "20190704_20190716"
+    phase = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], dtype="<f4")
+    slc = tmp_path / "isce2/merged/SLC"
+    geom = tmp_path / "isce2/merged/geom_reference"
+    base = tmp_path / "isce2/baselines"
+    phase.tofile(slc / f"{pair}.slc")
+    length, width = phase.shape
+    (geom / "geom.json").write_text(json.dumps({
+        "range_samples": width,
+        "azimuth_lines": length,
+        "range_pixel_spacing": 2.33,
+        "azimuth_pixel_spacing": 14.0,
+        "near_range_slc": 800000.0,
+        "sar_to_earth_center": 7000000.0,
+        "earth_radius_below_sensor": 6371000.0,
+    }), encoding="utf-8")
+    (base / f"{pair}.json").write_text(
+        json.dumps({"t": 0.0, "c": 85.3, "n": -12.1}), encoding="utf-8")
+    bridge.convert(tmp_path)
+    work = tmp_path / "pystamps/work"
+    assert (work / f"{pair}.diff").is_file()
+    assert (work / f"{pair}.par").is_file()
+    assert (work / f"{pair}.base").is_file()
 
 
 # ---------------------------------------------------------------------------

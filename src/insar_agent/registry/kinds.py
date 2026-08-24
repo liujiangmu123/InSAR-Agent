@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class DataKind:
-    kind: str  # SLC | DEM | RSLC | IFG_WRAPPED | IFG_UNWRAPPED | TIMESERIES | VELOCITY | FIGURE | REPORT | CONFIG | PROVENANCE
-    layout: str = ""  # isce2 | mintpy_h5 | pystamps | hyp3 | gamma_par
+    kind: str  # SLC | DEM | RSLC | IFG_WRAPPED | IFG_UNWRAPPED | TIMESERIES | VELOCITY | FIGURE | REPORT | CONFIG | PROVENANCE  # noqa: E501
+    layout: str = ""  # isce2 | mintpy_h5 | pystamps | hyp3 | gamma_par | nisar
     crs: str = ""  # radar | wgs84 | utm
 
 

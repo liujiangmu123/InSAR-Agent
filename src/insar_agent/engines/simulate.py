@@ -11,7 +11,6 @@ argv = [python, 脚本],与真实引擎走完全相同的作业目录契约。
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Any
 
