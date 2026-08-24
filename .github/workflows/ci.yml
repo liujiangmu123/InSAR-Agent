@@ -10,6 +10,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  # 静态检查门禁:存量超限行已逐行 noqa 化(见 pyproject [tool.ruff] 注释),
+  # 本 job 保证新增违规(E/F/W/I)进不了主干;规则集与本地 pre-commit 一致。
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装 ruff
+        run: python -m pip install "ruff>=0.16"
+
+      - name: 运行 ruff 静态检查
+        run: python -m ruff check src tests scripts
+
   python:
     strategy:
       fail-fast: false

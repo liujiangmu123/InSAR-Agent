@@ -13,6 +13,8 @@ dependencies = [
 # 栅格校验与真实 qa/出图(run_ok 的 NaN 检查、engines/qa.py、engines/figures.py 宿主回退)。
 # matplotlib 默认由引擎 conda 环境提供,故不在此声明;需宿主直接出图时另行安装。
 raster = ["numpy>=1.26", "h5py>=3.10"]
+# xlsx 导出与侧栏预览;未装时 API 501 / kind=unsupported,可改用 csv。
+excel = ["openpyxl>=3.1"]
 # MCP server 薄包装(src/insar_agent/mcp):官方 python SDK + HTTP 客户端。
 # mcp>=2.0:高层 API 为 MCPServer(1.x FastMCP 的更名后继,导入路径不同,不兼容)。
 mcp = ["mcp>=2.0", "httpx>=0.27"]
@@ -50,8 +52,9 @@ markers = [
 ]
 
 [tool.ruff]
-# 行宽对齐仓库现状:绝大多数行 <= 100(全仓最长 112,超 100 的约 30 行按告警清单管理,
-# 不为清零而改写既有代码);不启用 ruff format,避免全仓格式化大 diff
+# 行宽对齐仓库现状:绝大多数行 <= 100;存量超限行已逐行标注 `# noqa: E501`
+# (告警清单机器化,ruff check 保持 exit 0,CI lint job 据此拦截新增违规);
+# 不启用 ruff format,避免全仓格式化大 diff
 line-length = 100
 target-version = "py311"
 # src 布局的一方包识别(isort 分组用)

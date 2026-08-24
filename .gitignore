@@ -25,6 +25,8 @@ venv/
 /data/
 workspace/
 runs/
+# 复现包导出产物(insar_export_repro 落盘的 zip,二进制不入库)
+pi-insar/exports/
 *.h5
 *.slc
 *.int
