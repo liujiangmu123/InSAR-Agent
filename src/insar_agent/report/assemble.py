@@ -316,6 +316,16 @@ def _data_lines(doc: dict) -> list[str]:
             source = _fmt(p["source"])
         if orbit == MISSING and p.get("orbit") is not None:
             orbit = _fmt(p["orbit"])
+    basis = facts.get("data_scale_basis") or {}
+    if set(basis.values()) == {"observed"}:
+        note = ("> 数据规模取自导入观测清单(data_manifest.json,导入时数出来的);"
+                "其余取账本步骤参数。缺项如实标「未记录」,不作推算。")
+    elif "observed" in basis.values():
+        note = ("> 数据规模观测/申报混合:标观测的键来自导入清单,其余是计划申报参数;"
+                "缺项如实标「未记录」,不作推算。")
+    else:
+        note = ("> 以上均取自 provenance 账本步骤参数(申报值,本 run 无导入观测清单),"
+                "缺项如实标「未记录」,不作推算。")
     return [
         "## 数据", "",
         f"- 研究意图:{facts['intent']}",
@@ -327,7 +337,7 @@ def _data_lines(doc: dict) -> list[str]:
         f"- 干涉对数:{_fmt(scale['pairs'])}",
         f"- 入账产物:{scale['artifact_count']} 项",
         "",
-        "> 以上均取自 provenance 账本步骤参数,缺项如实标「未记录」,不作推算。",
+        note,
     ]
 
 

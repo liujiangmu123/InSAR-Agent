@@ -70,6 +70,9 @@ PIPELINE: tuple[Capability, ...] = (
                          policy="path", required=False),
             ArtifactSpec("era5", ("mintpy/inputs/ERA5.h5",), kind="CONFIG",
                          policy="stat", required=False),
+            # 导入观测清单(数出来的真实规模):content 指纹,报告数据规模的事实源
+            ArtifactSpec("data_manifest", ("data_manifest.json",), kind="CONFIG",
+                         policy="content", required=False),
         ),
         run_ok=(RunOkCheck("exit_code", equals=0), RunOkCheck("artifact_exists", id="slc")),
         timeouts=Timeouts(idle=1800, total=6 * 3600),

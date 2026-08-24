@@ -355,7 +355,7 @@ def test_j4_fork_reuses_upstream_and_marks_inherited(journey):
     # ④ inherited 徽标(#11 fork 不空洞过审):复用步骤沿祖先链定位产物记录,
     #    指纹一致才计入;source 形如 inherited(parent=<父 run>),产物指纹随带
     srcs = prov["evidence"]["step_sources"]
-    for sid, arts in ((1, {"slc", "unw", "era5"}), (7, {"timeseries"})):
+    for sid, arts in ((1, {"slc", "unw", "era5", "data_manifest"}), (7, {"timeseries"})):
         entry = srcs[str(sid)]
         assert entry["origin"] == "inherited"
         assert entry["source"] == f"inherited(parent={parent})"

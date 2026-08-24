@@ -3,7 +3,9 @@
 把已有数据接入工作区,按 source 形态分两条路:
   - Windows 目录(HyP3 产品目录等):目录联接(mklink /J,秒级、零拷贝、
     无需管理员),失败(跨盘符限制等)回退为复制;mintpy/inputs(如缓存的
-    ERA5.h5)复制(小文件,进指纹);
+    ERA5.h5)复制(小文件,进指纹);导入同时把**数出来的**真实规模
+    (干涉对数/获取日期/时间窗)写进工作区根 data_manifest.json ——
+    账本与报告的数据规模一律引用该观测清单,计划参数只算申报;
   - WSL 侧 POSIX 绝对路径(如 /home/insar/work/baja,ALOS Baja 手工链装配的
     数据,docs/VALIDATION-isce2-wsl.md):不搬运任何字节 —— 引擎作业本来就在
     WSL 内跑、按绝对路径直接读,宿主只经 \\\\wsl.localhost 核验在位并把清单
@@ -32,7 +34,7 @@ from insar_agent.runtime.jobs import CommandPlan
 
 _IMPORT_PY = '''\
 # insar-agent 本地数据导入脚本(真实执行,零决策)
-import os, shutil, subprocess, sys
+import json, os, re, shutil, subprocess, sys
 from pathlib import Path
 
 WS = Path(".").resolve()
@@ -52,9 +54,11 @@ def link_or_copy(a: Path, b: Path) -> str:
     if b.exists():
         return "已存在,跳过"
     if sys.platform == "win32":
-        # CREATE_NO_WINDOW:本脚本运行于无窗进程,cmd 子进程不加此标志会弹黑窗
+        # CREATE_NO_WINDOW:本脚本运行于无窗进程,cmd 子进程不加此标志会弹黑窗。
+        # 不解码输出(mklink 在中文系统吐 GBK,-X utf8 下 text=True 会
+        # UnicodeDecodeError 砸出 threading 栈污染日志;输出本就不用,只看退出码)
         r = subprocess.run(["cmd", "/c", "mklink", "/J", str(b), str(a)],
-                           capture_output=True, text=True, creationflags=0x08000000)
+                           capture_output=True, creationflags=0x08000000)
         if r.returncode == 0:
             return "目录联接(零拷贝)"
     try:
@@ -64,7 +68,7 @@ def link_or_copy(a: Path, b: Path) -> str:
         shutil.copytree(a, b)
         return "复制"
 
-pairs = [d for d in hyp3_src.iterdir() if d.is_dir()]
+pairs = sorted((d for d in hyp3_src.iterdir() if d.is_dir()), key=lambda p: p.name)
 print(f"数据源: {{hyp3_src}}", flush=True)
 print(f"干涉对: {{len(pairs)}} 个", flush=True)
 mode = link_or_copy(hyp3_src, dst)
@@ -86,6 +90,33 @@ print(f"解缠相位栅格: {{n_unw}} 个(HyP3 已完成 2-6 步)", flush=True)
 if n_unw == 0:
     print("ERROR: 数据源里没有 *unw_phase_clipped.tif", flush=True)
     sys.exit(3)
+
+# 观测清单:导入时数出来的真实规模(对数/日期/时间窗),落盘工作区根
+# (hyp3/ 是指向源数据的联接,绝不往里写)。报告的数据规模引用这里的观测值,
+# 计划参数(scenes/dates 默认值)只是申报,不作事实(E2E 4 景被报成 7 景的教训)
+_PAIR_RE = re.compile(r"(\\d{{8}})T\\d{{6}}_(\\d{{8}})T\\d{{6}}")
+def _iso(d):
+    return f"{{d[:4]}}-{{d[4:6]}}-{{d[6:]}}"
+pair_names = [d.name for d in pairs]
+matched = [m for m in (_PAIR_RE.search(n) for n in pair_names) if m]
+acq_dates = sorted({{g for m in matched for g in m.groups()}})
+manifest = {{
+    "mode": "hyp3_import",
+    "link_mode": mode,
+    "pairs": len(matched) if matched else len(pairs),
+    "pair_names": pair_names,
+    "unw_rasters": n_unw,
+}}
+if acq_dates:
+    manifest["scenes"] = len(acq_dates)
+    manifest["dates"] = f"{{_iso(acq_dates[0])}}..{{_iso(acq_dates[-1])}}"
+    manifest["acquisition_dates"] = [_iso(d) for d in acq_dates]
+if all(n.startswith("S1") for n in pair_names) and pair_names:
+    manifest["platform"] = "Sentinel-1"
+(WS / "data_manifest.json").write_text(
+    json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+print(f"观测清单: data_manifest.json(干涉对 {{manifest['pairs']}},"
+      f"获取日期 {{len(acq_dates)}} 个)", flush=True)
 print("导入完成", flush=True)
 '''
 
@@ -206,8 +237,9 @@ def link_or_copy_dir(a: Path, b: Path) -> str:
     if b.exists():
         return "已存在,跳过"
     if sys.platform == "win32":
+        # 不解码输出:mklink 中文系统吐 GBK,只看退出码(同 local_import)
         r = subprocess.run(["cmd", "/c", "mklink", "/J", str(b), str(a)],
-                           capture_output=True, text=True, creationflags=0x08000000)
+                           capture_output=True, creationflags=0x08000000)
         if r.returncode == 0:
             return "目录联接(零拷贝)"
     try:

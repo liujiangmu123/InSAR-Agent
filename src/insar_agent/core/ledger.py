@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import time
@@ -14,6 +15,41 @@ from insar_agent.core.store import Store
 from insar_agent.skills.loader import load_skills
 
 SCHEMA_VERSION = "1.0"
+
+#: 导入观测清单里允许进账本的规模键(与报告数据规模章节一一对应)
+_OBSERVED_KEYS = ("platform", "scenes", "dates", "pairs")
+
+
+def data_observed(workspace: Path | None) -> dict | None:
+    """步骤 1 导入脚本落盘的观测清单(data_manifest.json)→ 步骤 observed 块。
+
+    观测(导入时数出来的规模)与申报(计划参数)分离:报告与账本的数据规模
+    引用观测值,申报参数只算计划输入 —— 4 景数据绝不因参数默认 7 而记成
+    7 景(E2E 实测缺陷)。缺清单 → None(老 run/非导入链),消费方回落
+    申报参数并如实标注来源。
+
+    不构成观测的情形一律 None:模拟引擎按 ArtifactSpec 伪造的占位清单
+    (带 simulated 标记)、不含任何规模键的清单 —— 无观测就不作声明;
+    清单在场但损坏则如实入账 parse_error(真实 run 的坏文件值得被看见)。
+    """
+    if workspace is None:
+        return None
+    p = workspace / "data_manifest.json"
+    if not p.is_file():
+        return None
+    try:
+        raw = p.read_bytes()
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {"path": "data_manifest.json", "parse_error": True}
+    if not isinstance(data, dict) or data.get("simulated"):
+        return None
+    out: dict = {k: data[k] for k in _OBSERVED_KEYS if data.get(k) is not None}
+    if not out:
+        return None
+    out["path"] = "data_manifest.json"
+    out["sha256"] = hashlib.sha256(raw).hexdigest()
+    return out
 
 
 def export_provenance(store: Store, run_id: str, *, contract: dict[str, Threshold],
@@ -61,6 +97,15 @@ def export_provenance(store: Store, run_id: str, *, contract: dict[str, Threshol
             "policy": a["policy"], "fp": a["fp"], "size": a["size"],
             "produced_by": a["step_id"],
         }
+
+    # 导入观测清单 → 产出步骤的 observed 块(数出来的规模,报告优先引用)。
+    # 产物已入账用其归属步骤;未入账(老 run 重导账本)回落步骤 1。
+    observed = data_observed(workspace)
+    if observed is not None:
+        art = artifacts_out.get("data_manifest")
+        sid = str(art["produced_by"]) if art else "1"
+        if sid in steps_out:
+            steps_out[sid]["observed"] = observed
 
     metrics_out = {}
     for m in store.metrics_of(run_id):

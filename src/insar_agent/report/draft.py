@@ -95,14 +95,23 @@ def build_facts(provenance: dict) -> dict:
             "params": _clean_params(s.get("params")),
         })
 
-    # 数据规模:只认账本步骤参数里的既有键(platform/scenes/dates/pairs),
-    # 任何一键都可能缺 —— 缺就是 MISSING,绝不推算补数
+    # 数据规模:观测值(步骤 observed 块,导入时数出来的)优先于申报值
+    # (步骤参数,计划输入的默认/覆写)—— 4 景数据绝不因参数默认 7 而报成
+    # 7 景。两处都缺 → MISSING,绝不推算补数。basis 逐键记录事实来源。
     scale: dict = {"platform": MISSING, "scenes": MISSING,
                    "dates": MISSING, "pairs": MISSING}
+    basis: dict = {}
+    for sid in sorted(raw_steps, key=_int_or_zero):
+        observed = (raw_steps.get(sid) or {}).get("observed") or {}
+        for key in ("platform", "scenes", "dates", "pairs"):
+            if scale[key] == MISSING and observed.get(key) is not None:
+                scale[key] = observed[key]
+                basis[key] = "observed"
     for s in steps:
         for key in ("platform", "scenes", "dates", "pairs"):
             if scale[key] == MISSING and s["params"].get(key) is not None:
                 scale[key] = s["params"][key]
+                basis[key] = "declared"
     scale["artifact_count"] = len(doc.get("artifacts") or {})
 
     metrics = [{
@@ -123,6 +132,7 @@ def build_facts(provenance: dict) -> dict:
         "tools": {str(k): str(v) for k, v in tools.items()},
         "steps": steps,
         "data_scale": scale,
+        "data_scale_basis": basis,
         "metrics": metrics,
         "qa_status": (doc.get("qa") or {}).get("status") or MISSING,
         "evidence_level": (doc.get("evidence_level")
@@ -174,12 +184,22 @@ def skeleton_text(facts: dict) -> str:
     scale = f["data_scale"]
     paras: list[str] = []
 
-    # 段 1:数据与场景
+    # 段 1:数据与场景(数据规模标注事实来源:导入观测清单 or 申报参数)
+    basis_vals = set((f.get("data_scale_basis") or {}).values())
+    if basis_vals == {"observed"}:
+        scale_src = "(导入时观测)"
+    elif basis_vals == {"declared"}:
+        scale_src = "(申报参数,无导入观测清单)"
+    elif basis_vals:
+        scale_src = "(观测/申报混合)"
+    else:
+        scale_src = ""
     paras.append(
         f"本研究的 InSAR 数据处理由 InSAR-Agent 自动化流水线执行并全程记账"
         f"(运行标识 {f['run_id']},账本导出时间 {f['generated_at_utc']} UTC)。"
         f"应用场景为 {f['scenario']},研究意图:{f['intent']}。"
-        f"数据规模:影像平台 {_fmt(scale['platform'])},影像 {_fmt(scale['scenes'])} 景,"
+        f"数据规模{scale_src}:影像平台 {_fmt(scale['platform'])},"
+        f"影像 {_fmt(scale['scenes'])} 景,"
         f"时间窗 {_fmt(scale['dates'])},干涉对 {_fmt(scale['pairs'])} 对,"
         f"入账产物 {scale['artifact_count']} 项。")
 
@@ -240,6 +260,8 @@ def facts_used_list(facts: dict) -> list[str]:
     out.extend(f"tool.{k}={v}" for k, v in sorted(f["tools"].items()))
     for key in ("platform", "scenes", "dates", "pairs", "artifact_count"):
         out.append(f"data_scale.{key}={_fmt(f['data_scale'][key])}")
+    out.extend(f"data_scale.basis.{k}={v}"
+               for k, v in sorted((f.get("data_scale_basis") or {}).items()))
     out.append(f"steps.count={len(f['steps'])}")
     for s in f["steps"]:
         sid = s["step_id"]

@@ -115,10 +115,17 @@ def _params_of(step: dict) -> dict:
 
 def _prose_acquire(sid, s, c):
     p = _params_of(s)
+    # 观测值(ledger 附的 observed 块,导入时数出来的)优先于申报参数:
+    # 4 景数据绝不因参数默认 7 而写成 7 景
+    obs = s.get("observed") or {}
+
+    def fact(key):
+        return obs[key] if obs.get(key) is not None else p.get(key)
+
     head = ""
-    if p.get("platform") is not None and p.get("scenes") is not None:
-        window = f"(时间窗 {_fmt(p['dates'])})" if p.get("dates") else ""
-        head = f"使用 {_fmt(p['platform'])} 影像 {_fmt(p['scenes'])} 景{window}{_cite(sid)},"
+    if fact("platform") is not None and fact("scenes") is not None:
+        window = f"(时间窗 {_fmt(fact('dates'))})" if fact("dates") else ""
+        head = f"使用 {_fmt(fact('platform'))} 影像 {_fmt(fact('scenes'))} 景{window}{_cite(sid)},"
     tail = {
         "local_import": "自本地既有产品目录导入(来源目录以执行记录为准)",
         "asf_search_slc": "经 ASF 检索并下载原始 SLC〔ref:ASF Vertex / asf_search〕",
