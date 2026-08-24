@@ -1,8 +1,9 @@
 """数据产品导出端点(0814B 契约 §2;逻辑在 report/export.py,本模块只做边界)。
 
 GET /api/export/options?session=&run_id=
-    → 能力矩阵:产品(velocity/velocity_std/timeseries)× 格式(h5/csv/gtiff/
-      kmz/shp)× 可用性,不可用一律给诚实原因(引擎缺失附安装指引)。
+    → 能力矩阵:产品(velocity/velocity_std/timeseries)× 格式(h5/csv/xlsx/
+      gtiff/kmz/shp)× 可用性,不可用一律给诚实原因(引擎缺失附安装指引;
+      xlsx 缺 openpyxl → 501 提示改用 csv)。
 GET /api/export?session=&run_id=&product=&fmt=
     → FileResponse(下载名 {run_id}_{product}.{ext};转换产物落 run 工作区
       export/ 子目录,同参幂等复用,响应头 X-Export-Reused=0|1)。
@@ -15,8 +16,8 @@ GET /api/export?session=&run_id=&product=&fmt=
     文件路径拼接,export/ 内文件名由白名单清洗的 run_id 构成;
   - 模拟 run(runs.simulated=1)导出一律 409:演示占位字节不是数据产品,
     以数据格式交付即造假(options 仍 200,矩阵全不可用并给同一原因);
-  - 错误闭集经 report/export.ExportError 翻译:源 h5 缺失 404、h5py/引擎
-    缺失 501(带安装指引)、引擎失败 502(stderr 原样透传)、超时 504。
+  - 错误闭集经 report/export.ExportError 翻译:源 h5 缺失 404、h5py/openpyxl/
+    引擎缺失 501(带安装指引)、引擎失败 502(stderr 原样透传)、超时 504。
 
 接线说明:app.py 挂载归 W6(app.include_router(create_export_router(store,
 home)));本单元不改 api/app.py,测试用独立 FastAPI 挂载。

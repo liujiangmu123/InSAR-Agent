@@ -5,10 +5,12 @@ InSAR 能力作 pi 扩展经 HTTP 调本后端。本 router 提供扩展**新增
 未覆盖的最小面:
 
 - GET  /api/monitor  —— 侧边栏"被监控的流程"数据契约:11 步 × 五阶段 + 当前步 +
-  进度 + 证据级 + 自由模式 + 脏标(taint)计数。纯读,不走 driver_of(不为未知
-  会话建目录);证据用 run 行里的 workspace 路径按需算,失败降级为 None 不阻断。
-  session 省略或 @latest 时取本机 store 最近活动会话的最新 run(桌面右栏无
-  会话选择器);显式 session= 仍只看该会话,跨会话 run_id 仍 404。
+  进度 + 证据级 + 自由模式 + 脏标(taint)计数 + 接入模式 A/B/C + 产品级别 +
+  QA chips。纯读,不走 driver_of(不为未知会话建目录);证据用 run 行里的
+  workspace 路径按需算,失败降级为 None 不阻断。session 省略或 @latest 时取
+  本机 store 最近活动会话的最新 run(桌面右栏无会话选择器);显式 session=
+  仍只看该会话,跨会话 run_id 仍 404。`mode` 仍是 free|strict,接入模式另
+  走 `access_mode`。
 - GET/POST /api/mode —— 渐进式自由的会话级模式(free|strict)。以 home 下 JSON
   原子落盘持久化(tmp+replace),供严格模式闸门与 provenance 盖章读取。
 
@@ -26,6 +28,13 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from insar_agent.api.access_mode import (
+    classify_access_mode,
+    degraded_basic_product,
+    empty_qa_chips,
+    product_view,
+    qa_chips_from_metrics,
+)
 from insar_agent.audit.contract import load_contract
 from insar_agent.audit.ladder import compute_evidence
 from insar_agent.core.store import Store
@@ -82,7 +91,31 @@ def create_bridge_router(store: Store, home: Path | str,
     def _empty_monitor(session: str) -> dict:
         return {"session": session, "run": None, "steps": [], "current": None,
                 "progress": {"total": 0, "done": 0, "pct": 0},
-                "evidence": None, "mode": _mode_of(session), "taints": 0}
+                "evidence": None, "mode": _mode_of(session), "taints": 0,
+                "access_mode": None, "product": None,
+                "qa_chips": empty_qa_chips()}
+
+    def _read_qa_metrics(workspace: str | None) -> dict | None:
+        """读 workspace/products/report/qa.json。缺失 → {};损坏 → None(调用方降级)。"""
+        if not workspace:
+            return {}
+        path = Path(workspace) / "products" / "report" / "qa.json"
+        try:
+            if not path.is_file():
+                return {}
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 —— 损坏/权限/竞态不得拖垮侧边栏
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _product_and_chips(run: dict, rid: str) -> tuple[dict, dict]:
+        qa = _read_qa_metrics(run.get("workspace"))
+        simulated = bool(run.get("simulated"))
+        if qa is None:
+            return degraded_basic_product(simulated=simulated), empty_qa_chips()
+        artifacts = store.artifacts_of(rid)
+        return (product_view(qa, artifacts, simulated=simulated),
+                qa_chips_from_metrics(qa))
 
     def _latest_active_session() -> str | None:
         # 活动时间=最新 run(流水线在哪就钉哪);归档会话不进右栏;无 run 才回退创建序
@@ -103,6 +136,7 @@ def create_bridge_router(store: Store, home: Path | str,
         """侧边栏数据面。缺省取会话最新 run;无 run 返回空壳(mode 仍有效)。
 
         session 省略或 @latest:本机 store 最近活动会话;无任何会话则空壳。
+        空壳与有 run 都带 access_mode / product / qa_chips,前端不必按有无 run 分支键。
         """
         if not session or session == _LATEST_SESSION:
             resolved = _latest_active_session()
@@ -162,6 +196,7 @@ def create_bridge_router(store: Store, home: Path | str,
         except Exception:  # noqa: BLE001 —— 证据算不出不该拖垮侧边栏刷新
             evidence = None
 
+        product, qa_chips = _product_and_chips(run, rid)
         return {
             "session": session,
             "run": {
@@ -176,6 +211,9 @@ def create_bridge_router(store: Store, home: Path | str,
             "evidence": evidence,
             "mode": _mode_of(session),
             "taints": taints,
+            "access_mode": classify_access_mode(out_steps),
+            "product": product,
+            "qa_chips": qa_chips,
         }
 
     @router.get("/mode")

@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -93,8 +95,14 @@ def test_monitor_contract(client):
         assert {"duration", "attempts"} <= set(s)
     # 证据键存在(值可能为 None,取决于工作区)
     assert "evidence" in data
-    # 默认模式 free
+    # 默认模式 free(会话闸门,不是接入模式)
     assert data["mode"] == "free"
+    # 5 步 core 且 2–6 未齐 skipped → 全链 A;无 qa.json → Basic + chips 缺席
+    assert data["access_mode"] == "A"
+    assert data["product"]["level"] == "basic"
+    assert data["product"]["label"] == "LOS · 相对参考点"
+    assert data["product"]["simulated"] is False
+    assert data["qa_chips"] == {"crossval_r": None, "gnss_rmse_mm": None}
 
 
 def test_monitor_empty_session(client):
@@ -104,6 +112,10 @@ def test_monitor_empty_session(client):
     assert data["steps"] == []
     assert data["progress"]["pct"] == 0
     assert data["mode"] == "free"
+    # 空壳也带新键,避免前端按有无 run 分支
+    assert data["access_mode"] is None
+    assert data["product"] is None
+    assert data["qa_chips"] == {"crossval_r": None, "gnss_rmse_mm": None}
 
 
 def test_mode_toggle_and_persist(client):
@@ -158,6 +170,58 @@ def test_monitor_duration_from_last_settled_command(client):
     assert by_step[1]["attempts"] == 2
     assert by_step[2]["duration"] is None
     assert by_step[2]["attempts"] == 0
+
+
+def test_monitor_analysis_run_is_access_mode_c(client):
+    """analysis run 只排 20+,无 1–11 → C(侧栏不得把核心组当成 pending)。"""
+    client.post("/api/sessions", json={"id": "sess-c"})
+    store = Store(Database(client._home / "insar.db"))
+    ws = client._home / "sessions" / "sess-c"
+    rid = "run-analysis-c"
+    store.create_run(rid, "sess-c", workspace=str(ws), scenario="quake")
+    store.upsert_step(rid, 20, capability="register_sources", name="登记源",
+                      method="register_sources", params={}, hashes=_HASHES)
+    store.mark_step(rid, 20, state="done")
+
+    data = client.get("/api/monitor", params={"session": "sess-c"}).json()
+    assert data["access_mode"] == "C"
+    assert all(s["step"] >= 20 for s in data["steps"])
+    assert data["product"]["level"] == "basic"
+    assert data["qa_chips"] == {"crossval_r": None, "gnss_rmse_mm": None}
+
+
+def test_monitor_product_calibrated_from_qa_json(client):
+    client.post("/api/sessions", json={"id": "sess-m"})
+    rid = _seed_run(client._home)
+    qa_path = (client._home / "sessions" / "sess-m" / "products" / "report" / "qa.json")
+    qa_path.parent.mkdir(parents=True, exist_ok=True)
+    qa_path.write_text(json.dumps({"gnss_rmse_mm": 4.25, "crossval_r": 0.87}),
+                       encoding="utf-8")
+
+    data = client.get("/api/monitor", params={"session": "sess-m"}).json()
+    assert data["run"]["run_id"] == rid
+    assert data["access_mode"] == "A"
+    assert data["product"]["level"] == "calibrated"
+    assert data["product"]["label"] == "LOS · GNSS 锚定"
+    assert data["qa_chips"]["gnss_rmse_mm"] == pytest.approx(4.25)
+    assert data["qa_chips"]["crossval_r"] == pytest.approx(0.87)
+    assert data["qa_chips"]["gnss_rmse_mm"] != 0.92
+
+
+def test_monitor_corrupt_qa_json_degrades_to_basic(client):
+    client.post("/api/sessions", json={"id": "sess-m"})
+    _seed_run(client._home)
+    qa_path = (client._home / "sessions" / "sess-m" / "products" / "report" / "qa.json")
+    qa_path.parent.mkdir(parents=True, exist_ok=True)
+    qa_path.write_text("{not-json", encoding="utf-8")
+
+    r = client.get("/api/monitor", params={"session": "sess-m"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["product"]["level"] == "basic"
+    assert data["product"]["simulated"] is False
+    assert data["product"]["label"] == "LOS · 相对参考点"
+    assert data["qa_chips"] == {"crossval_r": None, "gnss_rmse_mm": None}
 
 
 def test_pi_journal_roundtrip(client):

@@ -93,8 +93,7 @@ def test_message_discipline_during_run(client):
     _stream_events(client, "/api/turn", {"session": "demo", "text": "Ridgecrest 地震"})
     # 人为把 run 置为 running(模拟执行中)
     state = client.get("/api/state", params={"session": "demo"}).json()
-    run_id = state["run"]["run_id"]
-    from insar_agent.api import app as app_module  # noqa: F401
+    assert state["run"]["run_id"], "规划后 /api/state 应带上 run 标识"
 
     # 直接走 API:先验证空闲时不需要 deliver_as
     r = client.post("/api/message", json={"session": "demo", "text": "你好"})

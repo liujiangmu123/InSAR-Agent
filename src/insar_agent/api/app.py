@@ -38,6 +38,7 @@ from insar_agent.api.advisor_router import create_advisor_router
 from insar_agent.api.artifacts_router import create_artifacts_router
 from insar_agent.api.diag_router import create_diag_router
 from insar_agent.api.doctor_router import create_doctor_router
+from insar_agent.api.plugin_router import create_plugin_router
 from insar_agent.api.queue_router import create_queue_router
 from insar_agent.api.setup_router import create_setup_router
 from insar_agent.api.skills_router import router as skills_router
@@ -54,6 +55,7 @@ from insar_agent.loop.driver import Driver
 from insar_agent.loop.queue import QueueScheduler, RunQueue
 from insar_agent.planner.feasibility import narrow_methods
 from insar_agent.planner.plan import fork_run, pipeline_groups
+from insar_agent.plugins.loader import load_plugins, match_viewers
 from insar_agent.registry.capabilities import REGISTRY
 from insar_agent.report.bundle import build_repro_bundle
 from insar_agent.report.script import export_run_script
@@ -82,6 +84,29 @@ _STEP_ID_MAX = 1_000_000
 _IMAGE_MEDIA_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp",
+}
+
+#: GET /api/figures 图像 / 可下载非图像 各自的列表上限(独立计数)。
+#: 触及上限时 truncated=true,停止继续加入该侧,另一侧仍可列。
+_FIGURE_LIST_CAP = 100
+
+#: 影像面板 files 侧可列的非图像扩展名 → kind。
+#: 图像走 figures,不在此表;txt 等未列入的后缀不列(避免 notes.txt 塞进侧栏)。
+#: grd/nc 无更细 kind,归 other。
+_FILE_KIND_BY_SUFFIX = {
+    ".pdf": "pdf", ".kmz": "kmz", ".kml": "kml",
+    ".h5": "h5", ".hdf5": "h5", ".he5": "h5",
+    ".tif": "tif", ".tiff": "tif",
+    ".csv": "csv", ".shp": "shp", ".json": "json",
+    ".xlsx": "xlsx", ".xls": "xlsx", ".xlsm": "xlsx",
+    ".yaml": "yaml", ".yml": "yaml",
+    ".md": "md",
+    ".unw": "binary", ".flat": "binary", ".int": "binary",
+    ".slc": "binary", ".mli": "binary", ".diff": "binary",
+    ".zip": "zip",
+    ".xml": "xml",
+    ".par": "text", ".rsc": "text",
+    ".mat": "mat", ".grd": "other", ".nc": "other",
 }
 
 #: 三档尺寸契约(HyP3 式,engines/figures.py 的产物目录约定):
@@ -314,7 +339,9 @@ def default_max_cycles(home: Path) -> int:
     """
     try:
         from insar_agent.brain.llm_config import (
-            AGENT_MAX_CYCLES_DEFAULT, AGENT_MAX_CYCLES_MAX, AGENT_MAX_CYCLES_MIN,
+            AGENT_MAX_CYCLES_DEFAULT,
+            AGENT_MAX_CYCLES_MAX,
+            AGENT_MAX_CYCLES_MIN,
             agent_loop_settings,
         )
         value = agent_loop_settings(home).get("max_cycles", AGENT_MAX_CYCLES_DEFAULT)
@@ -447,11 +474,14 @@ def create_app(home: Path | None = None) -> FastAPI:
     app.include_router(create_credentials_router(home))  # 数据下载凭证(Earthdata)
     app.include_router(version_router)             # 版本信息与更新检查(/api/version*)
     app.include_router(skills_router)              # 步骤技能文档(/api/skills*,规划/分诊知识源)
+    app.include_router(create_plugin_router(home))  # 声明式插件清单(/api/plugins)
     app.include_router(create_admin_router(store))  # 外部终结与运维视图(/api/admin/*,absorb-E6)
     app.include_router(create_artifacts_router(store))  # 产物清单(/api/artifacts,文件面板数据源)
     app.include_router(create_doctor_router(home))  # 一键体检(/api/doctor,面向排障的秒级只读深检)
     from insar_agent.api.data_router import create_data_router
     app.include_router(create_data_router(store))  # 点位时序数据
+    from insar_agent.api.preview_router import create_preview_router
+    app.include_router(create_preview_router(store))  # 表格/JSON/HDF5/栅格预览
     app.include_router(create_diag_router(home))  # 诊断包一键导出(/api/diagnostics*)
     from insar_agent.api.install_router import create_install_router
     app.include_router(create_install_router())  # 安装助手(/api/install/*,只出方案,绝不代跑安装)
@@ -469,7 +499,7 @@ def create_app(home: Path | None = None) -> FastAPI:
     from insar_agent.api.memory_router import create_memory_router
     app.include_router(create_memory_router(store))  # 跨会话记忆(/api/memory*,记忆面板数据源)
     from insar_agent.api.bridge_router import create_bridge_router
-    app.include_router(create_bridge_router(store, home, contract))  # pi 扩展数据面(/api/monitor,/api/mode)
+    app.include_router(create_bridge_router(store, home, contract))  # pi 扩展数据面(/api/monitor,/api/mode)  # noqa: E501
     try:
         from insar_agent.api.export_router import create_export_router
     except ImportError:  # W4(导出)并行开发中:router 未落地时惰性跳过,合入即自动点亮
@@ -836,7 +866,9 @@ def create_app(home: Path | None = None) -> FastAPI:
             max_cycles = default_max_cycles(home)
         else:
             from insar_agent.brain.llm_config import (
-                AGENT_MAX_CYCLES_DEFAULT, AGENT_MAX_CYCLES_MAX, AGENT_MAX_CYCLES_MIN,
+                AGENT_MAX_CYCLES_DEFAULT,
+                AGENT_MAX_CYCLES_MAX,
+                AGENT_MAX_CYCLES_MIN,
             )
             if (isinstance(body.max_cycles, bool) or not isinstance(body.max_cycles, int)
                     or not AGENT_MAX_CYCLES_MIN <= body.max_cycles <= AGENT_MAX_CYCLES_MAX):
@@ -1130,8 +1162,9 @@ def create_app(home: Path | None = None) -> FastAPI:
 
     @app.get("/api/figures")
     def figures(session: str, run_id: str | None = None):
-        """该 run 全部图像类产物的清单(按扩展名闭集过滤,文件已缺失的行不列)。
+        """该 run 图像类产物 + 可下载非图像文件的清单。
 
+        figures:按扩展名闭集过滤的图像,文件已缺失的行不列。
         条目含 step/artId/文件名/尺寸/mtime 与三档 url(三档尺寸契约,
         engines/figures.py 的产物目录约定):
           - url      浏览档(_browse 存在时优先,灯箱用)
@@ -1141,6 +1174,24 @@ def create_app(home: Path | None = None) -> FastAPI:
         同名 .json sidecar 存在且可解析时并入 meta 字段(坏文件容忍不并入)。
         尺寸与 mtime 取落盘原图实测值,不信 DB 记录(可能已被覆写)。
 
+        files:期刊 PDF、KMZ、H5 等闭集非图像(目录顶层成员 + 单文件产物)。
+        同 stem 图像 sidecar(.json)已并入 meta,不重复进 files;闭集外的
+        .txt 等不列。条目不含可当 <img> 的 url(直读仍走 /api/artifact-file,
+        非图像保持 400)。每条含 viewers(声明式插件命中,可空列表;
+        只按文件名匹配,不读内容)。
+
+        工作区补列(非产物账本):artifacts 枚举之后,若 workspace/export 与
+        workspace/products/report 为目录,各列一层(不递归)闭集非图像,使
+        GNSS 残差 CSV、导出文件不必登记为 artifact 也能进侧栏。标签对齐
+        注册表:export → step=10 artId=export(第 10 步「出图导出」);
+        products/report → step=11 artId=report(第 11 步「质检」)。path
+        为工作区相对 posix(export/foo.csv)。已在 files 的同一 path 不重复;
+        图像 sidecar json 不列;成员 resolve 后须仍落在工作区内。计入同一
+        file_cap。
+
+        截断:图像与 files 独立计数,各自 listed 达 _FIGURE_LIST_CAP 后停止
+        加入该侧并 truncated=true;触及图像上限仍可继续列 files。
+
         健壮性与口径(REVIEW-r2 P2-6/P2-7):画廊 3s 轮询会撞上出图步骤的
         覆写/清理窗口 —— 枚举与 stat 之间消失的文件逐行跳过,绝不 500 整表;
         目录成员 resolve 后必须仍落在产物目录内(与取回端点同一判据),
@@ -1148,7 +1199,11 @@ def create_app(home: Path | None = None) -> FastAPI:
         """
         run = resolve_run(session, run_id, required=False)
         if run is None:
-            return {"run": None, "figures": []}
+            return {
+                "run": None, "figures": [], "files": [],
+                "truncated": False,
+                "image_cap": _FIGURE_LIST_CAP, "file_cap": _FIGURE_LIST_CAP,
+            }
 
         def file_url(art: dict, member: str | None = None) -> str:
             q = {"session": session, "run_id": run["run_id"],
@@ -1177,6 +1232,19 @@ def create_app(home: Path | None = None) -> FastAPI:
                 item["meta"] = meta
             return item
 
+        def file_item(art: dict, target: Path, rel_path: str, kind: str) -> dict | None:
+            try:
+                st = target.stat()
+            except OSError:
+                return None
+            return {
+                "step": art["step_id"], "artId": art["art_id"],
+                "name": target.name, "path": rel_path,
+                "size": st.st_size, "mtime": st.st_mtime,
+                "kind": kind,
+                "viewers": match_viewers(target.name, viewer_plugins),
+            }
+
         def within(member: Path, base: Path) -> bool:
             # 成员口径与 /api/artifact-file 的取回判据一致:resolve 后仍须落在
             # 产物目录内 —— symlink 指向外部的成员不列(REVIEW-r2 P2-7);
@@ -1186,47 +1254,160 @@ def create_app(home: Path | None = None) -> FastAPI:
             except OSError:
                 return False
 
-        items = []
+        def json_is_image_sidecar(path: Path, image_stems: set[str] | None = None) -> bool:
+            if path.suffix.lower() != ".json":
+                return False
+            if image_stems is not None:
+                return path.stem in image_stems
+            for ext in _IMAGE_MEDIA_TYPES:
+                try:
+                    if path.with_suffix(ext).is_file():
+                        return True
+                except OSError:
+                    continue
+            return False
+
+        def take_image(item: dict | None) -> None:
+            nonlocal truncated
+            if item is None:
+                return
+            if len(images) >= _FIGURE_LIST_CAP:
+                truncated = True
+                return
+            images.append(item)
+
+        def take_file(item: dict | None) -> None:
+            nonlocal truncated
+            if item is None:
+                return
+            if len(files) >= _FIGURE_LIST_CAP:
+                truncated = True
+                return
+            files.append(item)
+
+        images: list[dict] = []
+        files: list[dict] = []
+        truncated = False
+        viewer_plugins = load_plugins(home)
         for art in store.artifacts_of(run["run_id"]):
             target = resolve_artifact_file(run, art["path"])
             if target is None:
                 continue
-            if Path(art["path"]).suffix.lower() in _IMAGE_MEDIA_TYPES:
+            suffix = Path(art["path"]).suffix.lower()
+            if suffix in _IMAGE_MEDIA_TYPES:
                 if target.is_file():
-                    item = entry(art, target)
-                    if item is not None:
-                        items.append(item)
+                    take_image(entry(art, target))
             elif target.is_dir():
                 # 目录型产物(注册表里 figures 声明的是 products/figures 目录):
-                # 枚举目录内图像文件 —— 真实链的图件都长在这里,只按产物路径
-                # 后缀过滤会让画廊对标准管线永远空转(2026-08-12 终验发现)
-                try:
-                    children = sorted(p for p in target.iterdir()
-                                      if p.is_file()
-                                      and p.suffix.lower() in _IMAGE_MEDIA_TYPES
-                                      and within(p, target))
-                except OSError:
-                    continue  # 目录本身在枚举窗口内被清理:整个产物行跳过
-                by_stem = {p.stem: p.name for p in children}
-                listed = 0
-                for child in children:
-                    stem = child.stem
+                # 枚举目录内图像 + 闭集非图像 —— 真实链的图件都长在这里,只按
+                # 产物路径后缀过滤会让画廊对标准管线永远空转(2026-08-12 终验)
+                # 另:立即子目录内文件 + 再下一层(HyP3: hyp3/pair1/*.tif),不无限递归。
+                found: list[tuple[Path, tuple[str, ...]]] = []
+
+                def add_files(dirpath: Path, *parts: str) -> None:
+                    try:
+                        kids = sorted(p for p in dirpath.iterdir()
+                                      if p.is_file() and within(p, target))
+                    except OSError:
+                        return
+                    for p in kids:
+                        found.append((p, (*parts, p.name)))
+
+                def subdirs_of(dirpath: Path) -> list[Path]:
+                    try:
+                        return sorted(p for p in dirpath.iterdir()
+                                      if p.is_dir() and within(p, target))
+                    except OSError:
+                        return []
+
+                add_files(target)
+                for child in subdirs_of(target):
+                    add_files(child, child.name)
+                    for grandchild in subdirs_of(child):
+                        add_files(grandchild, child.name, grandchild.name)
+
+                image_items = [(p, parts) for p, parts in found
+                               if p.suffix.lower() in _IMAGE_MEDIA_TYPES]
+                image_stems = {p.stem for p, _ in image_items}
+                stems_by_parent: dict[Path, set[str]] = {}
+                member_by_parent_stem: dict[tuple[Path, str], str] = {}
+                for p, parts in image_items:
+                    stems_by_parent.setdefault(p.parent, set()).add(p.stem)
+                    member_by_parent_stem[(p.parent, p.stem)] = "/".join(parts)
+                for p, parts in image_items:
+                    stem = p.stem
+                    parent_stems = stems_by_parent[p.parent]
                     # 基图存在的 _browse/_thumb 档并入基图条目,不单独列;
                     # 孤档(基图缺失)仍按普通图件列出,列表不吞真实文件
-                    if any(stem.endswith(sfx) and stem[:-len(sfx)] in by_stem
+                    if any(stem.endswith(sfx) and stem[:-len(sfx)] in parent_stems
                            for sfx in _TIER_SUFFIXES):
                         continue
-                    item = entry(art, child, member=child.name,
-                                 browse=by_stem.get(stem + "_browse"),
-                                 thumb=by_stem.get(stem + "_thumb"))
-                    if item is None:
+                    member = "/".join(parts)
+                    take_image(entry(art, p, member=member,
+                                     browse=member_by_parent_stem.get(
+                                         (p.parent, stem + "_browse")),
+                                     thumb=member_by_parent_stem.get(
+                                         (p.parent, stem + "_thumb"))))
+                for p, parts in found:
+                    kind = _FILE_KIND_BY_SUFFIX.get(p.suffix.lower())
+                    if kind is None:
                         continue
-                    items.append(item)
-                    listed += 1
-                    if listed >= 100:
-                        break
-        items.sort(key=lambda x: (x["step"], x["artId"], x["name"]))
-        return {"run": run["run_id"], "figures": items}
+                    if json_is_image_sidecar(p, image_stems):
+                        continue
+                    rel = Path(art["path"]).joinpath(*parts).as_posix()
+                    take_file(file_item(art, p, rel, kind))
+            elif suffix in _FILE_KIND_BY_SUFFIX and target.is_file():
+                if json_is_image_sidecar(target):
+                    continue
+                take_file(file_item(art, target, art["path"],
+                                    _FILE_KIND_BY_SUFFIX[suffix]))
+
+        def list_workspace_extras(rel_dir: str, step_id: int, art_id: str) -> None:
+            """一层可预览文件补进 files(非递归,不改 figures)。"""
+            try:
+                folder = (ws_base / rel_dir).resolve()
+            except OSError:
+                return
+            if not folder.is_dir() or not folder.is_relative_to(ws_base):
+                return
+            try:
+                kids = sorted(p for p in folder.iterdir() if p.is_file())
+            except OSError:
+                return
+            image_stems = {p.stem for p in kids
+                           if p.suffix.lower() in _IMAGE_MEDIA_TYPES}
+            listed = {str(f["path"]).replace("\\", "/") for f in files}
+            art = {"step_id": step_id, "art_id": art_id}
+            for p in kids:
+                if not within(p, ws_base):
+                    continue
+                kind = _FILE_KIND_BY_SUFFIX.get(p.suffix.lower())
+                if kind is None:
+                    continue
+                if json_is_image_sidecar(p, image_stems):
+                    continue
+                rel = Path(rel_dir).joinpath(p.name).as_posix()
+                if rel in listed:
+                    continue
+                take_file(file_item(art, p, rel, kind))
+                listed.add(rel)
+
+        try:
+            ws_base = Path(run["workspace"]).resolve()
+        except OSError:
+            ws_base = None
+        if ws_base is not None:
+            # 注册表:10 出图导出 ↔ export/;11 质检 ↔ products/report/
+            list_workspace_extras("export", 10, "export")
+            list_workspace_extras("products/report", 11, "report")
+
+        images.sort(key=lambda x: (x["step"], x["artId"], x["name"]))
+        files.sort(key=lambda x: (x["step"], x["artId"], x["name"]))
+        return {
+            "run": run["run_id"], "figures": images, "files": files,
+            "truncated": truncated,
+            "image_cap": _FIGURE_LIST_CAP, "file_cap": _FIGURE_LIST_CAP,
+        }
 
     @app.get("/api/artifact-file")
     def artifact_file(session: str, art_id: str,

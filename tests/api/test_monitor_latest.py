@@ -59,6 +59,9 @@ def _empty_shape(data: dict) -> None:
     assert data["progress"] == {"total": 0, "done": 0, "pct": 0}
     assert data["taints"] == 0
     assert "mode" in data
+    assert data["access_mode"] is None
+    assert data["product"] is None
+    assert data["qa_chips"] == {"crossval_r": None, "gnss_rmse_mm": None}
 
 
 def test_monitor_latest_no_sessions_empty_shell(client):
